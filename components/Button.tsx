@@ -1,4 +1,3 @@
-// entire file content ...
 import Link from 'next/link';
 import React, { ButtonHTMLAttributes } from 'react';
 
