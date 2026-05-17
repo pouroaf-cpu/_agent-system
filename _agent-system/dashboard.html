@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2a2f45;
+      --text: #e8eaf0;
+      --muted: #7b82a0;
+      --accent: #6366f1;
+
+      --agent-claude: #7c3aed;
+      --agent-codex: #ea580c;
+      --agent-aider: #0891b2;
+      --agent-qwen: #dc2626;
+      --agent-default: #6b7280;
+
+      --green: #16a34a;
+      --red: #dc2626;
+      --green-bg: rgba(22, 163, 74, 0.08);
+      --red-bg: rgba(220, 38, 38, 0.08);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .header-left h1 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .header-left p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    #status {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #status .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      display: inline-block;
+    }
+
+    #status .dot.loading { background: var(--agent-codex); animation: pulse 1s infinite; }
+    #status .dot.error { background: var(--red); }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    button.refresh {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    button.refresh:hover { background: var(--border); border-color: var(--accent); }
+
+    /* ── Main ── */
+    main { max-width: 860px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Metrics ── */
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 640px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+
+    .metric-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .metric-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .metric-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      color: var(--text);
+    }
+
+    .metric-card .sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Filters ── */
+    .filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    .filter-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 5px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .filter-btn .swatch {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    .filter-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* ── Log section ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section-header h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    #entry-count {
+      font-size: 12px;
+      color: var(--muted);
+      background: var(--surface2);
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    #log-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .log-entry {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--green);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      transition: border-color 0.15s;
+    }
+
+    .log-entry.warn {
+      border-left-color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .log-entry:hover { border-color: var(--accent); border-left-color: inherit; }
+    .log-entry.warn:hover { border-left-color: var(--red); }
+
+    .entry-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: #fff;
+      white-space: nowrap;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .entry-body { flex: 1; min-width: 0; }
+
+    .entry-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+
+    .entry-project {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .entry-date {
+      font-size: 11px;
+      color: var(--muted);
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    .entry-summary {
+      font-size: 13px;
+      color: #b0b7d4;
+      line-height: 1.45;
+    }
+
+    .warn-badge {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--red);
+      background: rgba(220,38,38,0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Empty / Error states ── */
+    .state-msg {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--muted);
+    }
+
+    .state-msg strong { display: block; font-size: 16px; margin-bottom: 8px; color: var(--text); }
+    .state-msg code { font-size: 12px; background: var(--surface2); padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>Agent Dashboard</h1>
+    <p>_agent-system · pouroaf-cpu</p>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div id="status"><span class="dot loading"></span><span id="status-text">Loading…</span></div>
+    <button class="refresh" onclick="loadLog()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      Refresh
+    </button>
+  </div>
+</header>
+
+<main>
+  <div class="metrics">
+    <div class="metric-card">
+      <div class="label">Total Sessions</div>
+      <div class="value" id="m-sessions">—</div>
+      <div class="sub">log entries</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Projects Touched</div>
+      <div class="value" id="m-projects">—</div>
+      <div class="sub">unique repos</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Agents Active</div>
+      <div class="value" id="m-agents">—</div>
+      <div class="sub">distinct agents</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Last Session</div>
+      <div class="value" id="m-last" style="font-size:18px;padding-top:4px;">—</div>
+      <div class="sub" id="m-last-agent">—</div>
+    </div>
+  </div>
+
+  <div class="filters" id="filters"></div>
+
+  <div class="section-header">
+    <h2>Session Log</h2>
+    <span id="entry-count">0 entries</span>
+  </div>
+
+  <div id="log-list">
+    <div class="state-msg"><strong>Loading session log…</strong></div>
+  </div>
+</main>
+
+<script>
+  const LOG_URL = 'https://cdn.jsdelivr.net/gh/pouroaf-cpu/_agent-system@master/_agent-system/SESSION_LOG.md';
+
+  const AGENT_COLORS = {
+    'claude code': '#7c3aed',
+    'codex':       '#ea580c',
+    'aider':       '#0891b2',
+    'qwen':        '#dc2626',
+  };
+
+  const WARN_WORDS = /workaround|band.?aid|bandaid|hack(?:ed|ing)?|hotfix|temp(?:orary)?|patch|quick.?fix|kludge|stop.?gap/i;
+
+  function agentColor(name) {
+    return AGENT_COLORS[name.toLowerCase()] || '#6b7280';
+  }
+
+  function agentInitial(name) {
+    return name.replace(/\s+/g, '').slice(0, 2).toUpperCase();
+  }
+
+  function setStatus(state, text) {
+    const dot = document.querySelector('#status .dot');
+    dot.className = 'dot ' + (state === 'ok' ? '' : state);
+    document.getElementById('status-text').textContent = text;
+  }
+
+  let allEntries = [];
+  let activeFilter = 'All';
+
+  function parseLine(line) {
+    const m = line.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*\[(.+?)\]\s*\[(.+?)\]\s*[—–-]+\s*(.+)$/);
+    if (!m) return null;
+    return { date: m[1], project: m[2].trim(), agent: m[3].trim(), summary: m[4].trim() };
+  }
+
+  async function loadLog() {
+    setStatus('loading', 'Fetching…');
+    document.getElementById('log-list').innerHTML = '<div class="state-msg"><strong>Loading…</strong></div>';
+
+    try {
+      const url = `${LOG_URL}?t=${Date.now()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+
+      allEntries = text.split('\n')
+        .map(l => l.trim())
+        .filter(l => l.startsWith('['))
+        .map(parseLine)
+        .filter(Boolean)
+        .reverse();
+
+      if (allEntries.length === 0) {
+        document.getElementById('log-list').innerHTML =
+          '<div class="state-msg"><strong>No entries yet</strong>Add sessions in the format:<br><code>[YYYY-MM-DD] [Project] [Agent] — summary</code></div>';
+        setStatus('ok', 'Empty log');
+        renderMetrics([]);
+        renderFilters([]);
+        return;
+      }
+
+      setStatus('ok', `Updated ${new Date().toLocaleTimeString()}`);
+      renderMetrics(allEntries);
+      renderFilters(allEntries);
+      renderLog(allEntries);
+    } catch (e) {
+      setStatus('error', 'Failed to fetch');
+      document.getElementById('log-list').innerHTML =
+        `<div class="state-msg"><strong>Could not load log</strong>${e.message}</div>`;
+    }
+  }
+
+  function renderMetrics(entries) {
+    document.getElementById('m-sessions').textContent = entries.length;
+
+    const projects = new Set(entries.map(e => e.project));
+    document.getElementById('m-projects').textContent = projects.size;
+
+    const agents = new Set(entries.map(e => e.agent));
+    document.getElementById('m-agents').textContent = agents.size;
+
+    if (entries.length) {
+      const last = entries[0]; // already reversed so newest first
+      const d = last.date.split('-');
+      document.getElementById('m-last').textContent = `${d[2]}/${d[1]}`;
+      document.getElementById('m-last-agent').textContent = `${last.agent} · ${last.project}`;
+    }
+  }
+
+  function renderFilters(entries) {
+    const agents = ['All', ...new Set(entries.map(e => e.agent))];
+    const container = document.getElementById('filters');
+    container.innerHTML = '';
+
+    agents.forEach(agent => {
+      const btn = document.createElement('button');
+      btn.className = 'filter-btn' + (agent === activeFilter ? ' active' : '');
+
+      if (agent !== 'All') {
+        const color = agentColor(agent);
+        btn.innerHTML = `<span class="swatch" style="background:${color}"></span>${agent}`;
+      } else {
+        btn.textContent = 'All';
+      }
+
+      btn.addEventListener('click', () => {
+        activeFilter = agent;
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const filtered = agent === 'All' ? allEntries : allEntries.filter(e => e.agent === agent);
+        renderLog(filtered);
+      });
+
+      container.appendChild(btn);
+    });
+  }
+
+  function renderLog(entries) {
+    const list = document.getElementById('log-list');
+    document.getElementById('entry-count').textContent = `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`;
+
+    if (entries.length === 0) {
+      list.innerHTML = '<div class="state-msg"><strong>No entries match this filter</strong></div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    entries.forEach(e => {
+      const isWarn = WARN_WORDS.test(e.summary);
+      const color = agentColor(e.agent);
+      const initial = agentInitial(e.agent);
+
+      const el = document.createElement('div');
+      el.className = 'log-entry' + (isWarn ? ' warn' : '');
+
+      const [y, mo, d] = e.date.split('-');
+      const dateStr = `${d}/${mo}/${y}`;
+
+      el.innerHTML = `
+        <span class="entry-badge" style="background:${color}">${initial}</span>
+        <div class="entry-body">
+          <div class="entry-meta">
+            <span class="entry-project">${escHtml(e.project)}</span>
+            <span style="font-size:11px;color:var(--muted);">${escHtml(e.agent)}</span>
+            ${isWarn ? '<span class="warn-badge">⚠ workaround</span>' : ''}
+            <span class="entry-date">${dateStr}</span>
+          </div>
+          <div class="entry-summary">${escHtml(e.summary)}</div>
+        </div>
+      `;
+
+      list.appendChild(el);
+    });
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  loadLog();
+</script>
+</body>
+</html>
