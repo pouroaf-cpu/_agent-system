@@ -1,0 +1,30 @@
+.aider*
+# === Internal/agent docs — never upload (see _agent-system/RULES.md) ===
+CLAUDE.md
+RULES.md
+CONVENTIONS.md
+CODEX.md
+CODEX_TASK.md
+CLAUDE_TASK.md
+CLAUDE_CODE_TASK.md
+QWEN_TASK.md
+claude*.md
+HANDOFF.md
+STATUS.md
+FILE_MAP.md
+AGENTS.md
+SESSION_LOG.md
+AI_PROMPT_RULES.md
+ACTIVE/
+journal/
+!README.md
+# === Internal/agent docs (extended) — never upload (see _agent-system/RULES.md) ===
+MEMORY.md
+README_FOR_AI.md
+Vantio_Project_Context.md
+AI_CHANGELOG.md
+AI_DECISIONS.md
+AI_STATE.md
+AI_TODO.md
+ai/AI_*.md
+.claude/
