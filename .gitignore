@@ -28,3 +28,7 @@ AI_STATE.md
 AI_TODO.md
 ai/AI_*.md
 .claude/
+# === No markdown to GitHub/deploys except README (see _agent-system/RULES.md) ===
+*.md
+!README.md
+!**/README.md
