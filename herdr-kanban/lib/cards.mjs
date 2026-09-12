@@ -185,7 +185,7 @@ export function latestDirtySnapshot(path) {
 export function currentDirtyMatchesSnapshot(card, projectPath) {
   const recorded = latestDirtySnapshot(card.path)
   if (!recorded || recorded.card !== card.id) return false
-  const current = dirtySnapshotForCard(card, projectPath, { ignoreTaskState: true })
+  const current = dirtySnapshotForCard(card, projectPath, { listedOnly: true, ignoreTaskState: true })
   return JSON.stringify(current) === JSON.stringify(recorded)
 }
 

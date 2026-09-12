@@ -653,6 +653,7 @@ test('preflight permits unchanged same-card dirty snapshot and rejects changed c
     spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'card'], { cwd: root })
     card = parseCard(cardPath, 'queue')
 
+    writeFileSync(join(root, 'unrelated.txt'), 'legacy dirt\n')
     assert.equal(preflightBlocks({ projectPath: root, card }), false)
     mkdirSync(join(root, 'assets'))
     writeFileSync(join(root, 'assets', 'new.txt'), 'new\n')
