@@ -1,0 +1,47 @@
+{
+  "port": 7777,
+  "mode": "auto",
+  "autoQueuePlanned": true,
+  "projectsRoot": "C:/Users/PFrew/KanbanProjects",
+  "projects": [
+    "Injectbuddy",
+    "Healthypets",
+    "Tradeflow",
+    "Kiwitown",
+    "Last Tahi Standing",
+    "Little Kiwi Reader",
+    "herdr-kanban",
+    "General"
+  ],
+  "maxConcurrentAgents": 1,
+  "agentWorkspace": "agents",
+  "stallSeconds": 300,
+  "agentStartTimeoutMs": 240000,
+  "agentPollMs": 2000,
+  "leadPlanner": {
+    "autoIssues": true
+  },
+  "engine": {
+    "kind": "codex",
+    "reasoningArgs": [
+      "-c",
+      "model_reasoning_effort=\"high\""
+    ]
+  },
+  "engines": {
+    "trivial": {
+      "kind": "codex",
+      "reasoningArgs": [
+        "-c",
+        "model_reasoning_effort=\"low\""
+      ]
+    }
+  },
+  "models": {
+    "planning": "gpt-5.5",
+    "working": "gpt-5.5",
+    "issues": "gpt-5.5",
+    "review": "gpt-5.5",
+    "trivial": "gpt-5.6-luna"
+  }
+}
