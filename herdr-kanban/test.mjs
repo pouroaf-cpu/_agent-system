@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { readFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision } from './lib/cards.mjs'
+import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
 import { bind, readBindings, unbind, liveBindings, reap } from './lib/bindings.mjs'
 import { promoteAutoReview, promotePlanned, routeReviewVerdicts, missionIssueHandoff, slotsFree, reviewerRunning, spawnReviewer, spawnIssuesSweeper, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason } from './lib/autospawn.mjs'
 import { workerPrompt, reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
@@ -631,6 +631,34 @@ test('preflightBlocks: no script means no check; the script decides by exit code
   assert.ok(preflightBlocks({ projectPath: root, card, log: (m) => logged.push(m) }))
   assert.ok(logged.length === 1 && logged[0].includes(card.id), 'exit 2 is logged, not silent')
   rmSync(root, { recursive: true, force: true })
+})
+
+test('preflight permits unchanged same-card dirty snapshot and rejects changed content', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hkb-dirty-'))
+  try {
+    const tasks = join(root, 'TASKS')
+    mkdirSync(join(tasks, 'queue'), { recursive: true })
+    mkdirSync(join(root, 'scripts'), { recursive: true })
+    writeFileSync(join(root, 'app.js'), 'clean\n')
+    writeFileSync(join(root, 'scripts', 'preflight.mjs'), 'process.exit(1)')
+    spawnSync('git', ['init'], { cwd: root })
+    spawnSync('git', ['add', 'app.js'], { cwd: root })
+    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'init'], { cwd: root })
+    writeFileSync(join(root, 'app.js'), 'dirty\n')
+    const cardPath = join(tasks, 'queue', 'T-55-dirty.md')
+    writeFileSync(cardPath, '# T-55 — Dirty\n\n**Workflow:** card-owned\n**Workspace:** .\n\n## Files\n\n- `app.js` — code\n')
+    let card = parseCard(cardPath, 'queue')
+    appendDirtySnapshot(card, dirtySnapshotForCard(card, root, { listedOnly: true }), new Date(0))
+    spawnSync('git', ['add', 'scripts/preflight.mjs', 'TASKS/queue/T-55-dirty.md'], { cwd: root })
+    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'card'], { cwd: root })
+    card = parseCard(cardPath, 'queue')
+
+    assert.equal(preflightBlocks({ projectPath: root, card }), false)
+    writeFileSync(join(root, 'app.js'), 'changed\n')
+    assert.equal(preflightBlocks({ projectPath: root, card }).kind, 'files busy')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('column keys and folder names stay in step with the plan', () => {

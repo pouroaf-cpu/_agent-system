@@ -2,7 +2,9 @@
 // Nothing is duplicated into a database — the filesystem is the source of truth.
 
 import { readdirSync, readFileSync, writeFileSync, appendFileSync, statSync, existsSync, mkdirSync, renameSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { join, basename, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
 const AUDIT_TEMPLATES = {
@@ -85,6 +87,9 @@ const RESET_MARKER_LINE = /^\*\*(Build attempt|Review feedback)\*\*/i
 const REVIEWER_EVIDENCE_LINE = /^##\s+Reviewer evidence\s*$/i
 const ANY_HEADING_LINE = /^#{1,6}\s+/
 const REVIEW_VERDICT_LINE = /^\*\*Review verdict:\*\*\s*(PASS|FAIL|UNKNOWN)\b/i
+const FILES_SECTION = /##\s*Files\s*\n([\s\S]*?)(?=\n##\s|\n*$)/i
+const FILE_LINE = /^-\s*`([^`]+)`/gm
+const DIRTY_SNAPSHOT = /^\*\*Dirty snapshot:\*\*[^\n]*\n+```json\n([\s\S]*?)\n```/gm
 
 // Read only the head of the file. Card bodies run to hundreds of lines and the
 // board never shows more than the title strip.
@@ -117,6 +122,72 @@ function reviewRounds(path) {
 }
 
 const plain = (s) => (s ?? '').replace(/\*\*|`/g, '').trim()
+
+// First backtick token on each `## Files` bullet line — the file path itself,
+// not the descriptive prose (which often has its own backtick-quoted names).
+export function cardFiles(path) {
+  const section = readFileSync(path, 'utf8').match(FILES_SECTION)?.[1] ?? ''
+  return [...section.matchAll(FILE_LINE)].map((m) => m[1].trim())
+}
+
+function cardWorkspace(projectPath, card) {
+  return resolve(projectPath, card.workspace || '.')
+}
+
+function parseGitStatus(output) {
+  const records = output.split('\0').filter(Boolean)
+  const files = []
+  for (let i = 0; i < records.length; i++) {
+    const status = records[i].slice(0, 2)
+    const path = records[i].slice(3).replace(/\\/g, '/')
+    if (!path) continue
+    if (status[0] === 'R' || status[0] === 'C') i++
+    files.push({ path, status })
+  }
+  return files
+}
+
+function dirtyFiles(workspace, paths = []) {
+  const args = ['-C', workspace, 'status', '--porcelain=v1', '-z']
+  if (paths.length) args.push('--', ...paths)
+  const result = spawnSync('git', args, { encoding: 'utf8' })
+  if (result.status !== 0) throw new Error(`git status failed in ${workspace}: ${(result.stderr || result.stdout).trim()}`)
+  return parseGitStatus(result.stdout).map((file) => {
+    const full = join(workspace, file.path)
+    return {
+      ...file,
+      sha256: existsSync(full) ? createHash('sha256').update(readFileSync(full)).digest('hex') : null,
+    }
+  }).sort((a, b) => a.path.localeCompare(b.path))
+}
+
+export function dirtySnapshotForCard(card, projectPath, { listedOnly = false, ignoreTaskState = false } = {}) {
+  const workspace = cardWorkspace(projectPath, card)
+  const paths = listedOnly ? cardFiles(card.path) : []
+  const files = (listedOnly && !paths.length ? [] : dirtyFiles(workspace, paths))
+    .filter((f) => !ignoreTaskState || !f.path.startsWith('TASKS/'))
+  return { card: card.id, workspace: card.workspace || '.', files }
+}
+
+export function appendDirtySnapshot(card, snapshot, now = new Date()) {
+  if (!snapshot?.files?.length) return
+  appendFileSync(card.path, `\n\n---\n\n**Dirty snapshot:** ${now.toISOString()}\n\n\`\`\`json\n${JSON.stringify(snapshot)}\n\`\`\`\n`)
+}
+
+export function latestDirtySnapshot(path) {
+  let latest = null
+  for (const match of readFileSync(path, 'utf8').matchAll(DIRTY_SNAPSHOT)) {
+    try { latest = JSON.parse(match[1]) } catch {}
+  }
+  return latest
+}
+
+export function currentDirtyMatchesSnapshot(card, projectPath) {
+  const recorded = latestDirtySnapshot(card.path)
+  if (!recorded || recorded.card !== card.id) return false
+  const current = dirtySnapshotForCard(card, projectPath, { ignoreTaskState: true })
+  return JSON.stringify(current) === JSON.stringify(recorded)
+}
 
 export function parseCard(path, columnKey) {
   const file = basename(path)
