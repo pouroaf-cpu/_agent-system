@@ -654,6 +654,13 @@ test('preflight permits unchanged same-card dirty snapshot and rejects changed c
     card = parseCard(cardPath, 'queue')
 
     assert.equal(preflightBlocks({ projectPath: root, card }), false)
+    mkdirSync(join(root, 'assets'))
+    writeFileSync(join(root, 'assets', 'new.txt'), 'new\n')
+    assert.deepEqual(dirtySnapshotForCard(card, root).files.find((f) => f.path === 'assets/'), {
+      path: 'assets/',
+      status: '??',
+      sha256: null,
+    })
     writeFileSync(join(root, 'app.js'), 'changed\n')
     assert.equal(preflightBlocks({ projectPath: root, card }).kind, 'files busy')
   } finally {

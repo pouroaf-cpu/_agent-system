@@ -156,7 +156,7 @@ function dirtyFiles(workspace, paths = []) {
     const full = join(workspace, file.path)
     return {
       ...file,
-      sha256: existsSync(full) ? createHash('sha256').update(readFileSync(full)).digest('hex') : null,
+      sha256: existsSync(full) && statSync(full).isFile() ? createHash('sha256').update(readFileSync(full)).digest('hex') : null,
     }
   }).sort((a, b) => a.path.localeCompare(b.path))
 }
