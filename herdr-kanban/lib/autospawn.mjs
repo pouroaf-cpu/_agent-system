@@ -13,7 +13,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview } from './cards.mjs'
+import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
@@ -395,7 +395,7 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
   const promoted = []
   const worktrees = readWorktrees(tasksDir)
   for (const card of readBoard(tasksDir).completed) {
-    if (!card.autoReview && !card.cardOwned) continue
+    if (!card.autoReview) continue
     if (card.reviewPassed) continue
     if (card.trivial) continue
     const entry = worktrees[card.id]
@@ -406,6 +406,23 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
     promoted.push(card.id)
   }
   return promoted
+}
+
+export function archiveNoReviewCards(tasksDir) {
+  const worktrees = readWorktrees(tasksDir)
+  const board = readBoard(tasksDir)
+  const archived = [], skipped = []
+  for (const card of ['review', 'completed'].flatMap(column => board[column])) {
+    if (!card.cardOwned || card.autoReview || card.audit) continue
+    const worktree = worktrees[card.id]
+    const reason = !hasBuilderPass(card) ? 'missing Builder PASS' : worktree?.state !== 'integrated' ? `worktree state is ${worktree?.state ?? 'missing'}, not integrated` : null
+    if (reason) { skipped.push({ id: card.id, reason }); continue }
+    if (!canArchive(card)) { skipped.push({ id: card.id, reason: 'archive gate rejected the card' }); continue }
+    moveCard(tasksDir, card.id, 'archive')
+    appendHistory(tasksDir, card.id, { event: 'note', note: 'Archived without independent review (Auto-review: no)' })
+    archived.push(card.id)
+  }
+  return { archived, skipped }
 }
 
 import { explicitOwnerReason } from './owner-reason.mjs'

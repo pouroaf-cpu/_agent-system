@@ -353,8 +353,25 @@ export function hasCurrentReviewPass(text) {
   return currentReviewDecision(text)?.verdict === 'PASS'
 }
 
+export function hasBuilderPass(card) {
+  try {
+    const text = readFileSync(card.path, 'utf8')
+    const result = ['Implementation', 'Evidence']
+      .map((name) => text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\\s\\S]*?-->/g, '') ?? '')
+      .join('\n').replaceAll('**', '')
+    return /^Stage:\s*builder\s*$/mi.test(result) && /^Outcome:\s*PASS\s*$/mi.test(result)
+  } catch { return false }
+}
+
 export function canArchive(card) {
-  return (!card.cardOwned && !card.mission) || card.reviewPassed || !!card.audit || hasOperatorCompletion(card)
+  return (!card.cardOwned && !card.mission) || card.reviewPassed || !!card.audit || hasOperatorCompletion(card) ||
+    (card.cardOwned && !card.autoReview && hasBuilderPass(card) && hasIntegratedWorktree(card))
+}
+
+function hasIntegratedWorktree(card) {
+  try {
+    return JSON.parse(readFileSync(join(dirname(dirname(card.path)), '.board-worktrees.json'), 'utf8'))[card.id]?.state === 'integrated'
+  } catch { return false }
 }
 
 // Explicit human waiver is separate from Review PASS and bound to exact evidence.
@@ -466,8 +483,8 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
 
   const card = findCard(tasksDir, cardId)
   if (card.column === toKey) return card
-  if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed) {
-    throw new Error(`${card.id} requires an evidenced Reviewer PASS before Completed`)
+  if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed && !(!card.autoReview && hasBuilderPass(card))) {
+    throw new Error(card.autoReview ? `${card.id} requires an evidenced Reviewer PASS before Completed` : `${card.id} requires Builder PASS before Completed`)
   }
   if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment })
   if (card.column === 'archive' && toKey !== 'archive') {

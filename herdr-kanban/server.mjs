@@ -31,7 +31,7 @@ const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { readReviewClaims } = await import('./lib/review-claims.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -85,6 +85,21 @@ function schedulerActivity(project, message) {
   const event = /retry|spawn failed/i.test(message) ? 'retry' : /held|busy|not ready/i.test(message) ? 'hold' : 'scheduler'
   console.log(message)
   activity(project, cardId, event, message, event === 'retry' ? 'error' : 'info')
+}
+
+function archiveNoReview(project, tasksDir) {
+  const result = archiveNoReviewCards(tasksDir)
+  for (const id of result.archived) {
+    lastActivityHold.delete(`${project}:${id}:no-review-archive`)
+    activity(project, id, 'move', 'archived without independent review (Auto-review: no)')
+  }
+  for (const { id, reason } of result.skipped) {
+    const key = `${project}:${id}:no-review-archive`
+    if (lastActivityHold.get(key) === reason) continue
+    lastActivityHold.set(key, reason)
+    schedulerActivity(project, `${id}: archive without independent review skipped — ${reason}`)
+  }
+  return result.archived.length > 0
 }
 
 function tripBreakerIfNeeded(project) {
@@ -259,6 +274,7 @@ async function pollProject(project) {
   try {
     const tasksDir = tasksDirOf(project)
     const gitSettings = projectSettingsOf(project)
+    if (archiveNoReview(project, tasksDir)) broadcastBoard(project)
     const { agents, herdrUp } = await pollAgents(project)
     broadcast(project, 'agents', { project, agents, herdrUp })
     if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
@@ -366,6 +382,7 @@ async function pollProject(project) {
         reconciliationPolls.delete(project)
       }
     }
+    dirty = archiveNoReview(project, tasksDir) || dirty
 
     const autoEnabled = !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped
     if (autoEnabled) {

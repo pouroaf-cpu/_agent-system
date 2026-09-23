@@ -92,8 +92,8 @@ let card
 let previousColumn
 try {
   const current = findCard(tasksDir, cardId)
-  if (verb === 'done') target = current.trivial ? 'completed' : 'review'
-  if (verb === 'unchanged') target = current.trivial ? 'completed' : 'review'
+  if (verb === 'done') target = current.trivial || !current.autoReview ? 'completed' : 'review'
+  if (verb === 'unchanged') target = current.trivial ? 'completed' : !current.autoReview ? 'archive' : 'review'
   if (verb === 'pass') target = 'completed'
   if (!columnByKey(target)) fail(`unknown column: ${target}`)
   if (plannerAssignment || current.column === 'planning') assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
@@ -150,20 +150,20 @@ try {
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note } })
   }
-  if (verb === 'done' && current.cardOwned) {
+  if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
     const text = readFileSync(current.path, 'utf8')
     const sections = []
     for (const heading of ['Implementation', 'Evidence']) {
       const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
-      if (!content) fail(`done requires a current ${heading} result; full logs belong in linked evidence files`)
+      if (!content) fail(`${verb} requires a current ${heading} result; full logs belong in linked evidence files`)
       sections.push(content)
     }
     if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
       const result = sections.join('\n').replaceAll('**', '')
       for (const field of ['Stage', 'Outcome', 'Files', 'Check', 'Result', 'Evidence', 'Blocker']) {
-        if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) fail(`version-2 done result requires ${field}: with a specific value (Blocker: none when clear)`)
+        if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) fail(`version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`)
       }
-      if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail('done requires Stage: builder and Outcome: PASS')
+      if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
     }
   }
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, correction: ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
