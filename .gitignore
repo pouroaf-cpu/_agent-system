@@ -35,3 +35,11 @@ ai/AI_*.md
 
 # === Local-only project folders (no repo, PC work only) ===
 north-king-country-junior-rules/
+
+# === Board integration: this repo only tracks herdr-kanban; other folders have their own repos ===
+/*
+!/.gitignore
+!/herdr-kanban/
+!/_agent-system/
+/_agent-system/*
+!/_agent-system/dashboard.html

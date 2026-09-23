@@ -22,3 +22,6 @@ TASKS/.card-planners.json
 TASKS/.request-usage.json
 TASKS/.evidence/
 TASKS/*.bak
+
+# Live board state (cards, locks, history) changes constantly; never part of integration
+TASKS/
