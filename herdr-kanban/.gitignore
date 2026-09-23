@@ -25,3 +25,6 @@ TASKS/*.bak
 
 # Live board state (cards, locks, history) changes constantly; never part of integration
 TASKS/
+
+# Live board settings are rewritten by the running board
+board.config.json
