@@ -1,0 +1,76 @@
+[
+  {
+    "name": "desktop",
+    "errors": [],
+    "metrics": {
+      "bodyW": 1440,
+      "scrollW": 1440,
+      "tableRows": 31,
+      "firstId": "REQ-20260910-020"
+    },
+    "rows": {
+      "REQ_020": {
+        "id": "REQ-20260910-020",
+        "status": "working",
+        "description": "Unblock approved mission and diagnose Manager exceptions"
+      },
+      "REQ_015": {
+        "id": "REQ-20260910-015",
+        "status": "blocked",
+        "description": "reconcile T-81 dispatch and execute existing plan"
+      },
+      "REQ_011": {
+        "id": "REQ-20260910-011",
+        "status": "done",
+        "description": "return T-80 to Planning"
+      },
+      "REQ_005": {
+        "id": "REQ-20260909-005",
+        "status": "done",
+        "description": "Correct the mobile Kanban UX; user rejects desktop-style horizontal columns/collapse on phone"
+      },
+      "REQ_004": {
+        "id": "REQ-20260909-004",
+        "status": "done",
+        "description": "Assess every current non-archived InjectBuddy card for meaning, done status, current need, and user value; provide plain-English recommendations"
+      }
+    }
+  },
+  {
+    "name": "mobile",
+    "errors": [],
+    "metrics": {
+      "bodyW": 390,
+      "scrollW": 390,
+      "tableRows": 31,
+      "firstId": "REQ-20260910-020"
+    },
+    "rows": {
+      "REQ_020": {
+        "id": "REQ-20260910-020",
+        "status": "working",
+        "description": "Unblock approved mission and diagnose Manager exceptions"
+      },
+      "REQ_015": {
+        "id": "REQ-20260910-015",
+        "status": "blocked",
+        "description": "reconcile T-81 dispatch and execute existing plan"
+      },
+      "REQ_011": {
+        "id": "REQ-20260910-011",
+        "status": "done",
+        "description": "return T-80 to Planning"
+      },
+      "REQ_005": {
+        "id": "REQ-20260909-005",
+        "status": "done",
+        "description": "Correct the mobile Kanban UX; user rejects desktop-style horizontal columns/collapse on phone"
+      },
+      "REQ_004": {
+        "id": "REQ-20260909-004",
+        "status": "done",
+        "description": "Assess every current non-archived InjectBuddy card for meaning, done status, current need, and user value; provide plain-English recommendations"
+      }
+    }
+  }
+]

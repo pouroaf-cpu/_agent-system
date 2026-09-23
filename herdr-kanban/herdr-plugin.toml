@@ -1,0 +1,18 @@
+id = "pfrew:kanban"
+name = "Kanban"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Kanban board over TASKS/*.md that spawns Claude agents into herdr panes"
+platforms = ["windows"]
+
+# The board is a browser page, so this opens one rather than owning a pane.
+# Starting it twice is safe: kanban.ps1 reuses a server already on the port.
+[[actions]]
+id = "open"
+title ="Open kanban board"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "kanban.ps1", "-NoHerdr"]
+
+[[actions]]
+id = "stop"
+title ="Stop kanban board"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "kanban.ps1", "-Stop"]

@@ -1,4 +1,9 @@
-import { readCardPlanners } from './card-planner.mjs'
+import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
+import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
+import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
+import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
+import { appendHistory } from './card-history.mjs'
+import { checkWorkflowLimits } from './workflow-limits.mjs'
 // The spawner. Watches one column — Queue — and nothing else.
 //
 // You put a card in Queue; that is the consent. Everything here is about not
@@ -6,25 +11,40 @@ import { readCardPlanners } from './card-planner.mjs'
 // exceeds the concurrency cap, and never retries a card that failed to start.
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot } from './cards.mjs'
+import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
-import { tabCreate, agentStart, agentList, agentsForProject, paneClose, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
-import { coolingDown, recordFailure, clearRetries } from './retries.mjs'
-import { computeReviewPlan } from './review-plan.mjs'
+import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
+import { coolingDown, clearRetries } from './retries.mjs'
+import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
+import { overlapHoldReason, readWorktrees, integrationStartHoldReason } from './worktrees.mjs'
+import { recordSpawnFailure } from './breaker.mjs'
+import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
+import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs } from './review-claims.mjs'
+
+// A Builder that disappears or ends without hkb done/issue leaves Working
+// stuck. Route it to Issues while retaining the binding, workflow assignment,
+// counters and worktree for inspection and recovery.
+export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', workspace, gitSettings }) {
+  const card = findCard(tasksDir, cardId)
+  if (card.column !== 'working') return card
+  const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
+  const moved = moveCard(tasksDir, card.id, 'issues')
+  appendFileSync(moved.path, `\n\n**Builder fallback** ${new Date().toISOString()}\n\n${detail}. Worktree, assignment and prior output are preserved for recovery; inspect this evidence before requeueing.\n`)
+  appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
+  recordOperationalFailure(tasksDir, moved, detail, workspace, gitSettings)
+  return moved
+}
 
 // A spawn blocks for ~55s. Without this, every 2s agent poll would start another.
 const busy = new Set()
 
-// Three goes at starting, then it is a real problem and belongs on the board.
-const MAX_ATTEMPTS = 3
-
 export function slotsFree({ tasksDir, agents, max, now = Date.now() }) {
-  return max - Object.keys(liveBindings(tasksDir, agents, now)).length
+  return Math.max(0, max - Object.keys(liveBindings(tasksDir, agents, now)).length)
 }
 
 // Hard gate: a card naming prerequisites (**Blocked by:** T-08, T-09) is not
@@ -35,11 +55,12 @@ export function slotsFree({ tasksDir, agents, max, now = Date.now() }) {
 // anyway and paying for a builder to boot, read the card, and immediately
 // kick itself back — cards stalled on the same unmet dependency, repeatedly,
 // before this gate existed.
-export function unmetBlockers(card, board) {
+export function unmetBlockers(card, board, integrated = {}) {
   return (card.blockedBy || []).filter((id) => {
     const live = liveCards(board).filter((c) => c.id === id)
     const archived = board.archive.filter((c) => c.id === id)
-    return live.length || archived.length !== 1
+    if (!live.length && archived.length === 1) return false
+    return !(live.length === 1 && archived.length === 0 && live[0].column === 'completed' && integrated[id]?.state === 'integrated')
   })
 }
 
@@ -80,7 +101,7 @@ function missionBuilds(board, mission) {
     .reduce((n, c) => n + (c.buildAttempts || 0), 0)
 }
 
-export function startHoldReason({ card, board, projectPath, tasksDir, mission, log, now = Date.now() }) {
+export function startHoldReason({ card, board, projectPath, tasksDir, mission, log, gitSettings, now = Date.now() }) {
   if (card.column !== 'queue') return 'only Queue cards can start'
   const dupId = duplicateLiveId(card, board)
   if (dupId) return `duplicate live card id ${card.id}: ${dupId}`
@@ -95,9 +116,17 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
   }
   if (cycleFor(card, board)) return 'dependency cycle detected'
   if (coolingDown(tasksDir, card.id, now)) return 'cooling down after failed spawn'
-  const unmet = unmetBlockers(card, board)
-  if (unmet.length) return `waiting for unique archived prerequisite ${unmet.join(', ')}`
-  const dirty = preflightBlocks({ projectPath, card, log })
+  const unmet = unmetBlockers(card, board, tasksDir ? readWorktrees(tasksDir) : {})
+  if (unmet.length) return `waiting for unique integrated or archived prerequisite ${unmet.join(', ')}`
+  const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath })
+  if (overlap) return overlap
+  if (gitSettings?.integrationPath) {
+    try {
+      const reason = integrationStartHoldReason({ repoRoot: gitSettings.integrationPath, workspace: join(gitSettings.integrationPath, card.workspace || '.'), card })
+      if (reason) return reason
+    } catch (err) { return `integration check failed: ${err.message}` }
+  }
+  const dirty = preflightBlocks({ projectPath, card, log, gitSettings })
   if (dirty) {
     const running = holderOf(board)
     const who = dirty.kind === 'files busy' && running.length ? `, likely held by ${running.join(', ')}` : ''
@@ -119,12 +148,19 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
 // malformed — preflight.mjs's own contract warns that conflating this with
 // "dirty" silently skips a broken card forever, so this also holds the card
 // but logs distinctly, so a human notices instead of it just never spawning.
-export function preflightBlocks({ projectPath, card, log }) {
+export function preflightBlocks({ projectPath, card, gitSettings }) {
   const script = join(projectPath, 'scripts', 'preflight.mjs')
   if (!existsSync(script)) return false
   const result = spawnSync('node', [script, card.path], { cwd: projectPath, timeout: 10000, encoding: 'utf8' })
-  if (result.status === 2) log?.(`${card.id}: preflight could not read the card — ${(result.stderr || '').trim()}`)
   if (result.status === 0) return false
+  // The documented exit-1 contract is dirty named files. For isolated builds,
+  // recheck that signal semantically rather than inheriting raw status/EOL noise.
+  if (result.status === 1 && gitSettings?.integrationPath) {
+    try {
+      const reason = integrationStartHoldReason({ repoRoot: gitSettings.integrationPath, workspace: join(gitSettings.integrationPath, card.workspace || '.'), card })
+      return reason ? { kind: 'files busy', detail: reason } : false
+    } catch (err) { return { kind: 'files busy', detail: `integration check failed: ${err.message}` } }
+  }
   if (result.status === 1 && card.cardOwned && currentDirtyMatchesSnapshot(card, projectPath)) return false
   // exit 2 is the card's own fault, not a busy tree — saying "files busy" about a
   // card with no ## Files section sends whoever reads it hunting for an agent
@@ -140,13 +176,33 @@ const holds = new Map() // project -> { cardId: reason }
 
 export const holdsFor = (project) => holds.get(project) ?? {}
 
+export function routeMutualHolds(tasksDir, held, log) {
+  const routed = []
+  for (const [id, reason] of Object.entries(held)) {
+    const other = reason.match(/held by (T-\d+)/i)?.[1]
+    if (!other || !held[other]?.includes(`held by ${id}`) || routed.includes(id)) continue
+    // Preserved edits need attribution; never resolve a lock cycle by deleting
+    // a worktree or allowing overlapping Builders to start.
+    for (const cardId of [id, other]) {
+      const moved = moveCard(tasksDir, cardId, 'issues')
+      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date().toISOString()}\n\nMutual file hold between ${id} and ${other}: ${held[cardId]}. Reconcile declared scope and preserved commits with the other card before requeueing; do not discard work or bypass file locks.\n`)
+      requestPlannerCorrection(tasksDir, cardId)
+      routed.push(cardId)
+      log?.(`${cardId}: mutual file hold returned to Planner for preserved-work attribution`)
+    }
+  }
+  return routed
+}
+
 // Which running card most likely owns the dirty files — with one card at a time
 // there is usually exactly one, and naming it is the difference between "held"
 // and "held by T-29".
 const holderOf = (board) => [...board.working, ...board.review].map((c) => c.id)
 
 // Returns the ids it started. Safe to call on every board change and agent poll.
-export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, spawn = spawnForCard }) {
+export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, spawn = spawnForCard }) {
+  if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'builder')
+  if (spawn === spawnForCard && controlState(project).paused && !cardRunContext()) return []
   if (max <= 0 || busy.has(project)) return []
 
   let slots = slotsFree({ tasksDir, agents, max })
@@ -163,14 +219,27 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
   try {
     for (const card of queued) {
       if (slots <= 0) break
+      const limit = checkWorkflowLimits(tasksDir, card.id, 'builder')
+      if (limit) { held[card.id] = limit; continue }
+      const operational = operationalHold(tasksDir, card, projectPath, gitSettings)
+      if (operational) { held[card.id] = `Operational recovery held: ${operational}`; continue }
       const fresh = mission?.id ? readBoard(tasksDir) : board
       const freshCard = mission?.id
         ? fresh.queue.find((c) => c.id === card.id && c.file === card.file) || card
         : card
-      const selectedModel = freshCard.trivial ? trivialModel : model
-      const selectedEngine = freshCard.trivial ? trivialEngine : engine
-      const hold = startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log })
+      const selected = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
+      const selectedModel = selected?.model ?? (freshCard.trivial ? trivialModel : model)
+      const selectedEngine = selected?.engine ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : (freshCard.trivial ? trivialEngine : engine)
+      const hold = startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
       if (hold) {
+        if (hold.startsWith('card not ready')) {
+          const moved = moveCard(tasksDir, freshCard.id, 'planning')
+          appendFileSync(moved.path, `\n\n---\n\n**Kicked back** ${new Date().toISOString()}\n\n${hold}. The isolated worktree, if any, was preserved.\n`)
+          requestPlannerCorrection(tasksDir, moved.id)
+          log?.(`${moved.id}: returned to original Planner — ${hold}`)
+          onChange?.()
+          continue
+        }
         held[freshCard.id] = hold
         if (/mission build budget exhausted/.test(hold)) {
           const parked = moveCard(tasksDir, freshCard.id, 'owner')
@@ -185,7 +254,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const moved = moveCard(tasksDir, freshCard.id, 'working')
       try {
         const result = await spawn({
-          project, projectPath, tasksDir, boardRoot, card: moved, model: selectedModel, engine: selectedEngine,
+          project, projectPath, tasksDir, boardRoot, card: moved, model: selectedModel, engine: selectedEngine, gitSettings,
           onPane: (provisional) => {
             bind(tasksDir, moved.id, provisional)
             try {
@@ -199,11 +268,15 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           },
         })
         bind(tasksDir, moved.id, result)
+        updateWorkflow(tasksDir, moved.id, { builder: result, operational: null })
         clearRetries(tasksDir, moved.id)
         herdrLog(`${moved.id} → working (auto-spawn)`)
         started.push(moved.id)
         slots--
       } catch (err) {
+        if (err.paused) { held[moved.id] = err.message; continue }
+        recordOperationalFailure(tasksDir, moved, err.message, projectPath, gitSettings)
+        recordSpawnFailure({ project, cap: max, reason: err.message })
         if (err.preservePane) {
           log?.(`${moved.id}: ${err.message}`)
           held[moved.id] = err.message
@@ -211,23 +284,14 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           continue
         }
         unbind(tasksDir, moved.id)   // the provisional claim dies with the pane
-        const { attempts } = recordFailure(tasksDir, moved.id)
-        if (attempts < MAX_ATTEMPTS) {
-          // Starting is flaky in a way the work itself is not — a slow shell, a
-          // busy machine. Put it back and try again, but bounded.
-          moveCard(tasksDir, moved.id, 'queue')
-          log?.(`${moved.id}: spawn failed (attempt ${attempts}/${MAX_ATTEMPTS}), retrying — ${err.message}`)
-        } else {
-          const parked = moveCard(tasksDir, moved.id, 'issues')
-          herdrLog(`${parked.id} → issues after ${attempts} failed spawns`, 'error')
-          appendFileSync(parked.path,
-            `\n\n---\n\n**Spawn failed** ${new Date().toISOString()}\n\n` +
-            `Failed to start ${attempts} times, last error: ${err.message}\n`)
-          clearRetries(tasksDir, moved.id)
-        }
+        moveCard(tasksDir, moved.id, 'queue')
+        held[moved.id] = `Operational recovery held: ${err.message}`
+        onChange?.()
+        continue
       }
       onChange?.()
     }
+    if (routeMutualHolds(tasksDir, held, log).length) onChange?.()
   } finally {
     busy.delete(project)
     holds.set(project, held)
@@ -287,6 +351,8 @@ function inactiveLongEnough(agent, now) {
 
 export async function closeFinished({ tasksDir, agents, project, now = Date.now(), retire = true }) {
   const bound = new Set([...Object.values(readBindings(tasksDir)).map((b) => b.pane_id), ...Object.values(readCardPlanners(tasksDir)).filter(p => !p.closedAt).map(p => p.paneId)])
+  const liveCards = new Set(Object.entries(readBoard(tasksDir)).filter(([column]) => column !== 'archive').flatMap(([, cards]) => cards.map(c => c.id)))
+  for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) if (liveCards.has(id) && saved.builder) bound.add(saved.builder.pane_id)
   for (const a of agents) {
     if (isBoardAgent(a) && !bound.has(a.pane_id) && !isSpawning(a.pane_id)) continue
     doneSince.delete(a.pane_id)
@@ -308,19 +374,33 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
   for (const a of spent) inactiveSince.delete(a.pane_id)
   for (const a of spent) {
     try { await recordUsageFinish({ tasksDir, paneId: a.pane_id, agent: a, status: 'complete', now: new Date(now) }) } catch {}
+    const runs = Object.values(readUsage(tasksDir).runs).filter(run => run.paneId === a.pane_id)
+    const ids = [...new Set(runs.flatMap(run => run.cardIds || []))]
+    if (ids.length) {
+      try {
+        const output = await paneRead(a.pane_id, sessionOf(project))
+        for (const id of ids) appendHistory(tasksDir, id, { event: 'finished-output', agent: a.name, run: a.agent_session, output })
+      } catch { continue } // Keep the pane until its output can be preserved.
+    }
     await paneClose(a.pane_id, sessionOf(project)).catch(() => {})
     herdrLog(`${a.name || a.pane_id} finished, pane closed`)
   }
   return spent.map((a) => a.pane_id)
 }
 
-// A completed card marked auto-review skips the manual gate. Everything else
-// waits for you.
+// A completed card marked auto-review, or a card-owned legacy completion with
+// no recorded PASS, is surfaced in Review. Trivial cards keep their focused
+// completion path.
 export function promoteAutoReview(tasksDir, { all = false } = {}) {
   const promoted = []
+  const worktrees = readWorktrees(tasksDir)
   for (const card of readBoard(tasksDir).completed) {
-    if (!all && !card.autoReview) continue
-    const target = card.trivial ? 'archive' : 'review'
+    if (!card.autoReview && !card.cardOwned) continue
+    if (card.reviewPassed) continue
+    if (card.trivial) continue
+    const entry = worktrees[card.id]
+    if (entry && (entry.state !== 'integrated' || !entry.cleaned)) continue
+    const target = 'review'
     moveCard(tasksDir, card.id, target)
     herdrLog(`${card.id} → ${target} (${card.trivial ? 'trivial deterministic check' : 'auto-review'})`)
     promoted.push(card.id)
@@ -328,44 +408,41 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
   return promoted
 }
 
-const explicitOwnerReason = (text) => {
-  const hasOnlyUser = /\b(?:only (?:the )?(?:operator|owner|user|human))\b/i.test(text)
-  const hasDecisionNeed = /\b(?:decision|approval|credential|secret|key|token|account|login|access|permission|2fa|mfa|purchase|judg(?:e)?ment|taste|confirm|choose|grant)\b/i.test(text)
-  const hasNegatedOwnerOnly = /\bnot true that[^.\n]{0,80}\s+only (?:the )?(?:operator|owner|user|human)|not only (?:the )?(?:operator|owner|user|human)/i.test(text)
-  return hasOnlyUser && hasDecisionNeed && !hasNegatedOwnerOnly
-}
+import { explicitOwnerReason } from './owner-reason.mjs'
 
-export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, includeCompleted = false } = {}) {
+export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCardIds = [], includeCompleted = false, reviewRoot, onlyIds } = {}) {
   if (reviewBusy) return []
   const routed = []
   const board = readBoard(tasksDir)
   const columns = includeCompleted ? ['review', 'completed'] : ['review']
   for (const card of columns.flatMap((column) => board[column])) {
+    if (onlyIds && !onlyIds.includes(card.id)) continue
+    if (busyCardIds.includes(card.id)) continue
     const decision = currentReviewDecision(readFileSync(card.path, 'utf8'))
     if (!decision) continue
     if (card.column === 'completed' && decision.verdict !== 'UNKNOWN') continue
     try {
       if (decision.verdict === 'PASS') {
-        moveCard(tasksDir, card.id, 'archive')
-        herdrLog(`${card.id} → archive (review verdict PASS)`)
-        routed.push({ id: card.id, to: 'archive', verdict: 'PASS' })
-      } else if (decision.verdict === 'FAIL') {
-        const moved = moveCard(tasksDir, card.id, 'issues')
-        appendFileSync(moved.path,
-          `\n\n---\n\n**Review feedback** ${new Date().toISOString()}\n\n` +
-          `Automatic review routing saw **Review verdict:** FAIL. Use the Reviewer evidence above as the correction brief.\n`)
-        herdrLog(`${card.id} → issues (review verdict FAIL)`)
-        routed.push({ id: card.id, to: 'issues', verdict: 'FAIL' })
-      } else if (decision.verdict === 'UNKNOWN') {
-        const to = explicitOwnerReason(decision.evidence) ? 'owner' : 'issues'
-        const moved = moveCard(tasksDir, card.id, to)
+        if (reviewRoot) assertReviewInputs(reviewRoot, tasksDir, card.id)
+        if (card.column !== 'review') continue
+        moveCard(tasksDir, card.id, 'completed')
+        herdrLog(`${card.id} → completed (review verdict PASS)`)
+        routed.push({ id: card.id, to: 'completed', verdict: 'PASS' })
+      } else {
+        const category = failureCategory(decision.evidence)
+        const to = explicitOwnerReason(decision.evidence) ? 'owner' : failureDestination(category, card.column)
+        if (to === card.column) {
+          recordOperationalFailure(tasksDir, card, decision.evidence, dirname(tasksDir))
+          continue
+        }
+        const moved = moveCard(tasksDir, card.id, to, { correction: category === 'implementation' })
+        if (moved.column === 'planning') requestPlannerCorrection(tasksDir, card.id)
+        if (moved.column !== 'owner' && !card.audit) setAutoReview(tasksDir, card.id, true)
         const heading = to === 'owner' ? 'Needs you' : 'Review feedback'
-        const brief = to === 'owner'
-          ? `Automatic review routing saw **Review verdict:** UNKNOWN. ${decision.evidence}\n`
-          : `Automatic review routing saw **Review verdict:** UNKNOWN. Use the Reviewer evidence above as the technical triage brief; retain UNKNOWN until a reviewer records PASS or FAIL.\n`
+        const brief = `${decision.evidence}\n`
         appendFileSync(moved.path, `\n\n---\n\n**${heading}** ${new Date().toISOString()}\n\n${brief}`)
-        herdrLog(`${card.id} → ${to} (review verdict UNKNOWN)`)
-        routed.push({ id: card.id, to, verdict: 'UNKNOWN' })
+        updateWorkflow(tasksDir, card.id, { correction: { category, note: decision.evidence } })
+        routed.push({ id: card.id, to: moved.column, verdict: decision.verdict })
       }
     } catch (err) {
       log?.(`${card.id}: review verdict routing skipped — ${err.message}`)
@@ -396,14 +473,17 @@ export const reviewerBusy = (project, agents) =>
   reviewing.has(project) || agents.some((a) => (a.name || '').startsWith(REVIEWER_PREFIX) && a.agent_status !== 'done')
 const busyError = () => Object.assign(new Error('a reviewer is already running'), { busy: true })
 
-export async function autoReview({ project, projectPath, tasksDir, boardRoot, model, engine, agents, log, plan = computeReviewPlan, spawn = spawnReviewer }) {
-  if (reviewerBusy(project, agents)) return null
-  const batch = plan({ tasksDir }).batches[0]
+export async function autoReview({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, agents, log, inventory, assignmentForCard, plan = computeReviewPlan, spawn = spawnReviewer }) {
+  if (!plan({ tasksDir }).batches.length) return null
+  let claims
+  try { claims = syncReviewClaims(reviewRoot, await inventory()) } catch (err) { log?.(err.message); return null }
+  if (claims.length >= 4) return null
+  if (claims.some(c => c.project === project && !c.cards.length)) return null
+  const claimedIds = claims.filter(c => c.project === project).flatMap(c => c.cards)
+  const batch = plan({ tasksDir, claimedIds }).batches[0]
   if (!batch) return null
   try {
-    const owned = readBoard(tasksDir).review.filter(c => c.cardOwned).map(c => c.id)
-    const cardIds = batch.cards.some(id => owned.includes(id)) ? [batch.cards[0]] : batch.cards
-    return await spawn({ project, projectPath, tasksDir, boardRoot, model, engine, cardIds })
+    return await spawn({ project, projectPath, tasksDir, boardRoot, reviewRoot, model, engine, cardIds: batch.cards, inventory, assignmentForCard })
   } catch (err) {
     if (!err.busy) log?.(`auto-review skipped — ${err.message}`)
     return null
@@ -413,29 +493,64 @@ export async function autoReview({ project, projectPath, tasksDir, boardRoot, mo
 // One reviewer for every card sitting in Review, or — when `cardIds` is given —
 // just that subset (the review-plan batching). Batching is the point: a single
 // context reading several related cards costs far less than several contexts.
-export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, model, engine, cardIds }) {
-  // Claimed before the first await, so two callers in the same tick cannot both
-  // pass the check.
-  if (reviewing.has(project)) throw busyError()
-  reviewing.add(project)
+export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, cardIds, inventory, assignmentForCard }) {
+  assertCardRunSelection(project, cardIds || [], 'reviewer')
+  assertPromptAllowed(project)
+  // A cross-process reservation follows fresh global inventory, before launch.
+  let claim, paneId, assignedCards = []
   try {
     const session = sessionOf(project)
-    if (reviewerRunning(await agentsForProject(projectPath, session))) throw busyError()
 
-    let cards = readBoard(tasksDir).review
+    const board = readBoard(tasksDir)
+    let cards = cardIds?.length ? [...board.review, ...board.completed] : board.review
     if (cardIds?.length) {
       const wanted = new Set(cardIds.map((id) => id.toUpperCase()))
       cards = cards.filter((c) => wanted.has(c.id))
     }
     if (cards.some((c) => c.audit)) cards = [cards.find((c) => c.audit)]
     if (!cards.length) throw new Error('nothing in Review')
+    assignedCards = cards
+    assertCardRunSelection(project, cards.map(c => c.id), 'reviewer')
+    for (const card of cards) {
+      const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer')
+      if (limit) throw Object.assign(new Error(limit), { busy: true })
+      const held = operationalHold(tasksDir, card, projectPath)
+      if (held) throw Object.assign(new Error(`Review recovery held: ${held}`), { busy: true })
+    }
+    for (const group of readReviewGroups(tasksDir).filter(g => g.cards.some(id => cards.some(c => c.id === id)))) {
+      const remaining = group.cards.filter(id => !board.archive.some(c => c.id === id))
+      if (remaining.length !== cards.length || remaining.some(id => !cards.some(c => c.id === id))) throw new Error(`Review explicit group together: ${group.name}`)
+    }
+    if (cardIds?.length && (new Set(cardIds).size !== cardIds.length || cards.length !== cardIds.length)) throw new Error('Review group contains duplicate or unavailable cards')
+    if (!inventory) throw new Error('Global reviewer inventory required')
+    const integrated = readWorktrees(tasksDir)
+    for (const card of cards.filter(c => c.column === 'completed')) {
+      if (integrated[card.id]?.state !== 'integrated') throw new Error(`${card.id}: integration receipt required before review`)
+    }
+    claim = reserveReview(reviewRoot, { project, tasksDir, cards: cards.map(c => c.id), inventory: await inventory() })
+    cards = cards.map(card => card.column === 'completed' ? moveCard(tasksDir, card.id, 'review') : card)
+
+    for (const card of cards) {
+      if (!auditPreflightBlocked(card)) continue
+      throw new Error(`${card.id}: audit prerequisite BLOCKED; restore required tools/auth/render setup before retrying Review`)
+    }
+
+    const selected = assignmentForCard?.(cards[0], 'review')
+    const selectedModel = selected?.model ?? model
+    const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
+    const reviewerEngine = auditMcpEngine(selectedEngine, cards, tasksDir)
+    const environment = projectEnvironment(project)
+    const snapshot = prepareReviewSnapshot(reviewRoot, projectPath, claim.id)
+    updateReviewClaim(reviewRoot, claim.id, { snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
 
     const workspace = await agentWorkspaceOr(projectPath, session)
     const created = await tabCreate({
-      cwd: projectPath, label: reviewLabel(cards.length), focus: false, workspace, session,
+      cwd: snapshot.path, label: reviewLabel(cards.length), focus: false, workspace, session,
     })
-    const paneId = created?.root_pane?.pane_id
+    paneId = created?.root_pane?.pane_id
     if (!paneId) throw new Error(`tab create returned no pane id: ${JSON.stringify(created)}`)
+    updateReviewClaim(reviewRoot, claim.id, { paneId })
+    bindCardRunAssignment(project, cards.map(c => c.id), 'reviewer', paneId)
 
     // Named so closeFinished and reviewerRunning can both recognise it, and so it
     // is never mistaken for a card's builder. Pane id included so a retry after a
@@ -449,27 +564,31 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     beginSpawn(paneId)
     try {
       // Same generous startup budget as a builder — Opus is no faster to boot.
-      await agentStart({ name, paneId, model, engine, timeoutMs: START_TIMEOUT_MS, session })
+      await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session })
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({
           tasksDir, project, requestId: `review:${cards.map((c) => c.id).join(',')}`, cardIds: cards.map((c) => c.id),
-          role: 'reviewer', paneId, tabId: created?.tab?.tab_id, model, name, agentSession: agent?.agent_session,
+          role: 'reviewer', paneId, tabId: created?.tab?.tab_id, model: selectedModel, name, agentSession: agent?.agent_session,
         })
       } catch {}
-      await deliver(paneId, reviewerPrompt({ cards, projectPath, boardRoot }), session)
+      await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path }), session)
+      updateReviewClaim(reviewRoot, claim.id, { phase: 'running', submittedAt: Date.now() })
+      for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null })
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
-      throw new Error(`reviewer spawn failed: ${err.message}`)
+      throw Object.assign(new Error(`reviewer spawn failed: ${err.message}`), { paused: err.paused, preservePane: err.preservePane })
     } finally {
       endSpawn(paneId)
     }
 
-    // Deliberately not bound to a card: the reviewer owns the whole Review column,
-    // and binding it to one card would let it hold that card's slot forever.
+    // Reviewer ownership is in the separate global claim ledger, never Builder slots.
     return { pane_id: paneId, tab_id: created?.tab?.tab_id, model, name, cards: cards.map((c) => c.id) }
-  } finally {
-    reviewing.delete(project)
+  } catch (err) {
+    if (!err.paused && !err.busy) for (const card of assignedCards) recordOperationalFailure(tasksDir, card, err.message, projectPath)
+    if (claim && paneId) updateReviewClaim(reviewRoot, claim.id, { phase: 'uncertain', error: err.message })
+    else if (claim) failReviewClaim(reviewRoot, claim.id, err.message)
+    throw err
   }
 }
 
@@ -497,7 +616,9 @@ export function missionIssueHandoff(tasksDir, mission, { all = false } = {}) {
   return moved
 }
 
-export async function spawnIssuesSweeper({ project, projectPath, tasksDir, boardRoot, model, engine, manager = false, mission }) {
+export async function spawnIssuesSweeper({ project, projectPath, tasksDir, boardRoot, model, engine, manager = false, mission, assignmentForCard }) {
+  if (cardRunContext()) throw new Error('Multi-card Planner sweeps are not permitted by explicit card runs')
+  assertPromptAllowed(project)
   if (sweeping.has(project)) throw busyError()
   sweeping.add(project)
   try {
@@ -523,7 +644,9 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
     // through deliver(), not just agentStart().
     beginSpawn(paneId)
     try {
-      await agentStart({ name, paneId, model, engine, timeoutMs: START_TIMEOUT_MS, session })
+      const selected = assignmentForCard?.(cards[0], 'issues')
+      const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
+      await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session })
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({
@@ -531,7 +654,7 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
           role: 'planner', paneId, tabId: created?.tab?.tab_id, model, name, agentSession: agent?.agent_session,
         })
       } catch {}
-      await deliver(paneId, issuesSweeperPrompt({ cards, projectPath, boardRoot, manager }), session)
+      await deliver(paneId, issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, manager }), session)
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
       throw new Error(`issues sweeper spawn failed: ${err.message}`)

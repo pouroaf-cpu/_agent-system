@@ -2,9 +2,12 @@
 // Nothing is duplicated into a database — the filesystem is the source of truth.
 
 import { readdirSync, readFileSync, writeFileSync, appendFileSync, statSync, existsSync, mkdirSync, renameSync } from 'node:fs'
-import { join, basename, resolve } from 'node:path'
+import { join, basename, resolve, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { recoveryTransition } from './recovery.mjs'
+import { auditArchiveError } from './audit-routing.mjs'
+import { appendHistory } from './card-history.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
 const AUDIT_TEMPLATES = {
@@ -14,21 +17,56 @@ const AUDIT_TEMPLATES = {
 }
 export const AUDITS = Object.keys(AUDIT_TEMPLATES)
 
-export function validatePlan(text) {
+export function validatePlan(text, { requireReadiness = false } = {}) {
   const section = (name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
   const workspace = text.match(/^\*\*Workspace:\*\*\s*([^\n]+)$/im)?.[1]?.trim() || '.'
+  const readinessLine = text.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)?.[0]
+  const readiness = text.match(/^\*\*Plan readiness:\*\*\s*(build-ready|investigation)\s*$/im)?.[1]?.toLowerCase()
+  if (requireReadiness && !readinessLine) throw new Error('Plan incomplete: authenticated Planner handoff requires **Plan readiness:** build-ready or investigation')
+  if (readinessLine && !readiness) throw new Error('Plan incomplete: Plan readiness must be build-ready or investigation')
   if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace.replace(/\\/g, '/'))) {
     throw new Error('Plan incomplete: Workspace must be a project-relative path')
   }
   for (const name of ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']) {
     if (!section(name)) throw new Error(`Plan incomplete: fill ## ${name} before handoff; keep the template headings`)
   }
+  if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
+    const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
+    const checks = section('Outcome checks')
+    if (!criteria.length || new Set(criteria).size !== criteria.length || criteria.some(id => !new RegExp(`^\\s*\\|?\\s*${id}\\s*\\|\\s*[^|]+\\|\\s*[^|]+\\|\\s*[^|]+\\|?\\s*$`, 'm').test(checks))) throw new Error('Plan incomplete: map each AC ID to change, acceptance check and negative check under Outcome checks')
+    if (!section('Prerequisites')) throw new Error('Plan incomplete: state workspace prerequisites (or explicitly none)')
+  }
   const files = [...section('Files').matchAll(/^-\s+`([^`]+)`/gm)].map(m => m[1])
-  if (!files.length || files.some(p => /[\\:*?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|css|json|md|html?)$/.test(p))) {
+  if (!files.length || files.some(p => /[\\:*?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|css|json|md|html?)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')))) {
     throw new Error('Plan incomplete: ## Files needs exact relative file paths as - `path/to/file.css` bullets (no placeholders or globs)')
   }
   if (/^\*\*Trivial:\*\*\s*yes\s*$/im.test(text) && files.length > 2) {
     throw new Error('Trivial cards may list no more than two files')
+  }
+  if (readiness === 'investigation') {
+    const plan = section('Implementation plan').replaceAll('**', '')
+    if (!/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])) throw new Error('Plan incomplete: investigation requires explicit approval on the card')
+    if (!/(?:check|measurement)\s*(?:commands?|method)?\s*:\s*\S|setup\/start\/check commands?[^\n]*\n[\s\S]*?```/i.test(plan) || !/(?:expected result|disposition)\s*:\s*\S/i.test(plan) || !/stop rules?\s*:\s*\S/i.test(plan)) {
+      throw new Error('Plan incomplete: investigation needs a measurement/check, expected result or disposition, and stop rules')
+    }
+  }
+  if (readiness === 'build-ready') {
+    const plan = section('Implementation plan')
+    const required = [
+      ['agreed outcome', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:outcome|agreed outcome)[ \t]*:[ \t]*[^\r\n]+/im],
+      ['unchanged constraints', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?unchanged constraints?[ \t]*:[ \t]*[^\r\n]+/im],
+      ['observed cause and evidence', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:observed cause|cause)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*[^\r\n]+/im],
+      ['inspected current revision/state', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?inspected current (?:revision\/state|revision|state)[ \t]*:[ \t]*[^\r\n]+/im],
+      ['concrete changes', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:change|changes|concrete changes)[ \t]*:[ \t]*[^\r\n]+/im],
+      ['runnable check and expected result', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:check|check command|setup)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*(?:expected(?: result)?|result)[ \t]*:[ \t]*[^\r\n]+/im],
+      ['scope/stop rules', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:scope|stop rules?)[ \t]*:[ \t]*[^\r\n]+/im],
+    ]
+    const missing = required.filter(([, pattern]) => !pattern.test(plan)).map(([name]) => name)
+    if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}`)
+    const cause = plan.match(/(?:^|\n)\s*(?:[-*]\s*)?(?:observed cause|cause)\s*:\s*([^\n]+)/i)?.[1] || ''
+    if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
+    const fileSection = section('Files')
+    if ([...fileSection.matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
   }
 }
 
@@ -42,8 +80,8 @@ export const COLUMNS = [
   { key: 'queue',     dir: 'queue',     label: 'Queue'     },
   { key: 'working',   dir: 'working',   label: 'Working'   },
   { key: 'issues',    dir: 'issues',    label: 'Issues'    },
-  { key: 'completed', dir: 'completed', label: 'Completed' },
   { key: 'review',    dir: 'review',    label: 'Review'    },
+  { key: 'completed', dir: 'completed', label: 'Completed' },
 ]
 
 // Not a column — a collapsed drawer at the end of the board.
@@ -68,6 +106,8 @@ export const CATEGORIES = ['ui', 'code', 'auth-security', 'data']
 // when it writes the card and a human can see it in the diff.
 const AUTOREVIEW = /^\*\*Auto-review:\*\*\s*(yes|no)\s*$/im
 const TRIVIAL = /^\*\*Trivial:\*\*\s*(yes|no)\s*$/im
+const AGENT_SETTING = /\*\*(Planner|Builder|Reviewer|Issues|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
+const AGENT_STAGE = { Planner: 'planning', Builder: 'working', Reviewer: 'review', Issues: 'issues', Trivial: 'trivial' }
 // Planner-authored time estimates, same metadata line as Priority/Status/Surface.
 const EST_BUILD = /\*\*Est build:\*\*\s*(\d+)\s*m/i
 const EST_REVIEW = /\*\*Est review:\*\*\s*(\d+)\s*m/i
@@ -91,11 +131,10 @@ const FILES_SECTION = /##\s*Files\s*\n([\s\S]*?)(?=\n##\s|\n*$)/i
 const FILE_LINE = /^-\s*`([^`]+)`/gm
 const DIRTY_SNAPSHOT = /^\*\*Dirty snapshot:\*\*[^\n]*\n+```json\n([\s\S]*?)\n```/gm
 
-// Read only the head of the file. Card bodies run to hundreds of lines and the
-// board never shows more than the title strip.
-function readHead(path, bytes = 2048) {
-  const buf = readFileSync(path)
-  return buf.subarray(0, bytes).toString('utf8')
+// Metadata may follow an assignment override longer than 2KB. Truncating here
+// silently loses Workflow/Auto-review and sends corrections down the wrong lane.
+function readHead(path) {
+  return readFileSync(path, 'utf8')
 }
 
 // Agents append their reason to the bottom of the card, so the one line the
@@ -108,6 +147,8 @@ const ASK = /\*\*(Needs you|Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\
 const ROUND = /\*\*Review feedback\*\*/g
 
 function readAsk(path, bytes = 8192) {
+  const current = readFileSync(path, 'utf8').match(/^## Current feedback\r?\n([^\n]+): ([\s\S]*?)(?=^History entry:|^## |$(?![\s\S]))/m)
+  if (current) return { kind: current[1], text: current[2].trim() }
   const buf = readFileSync(path)
   const tail = buf.subarray(Math.max(0, buf.length - bytes)).toString('utf8')
   let last = null
@@ -150,13 +191,17 @@ function parseGitStatus(output) {
 function dirtyFiles(workspace, paths = []) {
   const args = ['-C', workspace, 'status', '--porcelain=v1', '-z']
   if (paths.length) args.push('--', ...paths)
-  const result = spawnSync('git', args, { encoding: 'utf8' })
+  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 30000, windowsHide: true })
   if (result.status !== 0) throw new Error(`git status failed in ${workspace}: ${(result.stderr || result.stdout).trim()}`)
   return parseGitStatus(result.stdout).map((file) => {
     const full = join(workspace, file.path)
+    let sha256 = null
+    try {
+      if (statSync(full).isFile()) sha256 = createHash('sha256').update(readFileSync(full)).digest('hex')
+    } catch { /* deleted, mid-write, or a directory: status is enough */ }
     return {
       ...file,
-      sha256: existsSync(full) && statSync(full).isFile() ? createHash('sha256').update(readFileSync(full)).digest('hex') : null,
+      sha256,
     }
   }).sort((a, b) => a.path.localeCompare(b.path))
 }
@@ -196,6 +241,12 @@ export function parseCard(path, columnKey) {
   const heading = head.match(HEADING)
   const idFromName = file.match(/^(T-\d+)/i)
 
+  const agentSettings = {}
+  for (const match of text.matchAll(AGENT_SETTING)) {
+    const stage = AGENT_STAGE[match[1]], field = match[2].toLowerCase()
+    agentSettings[stage] ||= {}
+    agentSettings[stage][field] = match[3].trim().toLowerCase()
+  }
   return {
     id: (heading?.[1] || idFromName?.[1] || file.replace(/\.md$/i, '')).toUpperCase(),
     title: (heading?.[2] || file.replace(/\.md$/i, '')).trim(),
@@ -217,6 +268,7 @@ export function parseCard(path, columnKey) {
       : '',
     autoReview: head.match(AUTOREVIEW)?.[1]?.toLowerCase() === 'yes',
     trivial: head.match(TRIVIAL)?.[1]?.toLowerCase() === 'yes',
+    agentSettings,
     estBuild: head.match(EST_BUILD)?.[1] ? Number(head.match(EST_BUILD)[1]) : null,
     estReview: head.match(EST_REVIEW)?.[1] ? Number(head.match(EST_REVIEW)[1]) : null,
     blockedBy: (head.match(BLOCKED_BY)?.[1] || '')
@@ -250,6 +302,12 @@ const realReviewerEvidence = (evidence) =>
   evidence.length > 0 && !/^(todo|tbd|n\/a|template|placeholder|\[.*\])$/i.test(evidence)
 
 export function currentReviewDecision(text) {
+  // A pending correction invalidates any verdict retained in old evidence.
+  if (/^## Current feedback\r?\nReview feedback:/m.test(text)) {
+    const feedbackAt = text.indexOf('## Current feedback')
+    const verdictAt = text.lastIndexOf('**Review verdict:**')
+    if (verdictAt < feedbackAt) return null
+  }
   let inFence = false
   let afterReset = true
   let inReviewerEvidence = false
@@ -296,7 +354,18 @@ export function hasCurrentReviewPass(text) {
 }
 
 export function canArchive(card) {
-  return card.trivial || !card.mission || card.reviewPassed
+  return (!card.cardOwned && !card.mission) || card.reviewPassed || !!card.audit || hasOperatorCompletion(card)
+}
+
+// Explicit human waiver is separate from Review PASS and bound to exact evidence.
+export function hasOperatorCompletion(card) {
+  try {
+    const tasksDir = dirname(dirname(card.path))
+    const receipt = JSON.parse(readFileSync(join(tasksDir, '.operator-completions.json'), 'utf8'))[card.id]
+    const work = JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))[card.id]
+    const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex')
+    return receipt?.kind === 'explicit-user-review-waiver' && !!receipt.authorization && work?.state === 'integrated' && receipt.commit === work.commit && receipt.cardHash === hash(card.path) && receipt.evidenceHash === hash(receipt.evidencePath)
+  } catch { return false }
 }
 
 // Priority lives in the card's metadata line, same as everything else the board
@@ -391,13 +460,16 @@ export function findCard(tasksDir, cardId) {
 }
 
 // Move a card between columns. This IS the state change — there is nothing else to update.
-export function moveCard(tasksDir, cardId, toKey) {
-  const col = columnByKey(toKey)
+export function moveCard(tasksDir, cardId, toKey, options = {}) {
+  let col = columnByKey(toKey)
   if (!col) throw new Error(`unknown column: ${toKey}`)
 
   const card = findCard(tasksDir, cardId)
   if (card.column === toKey) return card
-  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'))
+  if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed) {
+    throw new Error(`${card.id} requires an evidenced Reviewer PASS before Completed`)
+  }
+  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment })
   if (card.column === 'archive' && toKey !== 'archive') {
     // Only reachable when every copy of the id is archived; moving one back out
     // silently is more surprising than refusing.
@@ -407,11 +479,21 @@ export function moveCard(tasksDir, cardId, toKey) {
     throw new Error(`${card.id} is a mission card and needs Reviewer evidence plus Review verdict: PASS before archive`)
   }
 
+  const text = readFileSync(card.path, 'utf8')
+  if (toKey === 'archive' && card.audit) {
+    const error = auditArchiveError(text, id => id !== card.id && !!findCard(tasksDir, id))
+    if (error) throw new Error(error)
+  }
+  const transition = recoveryTransition(text, card.column, toKey, options)
+  toKey = transition.to
+  col = columnByKey(toKey)
   const dest = join(tasksDir, col.dir)
   mkdirSync(dest, { recursive: true })
   const target = join(dest, card.file)
   if (existsSync(target)) throw new Error(`already exists in ${toKey}: ${card.file}`)
 
+  appendHistory(tasksDir, card.id, { event: 'transition', from: card.column, to: toKey, text })
+  if (transition.text !== text) writeFileSync(card.path, transition.text)
   renameSync(card.path, target)
   return { ...card, column: toKey, path: target }
 }

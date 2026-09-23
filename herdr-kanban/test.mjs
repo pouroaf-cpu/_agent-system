@@ -13,7 +13,7 @@ import { promoteAutoReview, promotePlanned, routeReviewVerdicts, missionIssueHan
 import { workerPrompt, reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
 import { recordFailure, coolingDown, attemptsFor, clearRetries } from './lib/retries.mjs'
 import { findWorkspace, agentWorkspace, parseAgentList, agentStartArgs, assertManagedModel, sessionServerArgs } from './lib/herdr.mjs'
-import { recordSpawn, breakerState, resetBreaker } from './lib/breaker.mjs'
+import { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } from './lib/breaker.mjs'
 import { computeReviewPlan, cardFiles, cardEstimates, REVIEW_BATCH_CAP_MINUTES } from './lib/review-plan.mjs'
 import { deliverWith } from './lib/spawn.mjs'
 import { parseManagerTasks } from './lib/manager-tasks.mjs'
@@ -127,6 +127,13 @@ test('only auto-review cards are promoted out of Completed', () => {
   rmSync(root, { recursive: true, force: true })
 })
 
+test('free slots never display below zero while a project is paused', () => {
+  const { tasks, root } = fixture()
+  bind(tasks, 'T-04', { pane_id: 'w9:p7', model: 'sonnet' })
+  assert.equal(slotsFree({ tasksDir: tasks, agents: [{ pane_id: 'w9:p7', agent_status: 'working' }], max: 0 }), 0)
+  rmSync(root, { recursive: true, force: true })
+})
+
 test('audit templates create evidence-gated cards directly in Review', () => {
   const { tasks, root } = fixture()
   assert.throws(() => createCard(tasks, { title: 'Design audit', brief: 'Audit /calculator', audit: 'design' }), /require exact tools/i)
@@ -143,15 +150,15 @@ test('audit templates create evidence-gated cards directly in Review', () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-test('explicit trivial cards archive without spawning a reviewer', () => {
+test('trivial mission cards may complete without independent review', () => {
   const { tasks, root } = fixture()
   mkdirSync(join(tasks, 'completed'), { recursive: true })
   writeFileSync(join(tasks, 'completed', 'T-20-trivial.md'), '# T-20 — trivial\n\n**Mission:** CURRENT\n**Auto-review:** yes\n**Trivial:** yes\n')
 
-  assert.deepEqual(promoteAutoReview(tasks), ['T-20'])
+  assert.deepEqual(promoteAutoReview(tasks), [])
   const board = readBoard(tasks)
-  assert.deepEqual(board.archive.map((c) => c.id), ['T-20'])
-  assert.deepEqual(board.review, [])
+  assert.deepEqual(board.completed.map((c) => c.id), ['T-20'])
+  assert.deepEqual(board.archive, [])
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -205,41 +212,38 @@ test('review rounds are counted from the card, so the loop cannot run forever', 
 test('the reviewer prompt stays inside card-listed files and one proportional check', () => {
   const cards = [{ id: 'T-04', title: 'x', path: 'C:\\p\\TASKS\\review\\T-04-x.md' }]
   const text = reviewerPrompt({ cards, projectPath: 'C:\\p', boardRoot: 'C:\\board' })
-  assert.ok(text.includes('pass <ID>'), 'passes go through hkb pass so reviewer evidence is written')
-  assert.ok(text.includes('rework <ID>'), 'failures use hkb rework')
-  assert.ok(/Error for planner correction/.test(text), 'failed review does not go straight back to a builder')
-  assert.match(text, /Read only .*REVIEWER\.md.*card files.*exact files/i)
-  assert.match(text, /exactly one proportional check/i)
+  assert.ok(text.includes('pass T-04'), 'passes go through hkb pass so reviewer evidence is written')
+  assert.ok(text.includes('rework T-04'), 'failures use hkb rework')
+  assert.match(text, /Only planning errors return to Planner; implementation errors return to the responsible Builder/)
+  assert.match(text, /Read .*REVIEWER\.md.*focused briefings.*mandatory project\/safety/i)
+  assert.match(text, /one proportional check type/i)
   assert.doesNotMatch(text, /ORCHESTRATION\.md|CLAUDE\.md|browser behaviour|journal step/i)
-  assert.match(text, /Do not run browser tests/i)
+  assert.match(text, /Chrome navigation.*checks are allowed/i)
   assert.ok(!/\n/.test(text))
 })
 
-test('audit cards use the evidence-gated Auditor prompt and return to Owner', () => {
+test('audit cards use the evidence-gated Auditor prompt and status-aware handoff', () => {
   const cards = [{ id: 'T-18', title: 'Design audit', audit: 'design', path: 'C:\\p\\TASKS\\review\\T-18-audit-design.md' }]
   const text = reviewerPrompt({ cards, projectPath: 'C:\\p', boardRoot: 'C:\\board' })
-  assert.match(text, /AUDITOR\.md/)
+  assert.match(text, /AUDITOR-CARD-WORKFLOW\.md/)
   assert.match(text, /missing tooling or evidence is INCOMPLETE, never CLEAR/i)
-  assert.match(text, /owner <ID>/)
+  assert.match(text, /audit <ID>/)
+  assert.match(text, /FINDINGS goes to the responsible Planner/)
   assert.doesNotMatch(text, /pass <ID>|rework <ID>/)
 })
 
 test('the worker prompt stays inside the card scope and one proportional check', () => {
   const card = { id: 'T-04', title: 'x', workspace: 'TASKS/workspaces/android', path: 'C:\\p\\TASKS\\queue\\T-04-x.md' }
   const text = workerPrompt({ card, projectPath: 'C:\\p', boardRoot: 'C:\\board' })
-  assert.match(text, /Read only .*BUILDER\.md.*exact files/i)
-  assert.match(text, /exactly one proportional check/i)
-  assert.match(text, /check is consumed only once .* target process starts/i)
-  assert.match(text, /PowerShell profile noise, shell transport, or quoting prevents .* target process from starting/i)
-  assert.match(text, /exactly one corrected retry of the same intended command/i)
-  assert.match(text, /Do not substitute a different check/i)
-  assert.match(text, /once the target process starts any failed test, assertion, or process result consumes the check/i)
-  assert.match(text, /without retrying another check/i)
-  assert.match(text, /pwsh -NoProfile/)
+  assert.match(text, /Read .*BUILDER\.md.*exact listed files/i)
+  assert.match(text, /one proportional check type/i)
+  assert.match(text, /Rerun the same check after fixing implementation, setup, or harness errors/i)
+  assert.match(text, /Stop after three identical unresolved failures/i)
+  assert.match(text, /login:false.*never prefix bare -NoProfile/)
   assert.match(text, /Workspace root: C:\/p\/TASKS\/workspaces\/android/i)
-  assert.match(text, /git -C C:\/p\/TASKS\/workspaces\/android/i)
+  assert.match(text, /git -C '?C:\/p\/TASKS\/workspaces\/android/i)
   assert.doesNotMatch(text, /ORCHESTRATION\.md|CLAUDE\.md|browser behaviour|journal step/i)
-  assert.match(text, /do not run browser tests/i)
+  assert.match(text, /Browser checks are allowed only when explicitly required by the card/i)
   assert.match(text, /stage only the exact implementation files/i)
   assert.match(text, /Never push/i)
   assert.ok(text.indexOf('create one local commit') < text.indexOf('done T-04'), 'the commit precedes done')
@@ -416,14 +420,14 @@ test('server gates finished-pane retirement to hourly housekeeping', () => {
   assert.match(source, /closeFinished\(\{[\s\S]{0,180}retire:\s*cleanupDue\(project,\s*now\)/)
 })
 
-test('only one reviewer can be in flight, however many callers ask at once', async () => {
+test('review dispatch without eligible cards fails closed', async () => {
   // herdr registers an agent only once it has booted, so reviewerRunning() is
   // false for the whole spawn, so two clicks could otherwise start two reviewers.
   const { root, tasks } = fixture()
   const args = { project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet' }
   const results = await Promise.allSettled([spawnReviewer(args), spawnReviewer(args)])
   const busy = results.filter((r) => r.status === 'rejected' && r.reason.busy)
-  assert.equal(busy.length, 1, 'the second caller is turned away, not run')
+  assert.equal(busy.length, 0, 'both reject absent cards before reserving slots')
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 0, 'no herdr here, so neither can succeed')
   rmSync(root, { recursive: true, force: true })
 })
@@ -452,6 +456,7 @@ test('autoReview starts one planned review batch and skips while a reviewer is b
     model: 'gpt-5.5',
     engine: { kind: 'codex' },
     agents: [],
+    inventory: async () => [{ project: 'test', tasksDir: tasks, known: true, agents: [] }],
     spawn: async ({ cardIds }) => {
       calls++
       return { pane_id: 'w1:p1', cards: cardIds }
@@ -467,6 +472,7 @@ test('autoReview starts one planned review batch and skips while a reviewer is b
     model: 'gpt-5.5',
     engine: { kind: 'codex' },
     agents: [{ pane_id: 'w1:p1', name: 'kb-review-test-w1-p1', agent_status: 'working' }],
+    inventory: async () => [{ project: 'test', tasksDir: tasks, known: true, agents: [{ pane_id: 'w1:p1', name: 'kb-review-test-w1-p1', agent_status: 'working' }] }],
     spawn: async () => { calls++ },
   })
   assert.equal(busy, null)
@@ -489,33 +495,39 @@ test('a missing or malformed herdr agent-list response is unknown, not "nothing 
   assert.deepEqual(parseAgentList({ agents: ok }), ok)
 })
 
-test('the circuit breaker trips at a threshold scaled to the builder cap, and does not self-clear', () => {
-  // The threshold is derived from board.config.json's maxConcurrentAgents, because a
-  // fixed 6 froze the whole board once the cap itself reached 6 (operator, 2026-08-18).
-  const cap = JSON.parse(readFileSync(new URL('./board.config.json', import.meta.url), 'utf8')).maxConcurrentAgents
-  const threshold = Math.max(6, cap * 3)
-  assert.ok(threshold > cap, 'filling every builder slot must not, by itself, trip the breaker')
-  resetBreaker()
+test('the circuit breaker counts consecutive failures, not healthy launches, and cools down', () => {
+  const project = 'proof'
+  const cap = 4
+  const threshold = Math.max(3, cap)
+  resetBreaker(project)
   const t0 = 1_000_000
-  assert.equal(breakerState().breakerTripped, false)
-  for (let i = 0; i < threshold - 1; i++) recordSpawn(t0 + i * 1000)
-  assert.equal(breakerState().breakerTripped, false, 'one under the threshold is normal activity')
-  recordSpawn(t0 + threshold * 1000)
-  const state = breakerState()
+  for (let i = 0; i < 20; i++) recordSpawn({ project, now: t0 + i })
+  assert.equal(breakerState(project, t0 + 20).breakerTripped, false, 'healthy launches never trip it')
+  for (let i = 0; i < threshold - 1; i++) recordSpawnFailure({ project, cap, now: t0 + 100 + i, reason: 'boot' })
+  assert.equal(breakerState(project, t0 + 102).breakerTripped, false)
+  const state = recordSpawnFailure({ project, cap, now: t0 + 200, reason: 'boot' })
   assert.equal(state.breakerTripped, true)
   assert.equal(state.count, threshold)
-  // Time moving on (even past the window) must not clear it on its own —
-  // manual reset only.
-  recordSpawn(t0 + 20 * 60 * 1000)
-  assert.equal(breakerState().breakerTripped, true, 'no auto-recovery timer')
-  resetBreaker()
-  assert.equal(breakerState().breakerTripped, false)
+  assert.equal(breakerState(project, state.resetsAt).breakerTripped, false, 'cooldown restores the project')
+  resetBreaker(project)
 })
 
-test('tripping the breaker actually prevents further spawns, not just a flag', async () => {
-  // server.mjs's response to a trip is to force config.maxConcurrentAgents to 0
-  // in memory. Prove that forcing max to 0 is a hard no-op for autoSpawn — the
-  // card sitting in Queue is never even touched, not just "fails to bind".
+test('a successful launch clears prior failures and projects stay isolated', () => {
+  resetBreaker()
+  const t0 = 2_000_000
+  recordSpawnFailure({ project: 'alpha', cap: 3, now: t0, reason: 'boot' })
+  recordSpawnFailure({ project: 'alpha', cap: 3, now: t0 + 1, reason: 'boot' })
+  recordSpawn({ project: 'alpha', now: t0 + 2 })
+  recordSpawnFailure({ project: 'alpha', cap: 3, now: t0 + 3, reason: 'boot' })
+  recordSpawnFailure({ project: 'alpha', cap: 3, now: t0 + 4, reason: 'boot' })
+  assert.equal(breakerState('alpha', t0 + 4).breakerTripped, false, 'success reset the sequence')
+  for (let i = 0; i < 3; i++) recordSpawnFailure({ project: 'beta', cap: 3, now: t0 + i, reason: 'boot' })
+  assert.equal(breakerState('beta', t0 + 3).breakerTripped, true)
+  assert.equal(breakerState('alpha', t0 + 4).breakerTripped, false)
+  resetBreaker()
+})
+
+test('a zero builder cap prevents further spawns', async () => {
   const { root, tasks } = fixture()
   const started = await autoSpawn({
     project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root,
@@ -629,13 +641,30 @@ test('preflightBlocks: no script means no check; the script decides by exit code
   writeFileSync(join(root, 'scripts', 'preflight.mjs'), 'process.exit(0)')
   assert.equal(preflightBlocks({ projectPath: root, card }), false, 'zero exit clears the card')
 
-  // exit 2 (malformed/unreadable card) still blocks, but must be logged
-  // distinctly per preflight.mjs's own warning about silently skipping a
-  // broken card forever.
+  // exit 2 is returned distinctly so autoSpawn can route it to its Planner.
   writeFileSync(join(root, 'scripts', 'preflight.mjs'), 'process.exit(2)')
+  assert.equal(preflightBlocks({ projectPath: root, card }).kind, 'card not ready')
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('autoSpawn routes malformed preflight cards to Planning once and never starts a Builder', async () => {
+  const { root, tasks } = fixture()
+  mkdirSync(join(root, 'scripts'), { recursive: true })
+  writeFileSync(join(root, 'scripts', 'preflight.mjs'), 'console.error("exact malformed reason"); process.exit(2)')
   const logged = []
-  assert.ok(preflightBlocks({ projectPath: root, card, log: (m) => logged.push(m) }))
-  assert.ok(logged.length === 1 && logged[0].includes(card.id), 'exit 2 is logged, not silent')
+  let spawns = 0
+  const args = {
+    project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root,
+    model: 'test', agents: [], max: 1, log: (line) => logged.push(line),
+    spawn: async () => { spawns++; throw new Error('must not spawn') },
+  }
+  await autoSpawn(args)
+  await autoSpawn(args)
+  assert.equal(spawns, 0)
+  assert.deepEqual(readBoard(tasks).planning.map(c => c.id), ['T-04'])
+  assert.equal(logged.length, 1, 'the unchanged error is routed and logged only once')
+  assert.match(logged[0], /returned to original Planner.*exact malformed reason/)
+  assert.match(readFileSync(readBoard(tasks).planning[0].path, 'utf8'), /Kicked back[\s\S]*exact malformed reason/)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -739,8 +768,14 @@ test('Lead Planner agent names use the kb-plan- prefix', () => {
 
 test('only one sweeper can be in flight, however many callers ask at once', async () => {
   const { root, tasks } = fixture()
+  const previousConfig = process.env.KANBAN_CONFIG
+  const temporaryConfig = join(root, 'board.config.json')
+  writeFileSync(temporaryConfig, JSON.stringify({ projects: ['test'], maxConcurrentAgents: 1 }))
+  process.env.KANBAN_CONFIG = temporaryConfig
   const args = { project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet' }
   const results = await Promise.allSettled([spawnIssuesSweeper(args), spawnIssuesSweeper(args)])
+  if (previousConfig === undefined) delete process.env.KANBAN_CONFIG
+  else process.env.KANBAN_CONFIG = previousConfig
   const busy = results.filter((r) => r.status === 'rejected' && r.reason.busy)
   assert.equal(busy.length, 1, 'the second caller is turned away, not run')
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 0, 'no herdr here, so neither can succeed')
@@ -811,7 +846,7 @@ test('Auto-Manager promotion uses the shared Planned helper', () => {
   // And the sweeper no longer carries any promotion instructions.
   const prompt = issuesSweeperPrompt({ cards: board.queue, projectPath: root, boardRoot: root, manager: true })
   assert.match(prompt, /move <ID> planned/)
-  assert.match(prompt, /After each successful handoff, stop that card immediately/)
+  assert.match(prompt, /After the handoff succeeds, stop that card immediately/)
   assert.equal(prompt.includes('\n'), false, 'prompts are delivered as a single line')
   rmSync(root, { recursive: true, force: true })
 })
@@ -940,9 +975,9 @@ test('spawnReviewer accepts an explicit cardIds subset, filtering the Review col
 test('sweep-issues is wired through the circuit breaker exactly like Review', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   const route = source.slice(source.indexOf("url.pathname === '/api/sweep-issues'"), source.indexOf("url.pathname === '/api/pane'"))
-  assert.match(route, /breakerState\(\)\.breakerTripped/, 'a tripped breaker must refuse the sweep, same shape as Review')
-  assert.match(route, /recordSpawn\(\)/, 'a successful spawn must count toward the breaker window')
-  assert.match(route, /tripBreakerIfNeeded\(\)/, 'a run of sweeps must be able to trip the breaker like builders and the reviewer')
+  assert.match(route, /breakerState\(p\)\.breakerTripped/, 'a tripped project breaker must refuse the sweep, same shape as Review')
+  assert.match(route, /recordSpawn\(\{ project: p, cap: config\.maxConcurrentAgents \}\)/, 'a successful spawn must count toward its project breaker window')
+  assert.match(route, /tripBreakerIfNeeded\(p\)/, 'a run of sweeps must be able to trip its project breaker like builders and the reviewer')
   assert.match(route, /config\.models\.issues/, 'the sweeper uses the configured issues model')
 })
 
@@ -1376,23 +1411,23 @@ test('hkb pass requires an already-current PASS on a Review card and does not wr
     cwd: root, encoding: 'utf8',
   })
   assert.equal(result.status, 0, result.stderr)
-  assert.ok(readBoard(tasks).archive.some((c) => c.id === 'T-20'))
+  assert.ok(readBoard(tasks).completed.some((c) => c.id === 'T-20'))
   rmSync(root, { recursive: true, force: true })
 })
 
-test('review verdict routing archives only current evidenced PASS and is idempotent', () => {
+test('review verdict routing completes only current evidenced PASS and is idempotent', () => {
   const { root, tasks } = fixture()
   mkdirSync(join(tasks, 'review'), { recursive: true })
   writeFileSync(join(tasks, 'review', 'T-20-pass.md'), '# T-20 — Pass\n\n**Mission:** IB-AUDIT-20260908\n')
   appendReviewPass(findCard(tasks, 'T-20'), 'Independent browser evidence covers the acceptance criteria.')
 
-  assert.deepEqual(routeReviewVerdicts(tasks), [{ id: 'T-20', to: 'archive', verdict: 'PASS' }])
-  assert.ok(readBoard(tasks).archive.some((c) => c.id === 'T-20'))
+  assert.deepEqual(routeReviewVerdicts(tasks), [{ id: 'T-20', to: 'completed', verdict: 'PASS' }])
+  assert.ok(readBoard(tasks).completed.some((c) => c.id === 'T-20'))
   assert.deepEqual(routeReviewVerdicts(tasks), [], 'a restart/repeated tick does not route it twice')
   rmSync(root, { recursive: true, force: true })
 })
 
-test('review verdict routing sends evidenced FAIL to Issues with actionable feedback', () => {
+test('review verdict routing sends evidenced planning FAIL to Planning with actionable feedback', () => {
   const { root, tasks } = fixture()
   mkdirSync(join(tasks, 'review'), { recursive: true })
   writeFileSync(join(tasks, 'review', 'T-20-fail.md'), `# T-20 — Fail
@@ -1403,19 +1438,19 @@ test('review verdict routing sends evidenced FAIL to Issues with actionable feed
 
 ## Reviewer evidence
 
-Clicked the flow; criterion 2 still fails at 390px.
+[planning] Plan omitted the required mobile flow.
 
 **Review verdict:** FAIL 2026-09-10T00:00:00.000Z
 `)
 
-  assert.deepEqual(routeReviewVerdicts(tasks), [{ id: 'T-20', to: 'issues', verdict: 'FAIL' }])
+  assert.deepEqual(routeReviewVerdicts(tasks), [{ id: 'T-20', to: 'planning', verdict: 'FAIL' }])
   const card = findCard(tasks, 'T-20')
-  assert.equal(card.column, 'issues')
+  assert.equal(card.column, 'planning')
   assert.match(readFileSync(card.path, 'utf8'), /\*\*Review feedback\*\*/)
   rmSync(root, { recursive: true, force: true })
 })
 
-test('review verdict routing sends evidenced UNKNOWN to Issues or explicit Owner without inventing FAIL', () => {
+test('review verdict routing preserves UNKNOWN in Review or explicit Owner without inventing FAIL', () => {
   const { root, tasks } = fixture()
   mkdirSync(join(tasks, 'review'), { recursive: true })
   writeFileSync(join(tasks, 'review', 'T-20-unknown.md'), `# T-20 — Unknown
@@ -1434,7 +1469,7 @@ Evidence is insufficient to prove persistence; another agent can rerun the brows
 
 ## Reviewer evidence
 
-Only the operator can grant staging account access needed to verify this criterion.
+Only the operator can grant staging account access. Verified missing permission; approved methods exhausted. Evidence: approved staging helper returned permission denied.
 
 **Review verdict:** UNKNOWN 2026-09-10T00:00:00.000Z
 `)
@@ -1450,18 +1485,16 @@ It is not true that only the operator can grant staging account access needed to
 `)
 
   assert.deepEqual(routeReviewVerdicts(tasks), [
-    { id: 'T-20', to: 'issues', verdict: 'UNKNOWN' },
     { id: 'T-21', to: 'owner', verdict: 'UNKNOWN' },
-    { id: 'T-22', to: 'issues', verdict: 'UNKNOWN' },
   ])
   const issues = findCard(tasks, 'T-20')
   const owner = findCard(tasks, 'T-21')
-  assert.equal(issues.column, 'issues')
+  assert.equal(issues.column, 'review')
   assert.equal(owner.column, 'owner')
   assert.match(readFileSync(issues.path, 'utf8'), /Review verdict:\*\* UNKNOWN/)
   assert.doesNotMatch(readFileSync(issues.path, 'utf8'), /Review verdict:\*\* FAIL/)
   assert.match(readFileSync(owner.path, 'utf8'), /\*\*Needs you\*\*/)
-  assert.equal(findCard(tasks, 'T-22').column, 'issues')
+  assert.equal(findCard(tasks, 'T-22').column, 'review')
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -1592,7 +1625,7 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
     stallSeconds: 300,
     agentPollMs: 50,
     engine: { kind: 'codex' },
-    models: { planning: 'gpt-5.5', working: 'gpt-5.5', issues: 'gpt-5.5', review: 'gpt-5.5' },
+    models: { planning: 'gpt-5.6-luna', working: 'gpt-5.6-luna', issues: 'gpt-5.6-luna', review: 'gpt-5.6-luna' },
     leadPlanner,
   }))
 
@@ -1609,6 +1642,8 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
       server.kill()
       await Promise.race([new Promise((r) => server.once('exit', r)), delay(1000)])
     }
+    // In-flight mock CLI children can briefly retain the fixture cwd on Windows.
+    await delay(200)
   }
 
   try {
@@ -1696,7 +1731,7 @@ test('running manager poll promotes Planned to Builder and Completed to independ
     mode: 'manager',
     maxConcurrentAgents: 1,
     cardColumn: 'completed',
-    cards: { 'T-40-done.md': '# T-40 — Done\n\n## Evidence\n\nBuilder notes.\n' },
+    cards: { 'T-40-done.md': '# T-40 — Done\n\n**Workflow:** card-owned\n**Auto-review:** yes\n\n## Evidence\n\nBuilder notes.\n' },
     extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Priority** 9/10\n' } },
   })
   try {
@@ -1736,7 +1771,7 @@ test('autoQueuePlanned promotes Planned in auto mode without auto-reviewing Comp
     assert.deepEqual(board.review.map((c) => c.id), [])
   } finally {
     await run.stop()
-    rmSync(run.root, { recursive: true, force: true })
+    rmSync(run.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
@@ -1745,7 +1780,7 @@ test('running server poll routes terminal UNKNOWN, Owner, PASS and FAIL and pres
     maxConcurrentAgents: 1,
     cards: {
       'T-20-unknown.md': reviewText('T-20', 'Missing proof can be resolved by rerunning the mobile browser check.'),
-      'T-21-owner.md': reviewText('T-21', 'Only the operator can grant staging account access needed to verify this criterion.'),
+      'T-21-owner.md': reviewText('T-21', 'Only the operator can grant staging account access. Verified missing permission; approved methods exhausted. Evidence: approved staging helper returned permission denied.'),
       'T-29-negated-owner.md': reviewText('T-29', 'It is not true that only the operator can grant staging account access needed to verify this criterion.'),
       'T-22-pass.md': reviewText('T-22', 'Independent test and screenshot cover each criterion.', 'PASS'),
       'T-23-fail.md': reviewText('T-23', 'Criterion 2 still fails at 390px.', 'FAIL'),
@@ -1763,28 +1798,27 @@ test('running server poll routes terminal UNKNOWN, Owner, PASS and FAIL and pres
   try {
     await waitUntil(() => {
         const board = readBoard(run.tasks)
-        return board.issues.some((c) => c.id === 'T-20') &&
+        return board.review.some((c) => c.id === 'T-20') &&
           board.owner.some((c) => c.id === 'T-21') &&
           !board.owner.some((c) => c.id === 'T-29') &&
-          board.archive.some((c) => c.id === 'T-22') &&
-          board.issues.some((c) => c.id === 'T-29') &&
-          board.issues.some((c) => c.id === 'T-23') &&
-          board.issues.some((c) => c.id === 'T-28') &&
-          !board.completed.some((c) => c.id === 'T-28')
+          board.completed.some((c) => c.id === 'T-22') &&
+          board.review.some((c) => c.id === 'T-29') &&
+          board.review.some((c) => c.id === 'T-23') &&
+          board.completed.some((c) => c.id === 'T-28')
     }, 'server verdict routing')
 
     let board = readBoard(run.tasks)
     assert.deepEqual(board.owner.map((c) => c.id), ['T-21'])
-    assert.ok(board.issues.some((c) => c.id === 'T-20'))
-    assert.ok(board.issues.some((c) => c.id === 'T-29'))
-    assert.ok(board.issues.some((c) => c.id === 'T-23'))
-    assert.ok(board.issues.some((c) => c.id === 'T-28'))
-    assert.ok(board.archive.some((c) => c.id === 'T-22'))
-    assert.deepEqual(board.review.map((c) => c.id).sort(), ['T-24', 'T-25', 'T-26', 'T-27'])
+    assert.ok(board.review.some((c) => c.id === 'T-20'))
+    assert.ok(board.review.some((c) => c.id === 'T-29'))
+    assert.ok(board.review.some((c) => c.id === 'T-23'))
+    assert.ok(board.completed.some((c) => c.id === 'T-28'))
+    assert.ok(board.completed.some((c) => c.id === 'T-22'))
+    assert.deepEqual(board.review.map((c) => c.id).sort(), ['T-20', 'T-23', 'T-24', 'T-25', 'T-26', 'T-27', 'T-29'])
 
     const unknown = findCard(run.tasks, 'T-20')
     const before = (readFileSync(unknown.path, 'utf8').match(/\*\*Review feedback\*\*/g) || []).length
-    assert.equal(before, 1)
+    assert.equal(before, 0)
     assert.match(readFileSync(unknown.path, 'utf8'), /Review verdict:\*\* UNKNOWN/)
     assert.doesNotMatch(readFileSync(unknown.path, 'utf8'), /Review verdict:\*\* FAIL/)
 
@@ -1794,7 +1828,7 @@ test('running server poll routes terminal UNKNOWN, Owner, PASS and FAIL and pres
     await stopRestart()
     board = readBoard(run.tasks)
     assert.equal((readFileSync(unknown.path, 'utf8').match(/\*\*Review feedback\*\*/g) || []).length, before)
-    assert.deepEqual(board.review.map((c) => c.id).sort(), ['T-24', 'T-25', 'T-26', 'T-27'])
+    assert.deepEqual(board.review.map((c) => c.id).sort(), ['T-20', 'T-23', 'T-24', 'T-25', 'T-26', 'T-27', 'T-29'])
   } finally {
     await run.stop()
     rmSync(run.root, { recursive: true, force: true })
@@ -1922,7 +1956,7 @@ real current proof after feedback
 `), true)
 })
 
-test('hkb rework sends review failures to Issues, not Queue', () => {
+test('hkb ambiguous rework preserves Review for evidence diagnosis', () => {
   const { root, tasks } = fixture()
   mkdirSync(join(tasks, 'review'), { recursive: true })
   writeFileSync(join(tasks, 'review', 'T-20-review.md'), '# T-20 — Review\n')
@@ -1930,7 +1964,7 @@ test('hkb rework sends review failures to Issues, not Queue', () => {
     cwd: root, encoding: 'utf8',
   })
   assert.equal(result.status, 0, result.stderr)
-  assert.ok(readBoard(tasks).issues.some((c) => c.id === 'T-20'))
+  assert.ok(readBoard(tasks).review.some((c) => c.id === 'T-20'))
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -1945,25 +1979,25 @@ test('manual spawn endpoint reuses autoSpawn and refuses non-Queue starts', () =
 
 test('Codex agent args use Codex bypass and update suppression without Claude flags', () => {
   const args = agentStartArgs({
-    name: 'kb-t-01', paneId: 'w1:p1', model: 'gpt-5.5',
+    name: 'kb-t-01', paneId: 'w1:p1', model: 'gpt-5.6-luna',
     engine: { kind: 'codex', reasoningArgs: ['-c', 'model_reasoning_effort="high"'] },
   })
   assert.ok(args.includes('codex'))
   assert.ok(args.includes('--dangerously-bypass-approvals-and-sandbox'))
   assert.ok(args.includes('check_for_update_on_startup=false'))
-  assert.ok(args.includes('gpt-5.5'))
+  assert.ok(args.includes('gpt-5.6-luna'))
   assert.ok(args.includes('model_reasoning_effort="high"'))
   assert.ok(!args.includes('--dangerously-skip-permissions'))
 })
 
 test('managed HERDR launches reject wrong or Astra models before agent start args are built', () => {
-  assert.doesNotThrow(() => assertManagedModel({ name: 'kb-t-01', model: 'gpt-5.5' }))
+  assert.throws(() => assertManagedModel({ name: 'kb-t-01', model: 'gpt-5.5' }), /must use model/)
   assert.doesNotThrow(() => assertManagedModel({ name: 'kb-t-01', model: 'gpt-5.6-luna' }))
-  assert.doesNotThrow(() => assertManagedModel({ name: 'kb-review-injectbuddy-w1-p1', model: 'gpt-5.5' }))
-  assert.doesNotThrow(() => assertManagedModel({ name: 'kb-plan-injectbuddy-w1-p1', model: 'gpt-5.5' }))
-  assert.throws(() => assertManagedModel({ name: 'kb-review-injectbuddy-w1-p1', model: 'gpt-6-astra' }), /must use model gpt-5\.5/)
-  assert.throws(() => assertManagedModel({ name: 'kb-t-01', model: 'gpt-6-astra' }), /must use model gpt-5\.5/)
-  assert.throws(() => agentStartArgs({ name: 'kb-review-injectbuddy-w1-p1', paneId: 'w1:p1', model: 'gpt-6-astra', engine: { kind: 'codex' } }), /must use model gpt-5\.5/)
+  assert.doesNotThrow(() => assertManagedModel({ name: 'kb-review-injectbuddy-w1-p1', model: 'gpt-5.6-luna' }))
+  assert.doesNotThrow(() => assertManagedModel({ name: 'kb-plan-injectbuddy-w1-p1', model: 'gpt-5.6-luna' }))
+  assert.throws(() => assertManagedModel({ name: 'kb-review-injectbuddy-w1-p1', model: 'gpt-6-astra' }), /must use model gpt-5\.6-luna/)
+  assert.throws(() => assertManagedModel({ name: 'kb-t-01', model: 'gpt-6-astra' }), /must use model gpt-5\.6-luna/)
+  assert.throws(() => agentStartArgs({ name: 'kb-review-injectbuddy-w1-p1', paneId: 'w1:p1', model: 'gpt-6-astra', engine: { kind: 'codex' } }), /must use model gpt-5\.6-luna/)
 })
 
 test('Claude remains the default engine and keeps Claude-only flags', () => {
@@ -1981,6 +2015,8 @@ test('deliver does not resend a full prompt when the pane already shows Pasted C
     session: 'test',
     prompt: async () => { sends++; throw new Error('agent_prompt_stalled') },
     read: async () => 'Pasted Content',
+    sendKeys: async () => {},
+    list: async () => [],
     confirmMs: 1,
   }), /press Enter/)
   assert.equal(sends, 1, 'the recovery is manual Enter, not a duplicate paste')
@@ -1998,7 +2034,7 @@ test('deliver presses Enter once for staged Pasted Content and accepts confirmed
       keys++
       assert.deepEqual(sent, ['enter'])
     },
-    list: async () => [{ pane_id: 'w1:p1', agent_status: 'working' }],
+    list: async () => [{ pane_id: 'w1:p1', agent_status: keys ? 'working' : 'idle' }],
   })
   assert.equal(keys, 1)
 })
@@ -2022,7 +2058,7 @@ test('every project-scoped herdr call is session-scoped, and the session is the 
   const herdrSrc = readFileSync(new URL('./lib/herdr.mjs', import.meta.url), 'utf8')
   assert.match(herdrSrc, /spawn\(HERDR, sessionServerArgs\(session\)/,
     'missing sessions are started in the background before assignment')
-  assert.doesNotMatch(herdrSrc, /session['"],\s*['"]attach|attach['"],\s*['"]session/,
+  assert.doesNotMatch(herdrSrc.slice(0, herdrSrc.indexOf('export async function focusAgent')), /session['"],\s*['"]attach|attach['"],\s*['"]session/,
     'automatic startup must not nest an interactive session attach')
 
   const spawnSrc = readFileSync(new URL('./lib/spawn.mjs', import.meta.url), 'utf8')
@@ -2147,7 +2183,7 @@ test('manager task parser honors explicit project lines before prose inference',
 })
 
 test('managed Codex can retain workspace sandbox and validates unsafe overrides', () => {
-  const options = { name: 'kb-t-01', paneId: 'w1:p1', model: 'gpt-5.5', engine: { kind: 'codex', sandbox: 'workspace-write' } }
+  const options = { name: 'kb-t-01', paneId: 'w1:p1', model: 'gpt-5.6-luna', engine: { kind: 'codex', sandbox: 'workspace-write' } }
   const args = agentStartArgs(options)
   assert.ok(args.includes('--sandbox'))
   assert.ok(args.includes('workspace-write'))
@@ -2166,7 +2202,7 @@ test('blocked managed startup retains the real pane screen instead of a blind re
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import {agentStart} from ${JSON.stringify(moduleUrl)};
-      await assert.rejects(() => agentStart({name:'kb-t-01',paneId:'w1:p1',model:'gpt-5.5',engine:{kind:'codex',sandbox:'workspace-write'}}), e => e.preservePane === true && /trust the contents/.test(e.message));
+      await assert.rejects(() => agentStart({name:'kb-t-01',paneId:'w1:p1',model:'gpt-5.6-luna',engine:{kind:'codex',sandbox:'workspace-write'}}), e => e.preservePane === true && /trust the contents/.test(e.message));
     `], {cwd: root, env: {...process.env, HERDR_BIN_PATH: process.execPath}, encoding:'utf8'})
     assert.equal(result.status, 0, result.stderr)
   } finally { rmSync(root, {recursive:true,force:true}) }
@@ -2178,8 +2214,8 @@ test('explicit operator pause survives a later circuit breaker reset', async () 
   const end = source.indexOf("  if (req.method === 'POST' && url.pathname === '/api/priority')", start)
   let response
   const route = new Function('json', 'writeFileSync', 'resetBreaker', `
-    const CONFIG_PATH = 'unused'; const clients = []; const res = {};
-    let config = {maxConcurrentAgents:0}; let savedMaxConcurrentAgents = 4;
+    const CONFIG_PATH = 'unused'; const clients = []; const res = {}; const announcedBreakers = new Set();
+    let config = {maxConcurrentAgents:0};
     return async (req, url) => { ${source.slice(start, end)} };
   `)((_res, _status, value) => { response = structuredClone(value) }, () => {}, () => {})
   await route({method:'POST', async *[Symbol.asyncIterator]() {yield '{"maxConcurrentAgents":0}'}}, {pathname:'/api/config'})
@@ -2201,7 +2237,7 @@ test('finished reviewer stops blocking the next batch after existing done grace'
 test('paused agent polling does not start stopped HERDR sessions', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   const poll = source.slice(source.indexOf('async function pollAgents('), source.indexOf('function boardPayload('))
-  assert.match(poll, /agentList\(sessionOf\(project\), \{ ensureSession: config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\) \}\)/)
+  assert.match(poll, /ensureSession: !controlState\(project, CONFIG_PATH\)\.paused && config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
   const herdrSource = readFileSync(new URL('./lib/herdr.mjs', import.meta.url), 'utf8')
   assert.match(herdrSource, /agentList\(session, options\)/)
   assert.match(herdrSource, /herdr\(\['agent', 'list'\], \{ \.\.\.options, session \}\)/)
@@ -2213,8 +2249,8 @@ test('mission project scope also gates session startup and automatic review', ()
   const allows = new Function('config', `${declaration}; return missionAllowsProject`)({mission:{project:'Injectbuddy'}})
   assert.equal(allows('InjectBuddy'), true)
   assert.equal(allows('Tradeflow'), false)
-  assert.match(source, /ensureSession: config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
-  assert.match(source, /const autoEnabled = config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
+  assert.match(source, /ensureSession: !controlState\(project, CONFIG_PATH\)\.paused && config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
+  assert.match(source, /const autoEnabled = !controlState\(project, CONFIG_PATH\)\.paused && config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
 })
 
 test('manager exception alerts prompt idle Manager once per unchanged durable key', async () => {
@@ -2277,6 +2313,6 @@ test('server poll uses existing hard-hold exceptions but skips routine holds', (
 })
 
 test('managed Codex launches do not inject broad shared context policy', () => {
-  const args = agentStartArgs({ name: 'kb-t-01', paneId: 'test:p1', model: 'gpt-5.5', engine: { kind: 'codex' } })
+  const args = agentStartArgs({ name: 'kb-t-01', paneId: 'test:p1', model: 'gpt-5.6-luna', engine: { kind: 'codex' } })
   assert.ok(!args.some(x => x.includes('AGENT-CONTEXT.md')))
 })

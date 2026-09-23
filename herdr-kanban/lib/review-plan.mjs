@@ -5,7 +5,8 @@
 // together (context reuse); unrelated cards don't get crammed into the same
 // batch just because they landed in Review around the same time.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 import { readBoard, cardFiles } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 export { cardFiles } from './cards.mjs'
@@ -14,6 +15,38 @@ export { cardFiles } from './cards.mjs'
 export const REVIEW_BATCH_CAP_MINUTES = 25
 export const HOLD_BACK_THRESHOLD_MINUTES = 10
 export const DEFAULT_REVIEW_MINUTES = 5
+
+export function readReviewGroups(tasksDir) {
+  const path = join(tasksDir, '.review-groups.json')
+  if (!existsSync(path)) return []
+  const groups = JSON.parse(readFileSync(path, 'utf8'))
+  const seen = new Set()
+  if (!Array.isArray(groups)) throw new Error('Invalid review groups')
+  for (const group of groups) {
+    if (!group.name || !Array.isArray(group.cards) || !group.cards.length) throw new Error('Invalid review group')
+    for (const id of group.cards) {
+      if (!/^T-\d+$/.test(id) || seen.has(id)) throw new Error(`Duplicate/invalid grouped review card: ${id}`)
+      seen.add(id)
+    }
+  }
+  return groups
+}
+export function saveReviewGroups(tasksDir, groups) {
+  const known = new Set(Object.values(readBoard(tasksDir)).flat().map(c => c.id))
+  const seen = new Set()
+  if (!Array.isArray(groups)) throw new Error('Review groups must be an array')
+  for (const group of groups) {
+    if (!group.name || !Array.isArray(group.cards) || !group.cards.length) throw new Error('Invalid review group')
+    for (const id of group.cards) {
+      if (!known.has(id) || seen.has(id)) throw new Error(`Unknown/duplicate grouped review card: ${id}`)
+      seen.add(id)
+    }
+  }
+  const path = join(tasksDir, '.review-groups.json')
+  writeFileSync(`${path}.${process.pid}.tmp`, JSON.stringify(groups, null, 2))
+  renameSync(`${path}.${process.pid}.tmp`, path)
+  return groups
+}
 
 const EST_BUILD = /\*\*Est build:\*\*\s*(\d+)\s*m/i
 const EST_REVIEW = /\*\*Est review:\*\*\s*(\d+)\s*m/i
@@ -97,10 +130,15 @@ function reasonForGroup(ids, filesOf) {
 }
 
 // One computation, one snapshot. Returns { batches, heldBack }.
-export function computeReviewPlan({ tasksDir, now = Date.now() }) {
+export function computeReviewPlan({ tasksDir, now = Date.now(), claimedIds = [] }) {
   const board = readBoard(tasksDir)
-  const auditCards = board.review.filter((c) => c.audit)
-  const reviewCards = board.review.filter((c) => !c.audit)
+  const explicit = readReviewGroups(tasksDir)
+  const grouped = new Set(explicit.flatMap(g => g.cards))
+  const claimed = new Set(claimedIds)
+  const explicitBatches = explicit.filter(g => g.cards.every(id => !claimed.has(id) && [...board.review, ...board.completed, ...board.archive].some(c => c.id === id)))
+    .map(g => ({ cards: g.cards.filter(id => [...board.review, ...board.completed].some(c => c.id === id)), reason: g.name, explicit: true })).filter(g => g.cards.length)
+  const auditCards = board.review.filter((c) => c.audit && !grouped.has(c.id) && !claimed.has(c.id))
+  const reviewCards = board.review.filter((c) => !c.audit && !grouped.has(c.id) && !claimed.has(c.id))
   const workingCards = board.working
   const bindings = readBindings(tasksDir)
 
@@ -154,7 +192,7 @@ export function computeReviewPlan({ tasksDir, now = Date.now() }) {
   }
 
   return {
-    batches: [...auditCards.map((c) => ({ cards: [c.id], estMinutes: estOf.get(c.id) ?? DEFAULT_REVIEW_MINUTES, reason: `${c.audit} audit` })), ...batches],
+    batches: [...explicitBatches, ...auditCards.map((c) => ({ cards: [c.id], estMinutes: estOf.get(c.id) ?? DEFAULT_REVIEW_MINUTES, reason: `${c.audit} audit` })), ...batches],
     heldBack,
   }
 }

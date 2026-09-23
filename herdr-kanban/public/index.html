@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>herdr board</title>
+<link rel="stylesheet" href="board.css">
+</head>
+<body>
+  <header id="bar">
+    <div class="project-run-controls">
+      <button id="project-control" class="btn project-control is-pause" type="button" aria-label="Pause" title="Pause selected project">
+        <span id="project-control-icon" aria-hidden="true">Ⅱ</span>
+        <span id="project-control-label">Pause</span>
+      </button>
+      <span id="project-status" role="status"></span>
+    </div>
+    <div class="bar-left">
+      <button id="burger" class="burger" aria-label="Menu" aria-expanded="false" title="Menu">
+        <span></span><span></span><span></span>
+      </button>
+      <select id="project-pick" class="project-pick" title="project"></select>
+      <select id="stage-pick" class="stage-pick" title="jump to state" aria-label="Jump to board state"></select>
+      <span id="conn" class="conn offline" title="connection">offline</span>
+      <span id="slots" class="slots" title="free agent slots"></span>
+    </div>
+    <div id="agents" class="agents"></div>
+    <button id="review-btn" class="btn review-btn" hidden></button>
+    <button id="sweep-btn" class="btn review-btn" hidden></button>
+    <button id="archive-btn" class="btn review-btn" hidden></button>
+    <button id="archive-cancel" class="btn pick-cancel" hidden>Cancel</button>
+  </header>
+
+  <div id="breaker-banner" class="breaker-banner" hidden>
+    <span id="breaker-msg"></span>
+    <button id="breaker-reset" class="btn">Reset</button>
+  </div>
+
+  <nav id="menu" class="menu" hidden>
+    <button class="menu-item" data-view="board"><span class="menu-ico">&#9636;</span> Kanban</button>
+    <button class="menu-item" data-view="agents"><span class="menu-ico">&#9673;</span> Agents <span id="menu-agents" class="menu-count">0</span></button>
+    <button class="menu-item" data-view="tasks"><span class="menu-ico">&#9776;</span> Historical requests <span id="menu-tasks" class="menu-count">0</span></button>
+    <button class="menu-item" data-view="archive"><span class="menu-ico">&#9638;</span> Archive <span id="menu-archive" class="menu-count">0</span></button>
+    <button class="menu-item" data-view="audits"><span class="menu-ico">&#9783;</span> Audits</button>
+    <button class="menu-item" data-view="settings"><span class="menu-ico">&#9881;</span> Settings</button>
+  </nav>
+  <div id="scrim" class="scrim" hidden></div>
+
+  <main id="lanes" class="lanes"></main>
+
+  <section id="screen" class="screen" hidden>
+    <div class="screen-head">
+      <h1 id="screen-title"></h1>
+      <button id="screen-close" class="btn">Back to Kanban</button>
+    </div>
+    <div id="screen-body" class="screen-body"></div>
+  </section>
+
+  <aside id="drawer" class="drawer" hidden>
+    <div class="drawer-head">
+      <span id="drawer-id" class="id"></span>
+      <div class="drawer-actions">
+        <a id="drawer-history" class="btn" target="_blank" rel="noopener">Saved history/output</a>
+        <button id="drawer-queue" class="btn queue-btn" hidden>Back to Queue</button>
+        <button id="drawer-archive" class="btn archive-btn" hidden>Archive</button>
+        <button id="drawer-close" class="drawer-close" title="Close (Esc)">&times;</button>
+      </div>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <dialog id="spawn-dlg" class="dlg">
+    <p id="spawn-msg"></p>
+    <div class="dlg-btns">
+      <button id="spawn-cancel" class="btn">Cancel</button>
+      <button id="spawn-run" class="btn primary">Run</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script src="dependency-hover.js"></script>
+  <script src="board.js"></script>
+</body>
+</html>

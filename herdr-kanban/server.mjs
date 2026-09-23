@@ -1,34 +1,60 @@
 // Local kanban board over the filesystem. Phase 1+2: read, serve, move.
 
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, watch } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { join, extname, normalize } from 'node:path'
+import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners } from './lib/card-planner.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
+import { recoveryState } from './lib/recovery.mjs'
+import { controlState, setProjectPaused } from './lib/project-control.mjs'
+import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './lib/card-run.mjs'
+import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
+import { reconcileCompletedHandoffs } from './lib/completed-handoff.mjs'
+import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
+import { historyPath, appendHistory } from './lib/card-history.mjs'
+import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PUBLIC = join(HERE, 'public')
 const CONFIG_PATH = process.env.KANBAN_CONFIG ?? join(HERE, 'board.config.json')
+const REVIEW_ROOT = dirname(CONFIG_PATH)
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
 const lanHost = process.env.KANBAN_LAN_HOST
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard } = await import('./lib/cards.mjs')
-const { agentList, agentsForProject, isRunning, paneRead, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
-const { readBindings, bind, reap } = await import('./lib/bindings.mjs')
-const { stopCard } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, slotsFree, closeFinished, holdsFor, reviewerBusy } = await import('./lib/autospawn.mjs')
-const { computeReviewPlan } = await import('./lib/review-plan.mjs')
+const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { readBindings, unbind } = await import('./lib/bindings.mjs')
+const { stageIndicators } = await import('./lib/stage-indicators.mjs')
+const { readReviewClaims } = await import('./lib/review-claims.mjs')
+const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
+const { autoSpawn, autoReview, promoteAutoReview, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
+const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
+const { busyReviewCards } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
-const { recordSpawn, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
+const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
+const { activityLog } = await import('./lib/activity.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers } = await import('./lib/worktrees.mjs')
+const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
 const tasksDirOf = (project) => join(config.projectsRoot, project, 'TASKS')
-const engineFor = (role) => config.engines?.[role] ?? config.engine ?? { kind: 'claude' }
+const reviewInventory = () => Promise.all(config.projects.map(async project => {
+  try { return { project, tasksDir: tasksDirOf(project), known: true, agents: await agentList(sessionOf(project), { ensureSession: false }) } }
+  catch (err) { return { project, tasksDir: tasksDirOf(project), known: false, agents: [], error: err.message } }
+}))
+const resolvedProjectSettings = new Map()
+const projectSettingsOf = (project) => {
+  if (!resolvedProjectSettings.has(project)) resolvedProjectSettings.set(project, resolveGitSettings({ projectPath: projectPathOf(project), gitSettings: config.projectSettings?.[project] }))
+  return resolvedProjectSettings.get(project)
+}
+const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
+const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
+const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
 
 function ensureTasks(project) {
@@ -41,26 +67,51 @@ function ensureTasks(project) {
 const agentCache = new Map() // project -> { agents, herdrUp }
 let herdrFailed = false
 
-// The configured limit, saved off when the breaker forces it to 0, so a reset
-// can put it back rather than guessing what it used to be.
-let savedMaxConcurrentAgents = null
+const announcedBreakers = new Set()
+const lastActivityHold = new Map()
+const finishedBindingSince = new Map()
+const orphanWorkingSince = new Map()
+const reconciliationPolls = new Set()
+const projectPolls = new Set()
+const pollErrors = new Map()
+const FINISHED_BINDING_GRACE_MS = 2 * 60 * 1000
 
-function tripBreakerIfNeeded() {
-  const state = breakerState()
-  if (state.breakerTripped && savedMaxConcurrentAgents === null) {
-    savedMaxConcurrentAgents = config.maxConcurrentAgents
-    config.maxConcurrentAgents = 0 // in memory only — never written to disk
+function activity(project, cardId, event, message, level = 'info') {
+  return activityLog({ tasksDir: tasksDirOf(project), project, cardId, event, message, level })
+}
+
+function schedulerActivity(project, message) {
+  const cardId = String(message).match(/\bT-\d+\b/i)?.[0]?.toUpperCase() ?? '-'
+  const event = /retry|spawn failed/i.test(message) ? 'retry' : /held|busy|not ready/i.test(message) ? 'hold' : 'scheduler'
+  console.log(message)
+  activity(project, cardId, event, message, event === 'retry' ? 'error' : 'info')
+}
+
+function tripBreakerIfNeeded(project) {
+  const state = breakerState(project)
+  if (state.breakerTripped && !announcedBreakers.has(project)) {
+    announcedBreakers.add(project)
     console.log(`circuit breaker tripped: ${state.reason} — auto-spawn halted, reset from Settings`)
-    herdrLog(`circuit breaker tripped: ${state.reason}`, 'error')
+    herdrLog(`${project}: circuit breaker tripped: ${state.reason}`, 'error')
   }
 }
 
 async function pollAgents(project) {
   try {
-    const allAgents = await agentList(sessionOf(project), { ensureSession: config.maxConcurrentAgents > 0 && missionAllowsProject(project) })
+    const allAgents = await agentList(sessionOf(project), { ensureSession: !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) })
     reconcileUsage(tasksDirOf(project), allAgents)
-    const normPath = p => String(p || '').replaceAll('\\', '/').toLowerCase().replace(/\/$/, '')
-    const agents = allAgents.filter(a => normPath(a.cwd) === normPath(projectPathOf(project)))
+    for (const [id, saved] of Object.entries(readWorkflow(tasksDirOf(project)))) {
+      if (!saved.completedAt || saved.outputSavedAt === saved.completedAt || !saved.builder) continue
+      const agent = allAgents.find(a => a.pane_id === saved.builder.pane_id && ['idle', 'done'].includes(a.agent_status))
+      if (!agent) continue
+      try {
+        appendHistory(tasksDirOf(project), id, { event: 'finished-output', run: agent.agent_session, agent: agent.name, output: await paneRead(agent.pane_id, sessionOf(project)) })
+        updateWorkflow(tasksDirOf(project), id, { outputSavedAt: saved.completedAt })
+      } catch { /* Retain the session and retry output capture next poll. */ }
+    }
+    // Each project has its own HERDR session. Builder cwd now points at its
+    // isolated worktree, so exact-cwd filtering would make live panes vanish.
+    const agents = allAgents
     if (herdrFailed) { console.log('herdr: back up'); herdrFailed = false }
     const state = { agents, herdrUp: true }
     agentCache.set(project, state)
@@ -83,15 +134,37 @@ async function pollAgents(project) {
 
 function boardPayload(project) {
   const cached = agentCache.get(project) ?? { agents: [], herdrUp: false }
-  const breaker = breakerState()
+  const breaker = breakerState(project)
+  const board = readBoard(tasksDirOf(project))
+  const planners = readCardPlanners(tasksDirOf(project))
+  const workflow = readWorkflow(tasksDirOf(project))
+  let indicators = {}
+  try { indicators = stageIndicators({ tasksDir: tasksDirOf(project), reviewRoot: REVIEW_ROOT, board, planners, claims: readReviewClaims(REVIEW_ROOT), agents: cached.agents, workflow }) }
+  catch (error) { console.error(`${project}: stage indicators unavailable — ${error.message}`) }
+  const blockerIds = {}
+  try {
+    const registry = readWorktrees(tasksDirOf(project))
+    for (const card of Object.values(board).flat()) blockerIds[card.id] = [...new Set([
+      ...unmetBlockers(card, board, registry),
+      ...(card.column === 'queue' ? recordedOverlapBlockers(card, integrationPathOf(project), registry) : []),
+    ])]
+  } catch { /* Unknown lock state must not invent visual relationships. */ }
   return {
     project,
+    control: controlState(project, CONFIG_PATH),
+    cardRuns: readCardRuns().filter(r => r.project === project),
+    cardRunEligibility: Object.fromEntries(Object.values(board).flat().map(card => [card.id, cardRunEligibility({ project, tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), card, board, agents: cached.agents, known: cached.herdrUp })])),
+    plannerRecoveryCards: Object.entries(readCardPlanners(tasksDirOf(project))).filter(([, o]) => o.lifecycle === 'retired' && o.recoveryReady && o.reconciliationHistoryId).map(([id]) => id),
     projectPath: projectPathOf(project),
+    integrationPath: integrationPathOf(project),
     columns: COLUMNS,
     archive: ARCHIVE,
-    board: readBoard(tasksDirOf(project)),
+    board,
+    blockerIds,
     cardUsage: cardUsageSummary(tasksDirOf(project)),
-    planners: readCardPlanners(tasksDirOf(project)),
+    planners,
+    workflow,
+    stageIndicators: indicators,
     bindings: readBindings(tasksDirOf(project)),
     retries: readRetries(tasksDirOf(project)),
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or
@@ -118,6 +191,8 @@ function boardPayload(project) {
       reviewModel: config.models.review,
       sweepModel: config.models.issues,
       engine: engineFor('working').kind ?? engineFor('working'),
+      agentSettings: globalSettings(config),
+      supportedAgentSettings: catalog(),
       mission: config.mission ?? null,
     },
   }
@@ -128,6 +203,7 @@ function boardPayload(project) {
 // Runs on every agent poll. Does nothing unless a card is sitting in Queue and a
 // slot is free; autoSpawn holds its own lock so a slow spawn cannot re-enter.
 async function tick(project, agents) {
+  if (controlState(project, CONFIG_PATH).paused) return []
   // Auto-Manager mode: Planned is not a gate, it is a staging shelf — every card on
   // it belongs in the Queue (operator, 2026-08-17). No agent is needed to decide
   // that, so the move happens here rather than costing a sweep. Queue order still
@@ -135,7 +211,7 @@ async function tick(project, agents) {
   // or a dirty preflight, and only one card runs at a time.
   const tasksDir = tasksDirOf(project)
   const max = config.maxConcurrentAgents
-  if (max <= 0) return []
+  if (max <= 0 || breakerState(project).breakerTripped) return []
   if (config.mode === 'manager' || config.autoQueuePlanned === true) {
     for (const id of promotePlanned(tasksDir, { mission: config.mission, project })) console.log(`queued: ${id}`)
   }
@@ -144,7 +220,7 @@ async function tick(project, agents) {
   // builders and never eat one (operator, 2026-08-18: keep 4 builders running).
   const started = await autoSpawn({
     project,
-    projectPath: projectPathOf(project),
+    projectPath: integrationPathOf(project),
     tasksDir,
     boardRoot: HERE,
       model: config.models.working,
@@ -154,13 +230,18 @@ async function tick(project, agents) {
     max,
     agents,
     onChange: () => broadcastBoard(project),
-    log: (msg) => console.log(msg),
+    log: (msg) => schedulerActivity(project, msg),
     mission: config.mission,
+    gitSettings: projectSettingsOf(project),
+    assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
   })
   if (started.length) {
     console.log(`spawned: ${started.join(', ')}`)
-    for (const _id of started) recordSpawn()
-    tripBreakerIfNeeded()
+    for (const id of started) {
+      recordSpawn({ project, cap: max })
+      activity(project, id, 'spawn', 'Builder started in isolated worktree')
+    }
+    tripBreakerIfNeeded(project)
   }
 
   return started
@@ -169,99 +250,234 @@ async function tick(project, agents) {
 // Runs on a fixed interval per project, independent of whether any browser is
 // connected — a card must still get spawned when the board is opened headless.
 async function pollProject(project) {
-  const { agents, herdrUp } = await pollAgents(project)
-  broadcast(project, 'agents', { project, agents, herdrUp })
-  if (!herdrUp) return
+  if (projectPolls.has(project)) return
+  projectPolls.add(project)
+  try {
+    const tasksDir = tasksDirOf(project)
+    const gitSettings = projectSettingsOf(project)
+    const { agents, herdrUp } = await pollAgents(project)
+    broadcast(project, 'agents', { project, agents, herdrUp })
+    if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
+    if (activeCardRun(project)) {
+      await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
+      broadcastBoard(project)
+      return
+    }
+    // Observe usage/results during Pause, but leave assignments and recovery intact.
+    if (controlState(project, CONFIG_PATH).paused) { broadcastBoard(project); return }
+    await resumeDeliveries(sessionOf(project))
 
-  // Put the agents workspace back if it was closed, before anything spawns into it.
-  await ensureAgentWorkspace(agents, (msg) => console.log(msg), sessionOf(project))
+    // Put the agents workspace back if it was closed, before anything spawns into it.
+    await ensureAgentWorkspace(agents, (msg) => console.log(msg), sessionOf(project))
 
-  // Only herdr knows a pane died; drop bindings it no longer lists.
-  const beforeReap = readBindings(tasksDirOf(project))
-  const reaped = reap(tasksDirOf(project), agents)
-  for (const id of reaped) {
-    try { await recordUsageFinish({ tasksDir: tasksDirOf(project), paneId: beforeReap[id]?.pane_id, binding: beforeReap[id], status: 'ambiguous' }) } catch {}
-  }
-  let dirty = reaped.length > 0
-  const autoEnabled = config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState().breakerTripped
-  if (autoEnabled) {
-    dirty = promoteAutoReview(tasksDirOf(project), { all: config.mode === 'manager' }).length > 0 || dirty
-    dirty = routeReviewVerdicts(tasksDirOf(project), {
-      log: (msg) => console.log(msg),
-      reviewBusy: reviewerBusy(project, agents),
-      includeCompleted: true,
-    }).length > 0 || dirty
-  }
-  if (dirty) broadcastBoard(project)
+    let dirty = false
+    if (!reconciliationPolls.has(project)) {
+      reconciliationPolls.add(project)
+      try {
+    // Only herdr knows a pane died; drop bindings it no longer lists, then
+    // deterministically recover its worktree instead of leaving Working stuck.
+    const beforeReap = readBindings(tasksDir)
+    const reaped = Object.entries(beforeReap).filter(([, binding]) => !agents.some(agent => agent.pane_id === binding.pane_id) && !(binding.spawning && Date.now() - Date.parse(binding.started) < 300000)).map(([id]) => id)
+    const staleFinished = []
+    const liveByPane = new Map(agents.map((agent) => [agent.pane_id, agent]))
+    for (const [id, binding] of Object.entries(beforeReap)) {
+      const agent = liveByPane.get(binding.pane_id)
+      const key = `${project}:${id}`
+      if (!agent || !['done', 'idle'].includes(agent.agent_status)) {
+        finishedBindingSince.delete(key)
+        continue
+      }
+      const since = finishedBindingSince.get(key) ?? Date.now()
+      finishedBindingSince.set(key, since)
+      if (Date.now() - since >= FINISHED_BINDING_GRACE_MS) {
+        finishedBindingSince.delete(key)
+        staleFinished.push(id)
+      }
+    }
+    const orphaned = []
+    for (const card of readBoard(tasksDir).working) {
+      const key = `${project}:${card.id}`
+      if (beforeReap[card.id]) {
+        orphanWorkingSince.delete(key)
+        continue
+      }
+      const since = orphanWorkingSince.get(key) ?? Date.now()
+      orphanWorkingSince.set(key, since)
+      if (Date.now() - since >= FINISHED_BINDING_GRACE_MS) {
+        orphanWorkingSince.delete(key)
+        orphaned.push(card.id)
+      }
+    }
+    const recoverIds = [...new Set([...reaped, ...staleFinished, ...orphaned])]
+    dirty = recoverIds.length > 0
+    for (const id of recoverIds) {
+      recordUsageFinish({ tasksDir, paneId: beforeReap[id]?.pane_id, binding: beforeReap[id], status: 'ambiguous' }).catch(() => {})
+      try {
+        const card = findCard(tasksDir, id)
+        const agent = liveByPane.get(beforeReap[id]?.pane_id)
+        const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
+        routeBuilderNoHandoff({
+          tasksDir,
+          cardId: id,
+          reason: `Session ${beforeReap[id]?.pane_id || 'unknown'} ${agent ? `finished with status=${agent.agent_status}` : 'is missing'} without a valid Builder handoff from Working`,
+          evidence,
+          workspace: integrationPathOf(project),
+          gitSettings,
+        })
+      } catch (err) {
+        activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
+      }
+    }
 
-  // Finished agents are observed every poll, but panes are only retired by the
-  // hourly housekeeping gate so ordinary polling does not churn HERDR windows.
-  const now = Date.now()
-  await closeFinished({ tasksDir: tasksDirOf(project), agents, project, now, retire: cleanupDue(project, now) })
+    // A Builder hands off before integration. Validate and cherry-pick each
+    // completed card serially, routing only the failing card back to its Planner.
+    if (gitSettings) {
+      for (const result of await reconcileCompletedHandoffs({ tasksDir, project })) {
+        if (result.status === 'integrated') {
+          activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
+          dirty = true
+        } else if (result.status === 'cleaned') {
+          activity(project, result.id, 'cleanup', 'removed integrated card worktree and local branch')
+        } else if (result.status === 'cleanup-held') {
+          const key = `${project}:${result.id}:cleanup`
+          if (lastActivityHold.get(key) !== result.reason) {
+            lastActivityHold.set(key, result.reason)
+            activity(project, result.id, 'cleanup-held', result.reason)
+          }
+        } else if (result.status === 'issue') {
+          try {
+            const card = findCard(tasksDir, result.id)
+            if (card.column === 'completed') {
+              recordOperationalFailure(tasksDir, card, result.reason, integrationPathOf(project), gitSettings)
+            }
+          } catch {}
+          activity(project, result.id, /conflict/i.test(result.reason) ? 'integration-conflict' : 'integration-block', result.reason, 'error')
+          dirty = true
+        } else {
+          activity(project, result.id, 'integration-held', result.reason, 'error')
+        }
+      }
+    }
+      } finally {
+        reconciliationPolls.delete(project)
+      }
+    }
 
-  if (autoEnabled) {
-    if (config.leadPlanner?.autoIssues) {
+    const autoEnabled = !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped
+    if (autoEnabled) {
+      dirty = promoteAutoReview(tasksDir, { all: config.mode === 'manager' }).length > 0 || dirty
+      let busyCards = null
+      try { busyCards = busyReviewCards(REVIEW_ROOT, tasksDir, agents) } catch (err) { schedulerActivity(project, `review ownership unavailable: ${err.message}`) }
+      dirty = routeReviewVerdicts(tasksDir, {
+        reviewRoot: REVIEW_ROOT,
+        log: (msg) => schedulerActivity(project, msg),
+        reviewBusy: busyCards === null,
+        busyCardIds: busyCards || [],
+        includeCompleted: true,
+      }).length > 0 || dirty
+    }
+    if (dirty) broadcastBoard(project)
+
+    // Finished agents are observed every poll, but panes are only retired by the
+    // hourly housekeeping gate so ordinary polling does not churn HERDR windows.
+    const now = Date.now()
+    const closed = await closeFinished({ tasksDir, agents, project, now, retire: cleanupDue(project, now) })
+    for (const pane of closed) activity(project, '-', 'cleanup', `closed finished pane ${pane}`)
+
+    // Builders are the main flow. Start them before slower planner/reviewer
+    // housekeeping so a guarded poll never starves Queue capacity.
+    await tick(project, agents)
+
+    if (autoEnabled) {
+      if (config.leadPlanner?.autoIssues) {
       const planner = await runCardPlanner({
         project,
-        projectPath: projectPathOf(project),
-        tasksDir: tasksDirOf(project),
+        projectPath: integrationPathOf(project),
+        tasksDir,
         boardRoot: HERE,
         model: config.models.planning ?? config.models.issues,
         engine: engineFor('planning'),
+        assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
         mission: config.mission,
       }).catch((err) => {
+        if (err.paused) return null
+        recordSpawnFailure({ project, cap: config.maxConcurrentAgents, reason: err.message })
         if (!err.busy && !/nothing in Issues/.test(err.message)) console.log(`lead planner skipped — ${err.message}`)
         return null
       })
       if (!planner && readBoard(tasksDirOf(project)).issues.some(c => !c.cardOwned)) {
-        await spawnIssuesSweeper({ project, projectPath: projectPathOf(project), tasksDir: tasksDirOf(project), boardRoot: HERE, model: config.models.planning, engine: engineFor('planning'), mission: config.mission }).catch(err => {
+        await spawnIssuesSweeper({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, model: config.models.issues ?? config.models.planning, engine: engineFor('issues'), assignmentForCard: (card, stage) => assignmentForCard(project, card, stage), mission: config.mission }).catch(err => {
           if (!err.busy && !/nothing in Issues/.test(err.message)) console.log(`legacy planner skipped — ${err.message}`)
         })
       }
       if (planner) {
-        recordSpawn()
-        tripBreakerIfNeeded()
+        if (planner.spawnedNewAgent) recordSpawn({ project, cap: config.maxConcurrentAgents })
+        tripBreakerIfNeeded(project)
         herdrLog(`Lead Planner started for ${planner.cards.length} card(s): ${planner.cards.join(', ')}`)
+        broadcastBoard(project)
+      }
+      }
+
+      const reviewer = await autoReview({
+      reviewRoot: REVIEW_ROOT,
+      inventory: reviewInventory,
+      project,
+      projectPath: integrationPathOf(project),
+      tasksDir,
+      boardRoot: HERE,
+      model: config.models.review,
+      engine: engineFor('review'),
+      assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
+      agents,
+      log: (msg) => schedulerActivity(project, msg),
+    })
+      if (reviewer) {
+        recordSpawn({ project, cap: config.maxConcurrentAgents })
+        tripBreakerIfNeeded(project)
+        herdrLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
         broadcastBoard(project)
       }
     }
 
-    const reviewer = await autoReview({
-      project,
-      projectPath: projectPathOf(project),
-      tasksDir: tasksDirOf(project),
-      boardRoot: HERE,
-      model: config.models.review,
-      engine: engineFor('review'),
-      agents,
-      log: (msg) => console.log(msg),
-    })
-    if (reviewer) {
-      recordSpawn()
-      tripBreakerIfNeeded()
-      herdrLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
-      broadcastBoard(project)
+    for (const card of readBoard(tasksDir).owner) {
+      const recovery = recoveryState(readFileSync(card.path, 'utf8'))
+      if (!recovery.escalatedAt) continue
+      await notifyManagerException({ boardRoot: HERE, key: `recovery:${project}:${card.id}:${recovery.escalatedAt}`,
+        title: `${project} ${card.id}: automatic recovery stopped after ${recovery.returns} failed returns`,
+        detail: `Five distinct failed returns; attempts and failure evidence preserved in ${card.path}. Choose a changed recovery approach, narrower scope, or cancellation. No unchanged retry is authorized.` })
     }
-  }
-
-  await tick(project, agents)
-  const breaker = breakerState()
-  if (breaker.breakerTripped) {
+    const breaker = breakerState(project)
+    if (breaker.breakerTripped) {
     await notifyManagerException({
       boardRoot: HERE,
       key: 'circuit-breaker',
       title: 'Kanban circuit breaker tripped',
       detail: breaker.reason || 'auto-spawn halted',
     })
-  }
-  for (const [id, reason] of Object.entries(holdsFor(project))) {
-    if (!isHardHold(reason)) continue
-    await notifyManagerException({
+    }
+    for (const [id, reason] of Object.entries(holdsFor(project))) {
+      const key = `${project}:${id}`
+      if (lastActivityHold.get(key) !== reason) {
+        lastActivityHold.set(key, reason)
+        activity(project, id, 'hold', reason)
+      }
+      if (!isHardHold(reason)) continue
+      await notifyManagerException({
       boardRoot: HERE,
       key: `hold:${project}:${id}`,
       title: `${project} ${id} held`,
       detail: reason,
-    })
+      })
+    }
+  } catch (error) {
+    const message = error?.message || String(error)
+    if (pollErrors.get(project) !== message) {
+      pollErrors.set(project, message)
+      console.error(`${project}: poll failed — ${message}`)
+      try { activity(project, '-', 'poll-error', message, 'error') } catch {}
+    }
+  } finally {
+    projectPolls.delete(project)
   }
 }
 
@@ -386,6 +602,64 @@ const handleRequest = async (req, res) => {
 
   if (badMutationOrigin(req)) return json(res, 403, { ok: false, error: 'invalid origin' })
 
+  if (req.method === 'GET' && url.pathname === '/api/audits') {
+    try { return json(res, 200, { ok: true, project, audits: readAuditReports(config, project) }) }
+    catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/agent-open') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: selected, paneId } = JSON.parse(body)
+      if (!config.projects.includes(selected)) throw new Error('Unknown project')
+      await focusAgent(paneId, sessionOf(selected))
+      return json(res, 200, { ok: true })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/card-history') {
+    try {
+      if (!config.projects.includes(project)) throw new Error('Unknown project')
+      const path = historyPath(tasksDirOf(project), url.searchParams.get('id'))
+      return json(res, 200, { entries: existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [] })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/card-run') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: selected, id, requestId, cancel } = JSON.parse(body)
+      if (!config.projects.includes(selected)) throw new Error('Unknown project')
+      if (cancel === true) {
+        stopCardRun(selected, id, 'Cancelled by operator; current turn may finish')
+      } else {
+        const duplicate = readCardRuns().find(r => r.requestId === requestId)
+        if (duplicate) {
+          if (duplicate.project !== selected || duplicate.cardId !== id) throw new Error('Request identity already used')
+          return json(res, 200, { ok: true, run: duplicate })
+        }
+        const agents = await agentList(sessionOf(selected), { ensureSession: false })
+        const card = findCard(tasksDirOf(selected), id)
+        const reason = cardRunEligibility({ project: selected, tasksDir: tasksDirOf(selected), projectPath: integrationPathOf(selected), card, agents, known: true })
+        if (reason) throw new Error(reason)
+        authorizeCardRun({ project: selected, cardId: card.id, autoReview: !!card.autoReview, requestId })
+      }
+      broadcastBoard(selected)
+      return json(res, 200, { ok: true })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/project-control') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: selected, paused } = JSON.parse(body)
+      Object.assign(config, setProjectPaused(selected, paused, CONFIG_PATH))
+      broadcastBoard(selected)
+      return json(res, 200, { ok: true, control: controlState(selected, CONFIG_PATH) })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
   // Config projects first (they are the ones you named), then anything else herdr
   // has open under projectsRoot, so a project you opened after startup still shows.
   if (req.method === 'GET' && url.pathname === '/api/projects') {
@@ -500,7 +774,7 @@ const handleRequest = async (req, res) => {
     const { project: p = config.projects[0], id } = JSON.parse(body || '{}')
     const tasksDir = tasksDirOf(p)
     try {
-      if (breakerState().breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
+      if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
       const card = findCard(tasksDir, id)
       if (!card) throw new Error(`unknown card: ${id}`)
       if (card.column !== 'queue') throw new Error(`${card.id} is in ${card.column}; only Queue cards can start`)
@@ -514,14 +788,14 @@ const handleRequest = async (req, res) => {
         if (agents.some((a) => a.pane_id === existing.pane_id)) {
           throw new Error(`${card.id} is already running in ${existing.pane_id}`)
         }
-        reap(tasksDir, agents) // the pane died; clear the stale binding and carry on
+        throw new Error(`${card.id}: assigned session is missing; recover its saved work/assignment before redispatch`)
       }
 
       const polled = await pollAgents(p)
       if (!polled.herdrUp) throw new Error('herdr agent state unknown; refusing explicit spawn')
       const [startedId] = await autoSpawn({
         project: p,
-        projectPath: projectPathOf(p),
+        projectPath: integrationPathOf(p),
         tasksDir,
         boardRoot: HERE,
         model: config.models.working,
@@ -531,9 +805,10 @@ const handleRequest = async (req, res) => {
         max: config.maxConcurrentAgents,
         agents: polled.agents,
         onChange: () => broadcastBoard(p),
-        log: (msg) => console.log(msg),
+        log: (msg) => schedulerActivity(p, msg),
         mission: config.mission,
         onlyIds: [card.id],
+        gitSettings: projectSettingsOf(p),
       })
       if (!startedId) throw new Error(holdsFor(p)[card.id] || `${card.id} did not start`)
       herdrLog(`${startedId} spawned by hand`)
@@ -558,7 +833,6 @@ const handleRequest = async (req, res) => {
           throw new Error('maxConcurrentAgents must be a whole number from 0 to 10')
         }
         config.maxConcurrentAgents = n
-        savedMaxConcurrentAgents = null // An explicit operator setting supersedes pre-breaker capacity.
       }
       if ('mode' in patch) {
         if (!['auto', 'manager'].includes(patch.mode)) throw new Error("mode must be 'auto' or 'manager'")
@@ -568,6 +842,10 @@ const handleRequest = async (req, res) => {
         const n = Number(patch.stallSeconds)
         if (!Number.isFinite(n) || n < 10 || n > 3600) throw new Error('stallSeconds must be 10-3600')
         config.stallSeconds = n
+      }
+      if ('agentSettings' in patch) {
+        config.agentSettings ||= {}
+        config.agentSettings.global = validateSettingsPatch(config, patch.agentSettings)
       }
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
       json(res, 200, { ok: true, config })
@@ -581,10 +859,7 @@ const handleRequest = async (req, res) => {
   // Manual only — no auto-recovery timer trips this back on.
   if (req.method === 'POST' && url.pathname === '/api/breaker-reset') {
     resetBreaker()
-    if (savedMaxConcurrentAgents !== null) {
-      config.maxConcurrentAgents = savedMaxConcurrentAgents
-      savedMaxConcurrentAgents = null
-    }
+    announcedBreakers.clear()
     json(res, 200, { ok: true, config: { maxConcurrentAgents: config.maxConcurrentAgents } })
     for (const p of new Set([...clients].map((c) => c.project))) broadcastBoard(p)
     return
@@ -608,16 +883,19 @@ const handleRequest = async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/open') {
     let body = ''
     for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], id } = JSON.parse(body || '{}')
     try {
-      const card = findCard(tasksDirOf(p), id)
-      // shell:true is required because `code` is a .cmd shim, and it concatenates
-      // rather than escapes — so quote the path ourselves. Windows forbids `"` in
-      // filenames, which makes the quotes airtight rather than merely hopeful.
-      spawn(config.editor ?? 'code', [`"${card.path}"`], {
-        shell: true, detached: true, stdio: 'ignore',
-      }).unref()
-      return json(res, 200, { ok: true, path: card.path })
+      const { project: p = config.projects[0], id, reportId } = JSON.parse(body || '{}')
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      if (!reportId && !/^T-\d+$/i.test(id || '')) throw new Error('Invalid card identity')
+      const path = reportId ? resolveAuditReport(config, p, reportId) : findCard(tasksDirOf(p), id).path
+      // The configured editor is trusted; the browser supplies only an identity.
+      // Validate shell characters before quoting the resolved server-owned path.
+      const child = spawn(config.editor ?? 'code', editorArguments(path), {
+        shell: true, detached: true, stdio: 'ignore', windowsHide: true,
+      })
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+      child.unref()
+      return json(res, 200, { ok: true, path })
     } catch (err) {
       return json(res, 400, { ok: false, error: err.message })
     }
@@ -648,23 +926,50 @@ const handleRequest = async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/review-groups') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: p, groups } = JSON.parse(body)
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      json(res, 200, { ok: true, groups: saveReviewGroups(tasksDirOf(p), groups) })
+    } catch (err) { json(res, 400, { ok: false, error: err.message }) }
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/card-settings') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: p = config.projects[0], id, stage, settings } = JSON.parse(body || '{}')
+      if (!config.projects.includes(p) || !STAGES.includes(stage) || !settings || typeof settings !== 'object') throw new Error('Known project, card stage and settings object required')
+      const card = findCard(tasksDirOf(p), id)
+      const next = setCardOverride(tasksDirOf(p), card.id, stage, settings, config)
+      json(res, 200, { ok: true, card: next })
+      broadcastBoard(p)
+    } catch (err) { json(res, 400, { ok: false, error: err.message }) }
+    return
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/review') {
     let body = ''
     for await (const chunk of req) body += chunk
     const { project: p = config.projects[0], cardIds } = JSON.parse(body || '{}')
     try {
-      if (breakerState().breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
+      if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
       const result = await spawnReviewer({
+        inventory: reviewInventory, reviewRoot: REVIEW_ROOT,
         project: p,
-        projectPath: projectPathOf(p),
+        projectPath: integrationPathOf(p),
         tasksDir: tasksDirOf(p),
         boardRoot: HERE,
         model: config.models.review,
         engine: engineFor('review'),
+        assignmentForCard: (card, stage) => assignmentForCard(p, card, stage),
         cardIds,
       })
-      recordSpawn()
-      tripBreakerIfNeeded()
+      recordSpawn({ project: p, cap: config.maxConcurrentAgents })
+      tripBreakerIfNeeded(p)
       herdrLog(`review started for ${result.cards.length} card(s): ${result.cards.join(', ')}`)
       json(res, 200, { ok: true, reviewer: result })
     } catch (err) {
@@ -680,18 +985,19 @@ const handleRequest = async (req, res) => {
     for await (const chunk of req) body += chunk
     const { project: p = config.projects[0] } = JSON.parse(body || '{}')
     try {
-      if (breakerState().breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
+      if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
       const result = await spawnIssuesSweeper({
         project: p,
-        projectPath: projectPathOf(p),
+        projectPath: integrationPathOf(p),
         tasksDir: tasksDirOf(p),
         boardRoot: HERE,
         model: config.models.planning ?? config.models.issues,
         engine: engineFor('planning'),
+        assignmentForCard: (card, stage) => assignmentForCard(p, card, stage),
         mission: p === config.mission?.project ? config.mission : null,
       })
-      recordSpawn()
-      tripBreakerIfNeeded()
+      recordSpawn({ project: p, cap: config.maxConcurrentAgents })
+      tripBreakerIfNeeded(p)
       herdrLog(`Lead Planner started for ${result.cards.length} card(s)`)
       json(res, 200, { ok: true, planner: result })
     } catch (err) {

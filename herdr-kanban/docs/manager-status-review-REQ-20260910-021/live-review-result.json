@@ -1,0 +1,138 @@
+[
+  {
+    "viewport": "desktop",
+    "rows": {
+      "REQ-20260910-022": [
+        "10/09/2026",
+        "03:53 pm",
+        "Kanban",
+        "Close remaining exception and status gaps",
+        "Manager",
+        "working"
+      ],
+      "REQ-20260910-021": [
+        "2026-09-10",
+        "Unknown",
+        "herdr-kanban",
+        "Manager Tasks status repair",
+        "status-repair specialist",
+        "done"
+      ],
+      "REQ-20260910-020": [
+        "10/09/2026",
+        "03:23 pm",
+        "Kanban",
+        "Unblock approved mission and diagnose Manager exceptions",
+        "Manager",
+        "done"
+      ],
+      "REQ-20260910-015": [
+        "2026-09-10",
+        "Unknown",
+        "Kanban",
+        "reconcile T-81 dispatch and execute existing plan",
+        "Unknown",
+        "blocked"
+      ],
+      "REQ-20260910-011": [
+        "2026-09-10",
+        "Unknown",
+        "Kanban",
+        "return T-80 to Planning",
+        "Unknown",
+        "done"
+      ],
+      "REQ-20260909-005": [
+        "2026-09-09",
+        "Unknown",
+        "herdr-kanban",
+        "Correct the mobile Kanban UX; user rejects desktop-style horizontal columns/collapse on phone",
+        "kanban-observer",
+        "done"
+      ],
+      "REQ-20260909-004": [
+        "2026-09-09",
+        "Unknown",
+        "InjectBuddy",
+        "Assess every current non-archived InjectBuddy card for meaning, done status, current need, and user value; provide plain-English recommendations",
+        "kanban-observer",
+        "done"
+      ]
+    },
+    "metrics": {
+      "width": 1440,
+      "scrollWidth": 1440,
+      "firstRow": "REQ-20260910-022",
+      "visibleReqText": false
+    },
+    "console": []
+  },
+  {
+    "viewport": "mobile",
+    "rows": {
+      "REQ-20260910-022": [
+        "10/09/2026",
+        "03:53 pm",
+        "Kanban",
+        "Close remaining exception and status gaps",
+        "Manager",
+        "working"
+      ],
+      "REQ-20260910-021": [
+        "2026-09-10",
+        "Unknown",
+        "herdr-kanban",
+        "Manager Tasks status repair",
+        "status-repair specialist",
+        "done"
+      ],
+      "REQ-20260910-020": [
+        "10/09/2026",
+        "03:23 pm",
+        "Kanban",
+        "Unblock approved mission and diagnose Manager exceptions",
+        "Manager",
+        "done"
+      ],
+      "REQ-20260910-015": [
+        "2026-09-10",
+        "Unknown",
+        "Kanban",
+        "reconcile T-81 dispatch and execute existing plan",
+        "Unknown",
+        "blocked"
+      ],
+      "REQ-20260910-011": [
+        "2026-09-10",
+        "Unknown",
+        "Kanban",
+        "return T-80 to Planning",
+        "Unknown",
+        "done"
+      ],
+      "REQ-20260909-005": [
+        "2026-09-09",
+        "Unknown",
+        "herdr-kanban",
+        "Correct the mobile Kanban UX; user rejects desktop-style horizontal columns/collapse on phone",
+        "kanban-observer",
+        "done"
+      ],
+      "REQ-20260909-004": [
+        "2026-09-09",
+        "Unknown",
+        "InjectBuddy",
+        "Assess every current non-archived InjectBuddy card for meaning, done status, current need, and user value; provide plain-English recommendations",
+        "kanban-observer",
+        "done"
+      ]
+    },
+    "metrics": {
+      "width": 390,
+      "scrollWidth": 390,
+      "firstRow": "REQ-20260910-022",
+      "visibleReqText": false
+    },
+    "console": []
+  }
+]

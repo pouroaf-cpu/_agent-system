@@ -26,8 +26,10 @@ try {
   assert.equal(findCard(dir, card.id).column, 'planning')
   const ready = text
     .replace('## Files', '## Files\n- `public/ib-calc.css` — center heading')
-    .replace('## Implementation plan', '## Implementation plan\nAdd a scoped centering rule.')
-    .replace('## Acceptance criteria', '## Acceptance criteria\nHeading centered; arrow unchanged.')
+    .replace('## Implementation plan', '## Implementation plan\n**Plan readiness:** build-ready\nOutcome: center heading.\nUnchanged constraints: preserve arrow.\nObserved cause: heading lacks centering rule.\nEvidence: inspected current CSS.\nInspected current revision/state: current test fixture.\nChanges: add scoped centering rule.\nCheck: inspect centered heading.\nExpected result: heading centered and arrow unchanged.\nStop rules: stop if CSS target differs.')
+    .replace('## Acceptance criteria', '## Acceptance criteria\n- AC1: Heading centered; arrow unchanged.')
+    .replace('## Outcome checks', '## Outcome checks\nAC1 | public/ib-calc.css | heading centered, arrow unchanged | removing rule fails')
+    .replace('## Prerequisites', '## Prerequisites\nNone; CSS fixture only.')
   validatePlan(ready.replace(/\n/g, '\r\n'))
   assert.throws(() => validatePlan(ready
     .replace('**Trivial:** no', '**Trivial:** yes')

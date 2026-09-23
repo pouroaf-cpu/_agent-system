@@ -1,0 +1,12 @@
+{
+  "port": 7777,
+  "mode": "manager",
+  "projectsRoot": "C:/Users/PFrew/Projects",
+  "projects": ["Injectbuddy", "Tradeflow"],
+  "maxConcurrentAgents": 6,
+  "agentWorkspace": "agents",
+  "stallSeconds": 300,
+  "agentStartTimeoutMs": 240000,
+  "agentPollMs": 2000,
+  "models": {"planning": "opus", "working": "sonnet", "issues": "sonnet", "review": "opus"}
+}

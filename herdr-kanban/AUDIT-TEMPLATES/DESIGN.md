@@ -3,6 +3,7 @@
 **Created:** {{CREATED}}
 **Workflow:** card-owned
 **Audit:** design
+**Audit disposition:** planner
 **Workspace:** {{WORKSPACE}}
 **Auto-review:** no
 **Priority** 5/10
@@ -12,13 +13,18 @@
 
 ## Required tools/MCPs
 {{TOOLS}}
+- chrome-devtools (headless isolated browser; Lighthouse for accessibility, separate tracing for performance when in scope)
 
 ## Project constraints
 {{PROJECT_CONSTRAINTS}}
 
+## Required skills
+<!-- Exact relevant skill paths; browser skill is routed on demand. Verify actual tool/auth/render availability. -->
+
 ## Evidence gates
+- Preflight: prove callable named tools, target URL/rendered controls and approved isolated auth plus identity for private routes. Save exact report/trace paths. On prerequisite failure set `**Audit preflight:** BLOCKED` and return to Planner; no unchanged redispatch or CLEAR without evidence.
 - Capture full-page screenshots at 390px, 768px, and 1440px for every target and required state.
-- For authenticated targets, use the card's named pre-authenticated session; missing access is `INCOMPLETE`.
+- For authenticated targets, use the card's project-approved isolated dev-session helper and verify identity in that browser; missing access is `INCOMPLETE`.
 - Check each required control's own selector, visible label, bounding box, and click target; container text alone is not evidence.
 - At each viewport measure document `scrollWidth` versus `clientWidth` and report every element crossing the viewport.
 - Check text clipping/wrapping, overlapping boxes, obscured controls, fixed/sticky collisions, broken grids, and touch-target visibility with exact selectors.

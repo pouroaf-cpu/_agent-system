@@ -1,0 +1,28 @@
+{
+  "port": 7792,
+  "mode": "auto",
+  "projectsRoot": "C:/Users/PFrew/Projects",
+  "projects": [
+    "LeadPlannerProof-20260910145546"
+  ],
+  "maxConcurrentAgents": 1,
+  "agentWorkspace": "agents",
+  "stallSeconds": 300,
+  "agentPollMs": 2000,
+  "engine": {
+    "kind": "codex",
+    "reasoningArgs": [
+      "-c",
+      "model_reasoning_effort=\"high\""
+    ]
+  },
+  "models": {
+    "planning": "gpt-5.5",
+    "working": "gpt-5.5",
+    "issues": "gpt-5.5",
+    "review": "gpt-5.5"
+  },
+  "leadPlanner": {
+    "autoIssues": true
+  }
+}

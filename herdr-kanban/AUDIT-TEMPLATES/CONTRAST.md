@@ -3,6 +3,7 @@
 **Created:** {{CREATED}}
 **Workflow:** card-owned
 **Audit:** contrast
+**Audit disposition:** planner
 **Workspace:** {{WORKSPACE}}
 **Auto-review:** no
 **Priority** 5/10
@@ -12,11 +13,16 @@
 
 ## Required tools/MCPs
 {{TOOLS}}
+- chrome-devtools (headless isolated browser and Lighthouse accessibility report)
 
 ## Project constraints
 {{PROJECT_CONSTRAINTS}}
 
+## Required skills
+<!-- Exact relevant skill paths; browser skill is routed on demand. No dedicated contrast skill is assumed. -->
+
 ## Evidence gates
+- Preflight: prove callable named tools, target URL/rendered controls and approved isolated auth plus identity for private routes. Save the exact Lighthouse report path; it is not a performance trace. On prerequisite failure set `**Audit preflight:** BLOCKED` and return to Planner; no unchanged redispatch.
 - Test 390px, 768px, and 1440px viewports with the named accessibility/contrast tool.
 - Check normal, hover, focus, active, disabled, error, placeholder, and selected states present in scope.
 - Record measured foreground/background colors, ratio, required WCAG level, selector, state, and viewport for every failure.

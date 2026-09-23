@@ -1,0 +1,31 @@
+{
+  "port": 7791,
+  "mode": "manager",
+  "projectsRoot": "C:/Users/PFrew/Projects",
+  "projects": [
+    "CardUsageProof"
+  ],
+  "maxConcurrentAgents": 1,
+  "agentPollMs": 3000,
+  "leadPlanner": {
+    "autoIssues": true
+  },
+  "models": {
+    "planning": "gpt-5.5",
+    "working": "gpt-5.5",
+    "review": "gpt-5.5"
+  },
+  "engine": {
+    "kind": "codex",
+    "reasoningArgs": [
+      "-c",
+      "model_reasoning_effort=\"low\""
+    ]
+  },
+  "mission": {
+    "id": "CARD-USAGE-PROOF",
+    "project": "CardUsageProof",
+    "maxBuilds": 2,
+    "maxBuildsPerCard": 2
+  }
+}
