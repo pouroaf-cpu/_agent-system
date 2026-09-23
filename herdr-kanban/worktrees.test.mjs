@@ -44,8 +44,13 @@ test('activity log is timestamped, single-line, and fail-open', () => {
   const tasks = join(root, 'TASKS')
   mkdirSync(tasks)
   activityLog({ tasksDir: tasks, project: 'Test', cardId: 'T-1', event: 'retry', message: 'first\nsecond', now: new Date('2026-09-14T00:00:00Z') })
-  assert.equal(readFileSync(join(tasks, 'activity.log'), 'utf8'), '2026-09-14T00:00:00.000Z project=Test card=T-1 event=retry message=first second\n')
+  const first = '2026-09-14T00:00:00.000Z project=Test card=T-1 event=retry message=first second\n'
+  assert.equal(readFileSync(join(tasks, 'activity.log'), 'utf8'), first)
+  activityLog({ tasksDir: tasks, project: 'Test', cardId: 'T-2', event: 'hold', message: 'safe\nline', now: new Date('2026-09-15T00:00:00Z') })
+  const log = readFileSync(join(tasks, 'activity.log'), 'utf8')
+  assert.equal(log, first + '2026-09-15T00:00:00.000Z project=Test card=T-2 event=hold message=safe line\n')
   assert.doesNotThrow(() => activityLog({ tasksDir: join(root, 'missing', 'TASKS'), project: 'Test', cardId: '-', event: 'hold', message: 'safe' }))
+  assert.doesNotThrow(() => activityLog({ tasksDir: tasks, project: 'Test', cardId: '-', event: 'hold', message: 'safe', now: 'invalid' }))
   rmSync(root, { recursive: true, force: true })
 })
 

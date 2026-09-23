@@ -92,6 +92,7 @@ function tripBreakerIfNeeded(project) {
   if (state.breakerTripped && !announcedBreakers.has(project)) {
     announcedBreakers.add(project)
     console.log(`circuit breaker tripped: ${state.reason} — auto-spawn halted, reset from Settings`)
+    activity(project, '-', 'breaker-trip', state.reason, 'error')
     herdrLog(`${project}: circuit breaker tripped: ${state.reason}`, 'error')
   }
 }
@@ -213,7 +214,10 @@ async function tick(project, agents) {
   const max = config.maxConcurrentAgents
   if (max <= 0 || breakerState(project).breakerTripped) return []
   if (config.mode === 'manager' || config.autoQueuePlanned === true) {
-    for (const id of promotePlanned(tasksDir, { mission: config.mission, project })) console.log(`queued: ${id}`)
+    for (const id of promotePlanned(tasksDir, { mission: config.mission, project })) {
+      console.log(`queued: ${id}`)
+      activity(project, id, 'move', 'planned -> queue (auto)')
+    }
   }
   // The cap is builders only. Slots are counted from card bindings, so the
   // operator's own panes — kanban manager, planner, reviewer, sweeper — are not
@@ -239,7 +243,7 @@ async function tick(project, agents) {
     console.log(`spawned: ${started.join(', ')}`)
     for (const id of started) {
       recordSpawn({ project, cap: max })
-      activity(project, id, 'spawn', 'Builder started in isolated worktree')
+      activity(project, id, 'builder-start', 'Builder started in isolated worktree')
     }
     tripBreakerIfNeeded(project)
   }
@@ -365,16 +369,20 @@ async function pollProject(project) {
 
     const autoEnabled = !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped
     if (autoEnabled) {
-      dirty = promoteAutoReview(tasksDir, { all: config.mode === 'manager' }).length > 0 || dirty
+      const promoted = promoteAutoReview(tasksDir, { all: config.mode === 'manager' })
+      for (const id of promoted) activity(project, id, 'move', 'completed -> review (auto)')
+      dirty = promoted.length > 0 || dirty
       let busyCards = null
       try { busyCards = busyReviewCards(REVIEW_ROOT, tasksDir, agents) } catch (err) { schedulerActivity(project, `review ownership unavailable: ${err.message}`) }
-      dirty = routeReviewVerdicts(tasksDir, {
+      const routed = routeReviewVerdicts(tasksDir, {
         reviewRoot: REVIEW_ROOT,
         log: (msg) => schedulerActivity(project, msg),
         reviewBusy: busyCards === null,
         busyCardIds: busyCards || [],
         includeCompleted: true,
-      }).length > 0 || dirty
+      })
+      for (const id of routed) activity(project, id, 'move', 'review verdict routed')
+      dirty = routed.length > 0 || dirty
     }
     if (dirty) broadcastBoard(project)
 
@@ -402,17 +410,24 @@ async function pollProject(project) {
       }).catch((err) => {
         if (err.paused) return null
         recordSpawnFailure({ project, cap: config.maxConcurrentAgents, reason: err.message })
-        if (!err.busy && !/nothing in Issues/.test(err.message)) console.log(`lead planner skipped — ${err.message}`)
+        if (!err.busy && !/nothing in Issues/.test(err.message)) {
+          console.log(`lead planner skipped — ${err.message}`)
+          activity(project, '-', 'failure', err.message, 'error')
+        }
         return null
       })
       if (!planner && readBoard(tasksDirOf(project)).issues.some(c => !c.cardOwned)) {
-        await spawnIssuesSweeper({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, model: config.models.issues ?? config.models.planning, engine: engineFor('issues'), assignmentForCard: (card, stage) => assignmentForCard(project, card, stage), mission: config.mission }).catch(err => {
+        const sweeper = await spawnIssuesSweeper({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, model: config.models.issues ?? config.models.planning, engine: engineFor('issues'), assignmentForCard: (card, stage) => assignmentForCard(project, card, stage), mission: config.mission }).catch(err => {
           if (!err.busy && !/nothing in Issues/.test(err.message)) console.log(`legacy planner skipped — ${err.message}`)
+          if (!err.busy && !/nothing in Issues/.test(err.message)) activity(project, '-', 'failure', err.message, 'error')
+          return null
         })
+        if (sweeper) for (const id of sweeper.cards) activity(project, id, 'planner-start', 'Issues sweeper started')
       }
       if (planner) {
         if (planner.spawnedNewAgent) recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
+        for (const id of planner.cards) activity(project, id, 'planner-start', 'Lead Planner started')
         herdrLog(`Lead Planner started for ${planner.cards.length} card(s): ${planner.cards.join(', ')}`)
         broadcastBoard(project)
       }
@@ -434,6 +449,7 @@ async function pollProject(project) {
       if (reviewer) {
         recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
+        for (const id of reviewer.cards) activity(project, id, 'reviewer-start', 'Reviewer started')
         herdrLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
         broadcastBoard(project)
       }
@@ -758,7 +774,9 @@ const handleRequest = async (req, res) => {
     for await (const chunk of req) body += chunk
     try {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
+      const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to)
+      activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)
       json(res, 200, { ok: true, card })
       broadcastBoard(p)
@@ -811,9 +829,11 @@ const handleRequest = async (req, res) => {
         gitSettings: projectSettingsOf(p),
       })
       if (!startedId) throw new Error(holdsFor(p)[card.id] || `${card.id} did not start`)
+      activity(p, startedId, 'builder-start', 'Builder started by hand')
       herdrLog(`${startedId} spawned by hand`)
       json(res, 200, { ok: true, started: startedId })
     } catch (err) {
+      activity(p, id || '-', 'failure', err.message, 'error')
       json(res, 400, { ok: false, error: err.message })
     }
     broadcastBoard(p)
@@ -861,6 +881,7 @@ const handleRequest = async (req, res) => {
     resetBreaker()
     announcedBreakers.clear()
     json(res, 200, { ok: true, config: { maxConcurrentAgents: config.maxConcurrentAgents } })
+    for (const p of config.projects) activity(p, '-', 'breaker-reset', 'circuit breaker reset')
     for (const p of new Set([...clients].map((c) => c.project))) broadcastBoard(p)
     return
   }
@@ -971,9 +992,11 @@ const handleRequest = async (req, res) => {
       recordSpawn({ project: p, cap: config.maxConcurrentAgents })
       tripBreakerIfNeeded(p)
       herdrLog(`review started for ${result.cards.length} card(s): ${result.cards.join(', ')}`)
+      for (const id of result.cards) activity(p, id, 'reviewer-start', 'Reviewer started')
       json(res, 200, { ok: true, reviewer: result })
     } catch (err) {
       // 409: the tick or another click is already spawning one; not a failure.
+      if (!err.busy) activity(p, '-', 'failure', err.message, 'error')
       json(res, err.busy ? 409 : 400, { ok: false, error: err.message })
     }
     broadcastBoard(p)
@@ -999,9 +1022,11 @@ const handleRequest = async (req, res) => {
       recordSpawn({ project: p, cap: config.maxConcurrentAgents })
       tripBreakerIfNeeded(p)
       herdrLog(`Lead Planner started for ${result.cards.length} card(s)`)
+      for (const id of result.cards) activity(p, id, 'planner-start', 'Lead Planner started')
       json(res, 200, { ok: true, planner: result })
     } catch (err) {
       // 409: the tick or another click is already spawning one; not a failure.
+      if (!err.busy) activity(p, '-', 'failure', err.message, 'error')
       json(res, err.busy ? 409 : 400, { ok: false, error: err.message })
     }
     broadcastBoard(p)

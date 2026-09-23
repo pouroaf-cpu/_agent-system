@@ -201,7 +201,10 @@ activityLog({
   tasksDir,
   project: basename(dirname(tasksDir)),
   cardId: card.id,
-  event: 'state',
+  event: previousColumn === 'working' ? `builder-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
+    : previousColumn === 'review' ? `reviewer-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
+    : previousColumn === 'planning' ? `planner-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
+    : ['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'move',
   message: `${previousColumn} -> ${target} (${verb})`,
 })
 
