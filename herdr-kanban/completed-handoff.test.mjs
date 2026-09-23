@@ -40,3 +40,17 @@ test('Auto-review OFF stays Completed even manager mode; ON waits for safe clean
   assert.deepEqual(promoteAutoReview(tasksDir, { all: true }), ['T-2'])
   assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
 })
+
+test('finished Builder whose card sits in Review is retired and integrated', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-review-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'review'), { recursive: true })
+  writeFileSync(join(tasksDir, 'review', 'T-1.md'), '# T-1 — task\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', commit: 'saved' } }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { completedStage: 'working', builder: { pane_id: 'p', name: 'builder' } } }))
+  writeFileSync(join(tasksDir, '.request-usage.json'), JSON.stringify({ runs: { r: { paneId: 'p', role: 'builder', cardIds: ['T-1'], sessionId: 's' } } }))
+  let agent = { pane_id: 'p', name: 'builder', agent_session: { value: 's' }, agent_status: 'done' }
+  const io = { agentList: async () => agent ? [agent] : [], paneRead: async () => 'out', recordUsageFinish: async () => {},
+    paneClose: async () => { agent = null }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
+  assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')
+})

@@ -35,7 +35,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds,
       await io.recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
       const history = appendHistory(tasksDir, card.id, { event: 'completed-builder-retirement', builder, sessionId: identity, worktree: entry, card: readFileSync(card.path, 'utf8'), output })
       const current = (await io.agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
-      if (!matches(current) || current.agent_status !== 'done' || findCard(tasksDir, card.id).column !== 'completed') throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
+      if (!matches(current) || current.agent_status !== 'done' || !['completed', 'review'].includes(findCard(tasksDir, card.id).column)) throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
       await io.paneClose(paneId, session)
       updateWorkflow(tasksDir, card.id, { builderRetired: { paneId, started: builder.started, sessionId: identity, historyId: history.id, at: history.at } })
     }
