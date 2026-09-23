@@ -32,3 +32,6 @@ ai/AI_*.md
 *.md
 !README.md
 !**/README.md
+
+# === Local-only project folders (no repo, PC work only) ===
+north-king-country-junior-rules/
