@@ -90,3 +90,15 @@ test('a stopped Builder still stuck after T-11 recovery goes straight to Owner, 
   assert.equal(stall.action, 'moved to Owner')
   assert.match(readWorkflow(tasks)['T-1'].operational.reason, /Builder handoff/, 'T-11 evidence and hold are preserved')
 })
+
+test('cards queued behind a stalled prerequisite stay queued; only the prerequisite escalates; legacy Completed waits', t => {
+  const { tasks, put } = board(t)
+  put('planning', 'T-41')
+  put('queue', 'T-42', '**Blocked by:** T-41\n')
+  put('completed', 'T-25')
+  checkStalls({ tasksDir: tasks, agents: [], now: 0 })
+  const stalls = checkStalls({ tasksDir: tasks, agents: [], now: 60 * MIN })
+  assert.deepEqual(stalls.map(s => s.id), ['T-41'])
+  assert.equal(findCard(tasks, 'T-42').column, 'queue')
+  assert.equal(findCard(tasks, 'T-25').column, 'completed')
+})

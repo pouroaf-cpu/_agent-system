@@ -37,14 +37,17 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (now - since >= minutes * 60000) idle.set(card.id, card)
   }
 
-  // Allowed waits: capacity, or a prerequisite that is in Owner or still moving.
-  const progressing = (id, depth) => { const c = byId.get(id); return !!c && (c.column === 'owner' || !idle.has(id) || (depth < 10 && allowedWait(c, depth + 1))) }
-  const allowedWait = (card, depth = 0) => {
+  // Allowed waits: capacity, an unfinished prerequisite, or files held by another live
+  // card. Only the stuck prerequisite is escalated, never the cards queued behind it.
+  const allowedWait = (card) => {
     if (card.column === 'queue') {
       if (builderSlotsFree <= 0) return true
-      const blockers = [...unmetBlockers(card, board, registry), ...[...String(holds[card.id] || '').matchAll(/held by ([A-Z]+-\d+)/gi)].map(m => m[1].toUpperCase())]
-      return blockers.length > 0 && blockers.every(id => progressing(id, depth))
+      const blockers = unmetBlockers(card, board, registry)
+      if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
+      return /held by [A-Z]+-?\d+/i.test(String(holds[card.id] || ''))
     }
+    // Legacy Completed cards with no board worktree wait for the operator's disposition by design.
+    if (card.column === 'completed' && !registry[card.id]) return true
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational
   }
 
