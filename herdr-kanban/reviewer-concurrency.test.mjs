@@ -56,6 +56,16 @@ test('stale dead-owner launch preserves Review and blocks unchanged redispatch',
   syncReviewClaims(f.root, f.inventory, 250000)
   assert.match(readWorkflow(f.tasks)['T-1'].operational.reason, /without a per-card verdict/)
 })
+test('a launch whose board process died after opening the pane is retired, not held in starting (Tradeflow T-38)', t => {
+  const f = fixture(t); f.card('T-1')
+  const c = f.reserve(['T-1'], 'one', 1000)
+  updateReviewClaim(f.root, c.id, { ownerPid: 2147483647, paneId: 'w1:p9' })
+  f.inventory[0].agents.push({ name: 'r-t-1', pane_id: 'w1:p9', agent_status: 'idle' })
+  assert.equal(syncReviewClaims(f.root, f.inventory, 122000).length, 0)
+  assert.match(readWorkflow(f.tasks)['T-1'].operational.reason, /restarted before the reviewer prompt/)
+  assert.equal(syncReviewClaims(f.root, f.inventory, 130000).length, 0, 'the idle pane is not re-adopted as a legacy claim')
+})
+
 test('finished group returns missing verdicts while another group remains independently busy', t => {
   const f = fixture(t); f.card('T-1'); f.card('T-2')
   const a = f.reserve(['T-1']), b = f.reserve(['T-2'])

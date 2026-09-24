@@ -64,8 +64,9 @@ function reconcile(claims, inventory, now) {
         const runs = existsSync(join(project.tasksDir, '.request-usage.json')) ? JSON.parse(readFileSync(join(project.tasksDir, '.request-usage.json'), 'utf8')).runs : {}
         const run = Object.values(runs || {}).filter(r => r.role === 'reviewer' && r.paneId === agent.pane_id).at(-1)
         claim = { id: randomUUID(), project: project.project, tasksDir: project.tasksDir, cards: run?.cardIds || [], paneId: agent.pane_id, legacy: true, createdAt: now }
-        // Previously closed, still-done panes must not be re-adopted every poll.
-        if (agent.agent_status === 'done' && claims.some(c => c.project === project.project && c.paneId === agent.pane_id && c.closedAt)) continue
+        // A pane whose claim was closed is never re-adopted: done, or idle with no prompt
+        // after a retired launch (it would become a card-less legacy claim blocking all review).
+        if (claims.some(c => c.project === project.project && c.paneId === agent.pane_id && c.closedAt)) continue
         claims.push(claim)
       }
       if (agent.agent_status === 'done') {
@@ -76,7 +77,11 @@ function reconcile(claims, inventory, now) {
     }
     for (const claim of claims.filter(c => active(c) && c.project === project.project)) {
       if (claim.paneId && !project.agents.some(a => a.pane_id === claim.paneId) && now - (claim.lastSeen || claim.createdAt) >= 120000) retire(claim, now, 'reviewer disappeared from confirmed HERDR inventory')
-      if (!claim.paneId && claim.ownerPid && !alive(claim.ownerPid) && now - claim.createdAt >= 120000) retire(claim, now, 'launch process exited before recording a reviewer pane')
+      // A board restart mid-launch leaves the pane idle with no prompt and the claim in
+      // 'starting' forever, which also hides the card from the stall watchdog (Tradeflow T-38).
+      if ((!claim.paneId || claim.phase === 'starting') && claim.ownerPid && !alive(claim.ownerPid) && now - claim.createdAt >= 120000) {
+        retire(claim, now, claim.paneId ? 'the board restarted before the reviewer prompt was submitted' : 'launch process exited before recording a reviewer pane')
+      }
     }
   }
 }
