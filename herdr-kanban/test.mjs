@@ -2280,7 +2280,7 @@ test('finished reviewer stops blocking the next batch after existing done grace'
 
 test('paused agent polling does not start stopped HERDR sessions', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
-  const poll = source.slice(source.indexOf('async function pollAgents('), source.indexOf('function boardPayload('))
+  const poll = source.slice(source.indexOf('async function pollAgentsNow('), source.indexOf('function boardPayload('))
   assert.match(poll, /ensureSession: !controlState\(project, CONFIG_PATH\)\.paused && config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
   const herdrSource = readFileSync(new URL('./lib/herdr.mjs', import.meta.url), 'utf8')
   assert.match(herdrSource, /agentList\(session, options\)/)

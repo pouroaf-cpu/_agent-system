@@ -199,7 +199,15 @@ function tripBreakerIfNeeded(project) {
   }
 }
 
-async function pollAgents(project) {
+// Concurrent callers (the poll loop, every open board tab) share one herdr call per
+// project: a slow herdr otherwise got one call per request and slowed further.
+const agentPolls = new Map()
+function pollAgents(project) {
+  if (!agentPolls.has(project)) agentPolls.set(project, pollAgentsNow(project).finally(() => agentPolls.delete(project)))
+  return agentPolls.get(project)
+}
+
+async function pollAgentsNow(project) {
   try {
     const allAgents = await agentList(sessionOf(project), { ensureSession: !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) })
     reconcileUsage(tasksDirOf(project), allAgents)
@@ -825,7 +833,11 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/board') {
-    await pollAgents(project)
+    // The poll loop keeps the agent cache fresh; a page load waits only for the first
+    // fill, never for herdr (Kiwitown's empty board took 17s behind a slow herdr).
+    const polled = pollAgents(project)
+    if (!agentCache.has(project)) await polled
+    else polled.catch(() => {})
     return json(res, 200, boardPayload(project))
   }
 
