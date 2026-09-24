@@ -192,3 +192,12 @@ test('lane times: since from the lane entry (else file mtime); agentActive only 
     'T-3': { since: new Date(T).toISOString(), agentActive: false, agentRole: null },
   }, 'Owner cards are not timed; a Planner pane that is gone is no agent')
 })
+
+test('time spent paused is not a stall: Start restarts the clock (Tradeflow, 15 cards to Owner on unpause)', t => {
+  const { tasks, put } = board(t)
+  put('queue', 'T-1')
+  const resumedAt = new Date(T + 7 * 60 * MIN).toISOString()
+  assert.deepEqual(checkStalls({ tasksDir: tasks, resumedAt, now: T + 7 * 60 * MIN + 19 * MIN }), [], 'within 20 minutes of Start')
+  const [stall] = checkStalls({ tasksDir: tasks, resumedAt, now: T + 7 * 60 * MIN + 61 * MIN })
+  assert.match(stall.reason, /no change for 61m/)
+})

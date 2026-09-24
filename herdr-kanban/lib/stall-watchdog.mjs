@@ -52,7 +52,8 @@ export function laneTimes({ tasksDir, board, agents = [], claims = [], planners 
 // card file changing, the card entering its lane, an agent starting or finishing on it
 // (usage runs, bindings), the last recovery, and the last time this watchdog saw an
 // agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, paused = false, now = Date.now() }) {
+// `resumedAt` (the project's last Pause/Start) restarts every clock: paused time is not a stall.
+export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, paused = false, resumedAt, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = openClaims(claims, tasksDir)
@@ -61,7 +62,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   const busy = id => !!bindings[id]?.spawning || mine.some(c => c.cards.includes(id) && c.phase === 'starting') ||
     boundAgents(id, ctx).some(b => b.agent.agent_status === 'working')
   const reset = id => { if (now - ms(workflow[id]?.stallResetAt) >= 60000) workflow[id] = updateWorkflow(tasksDir, id, { stallResetAt: new Date(now).toISOString() }) }
-  const sinceOf = card => Math.max(card.mtime, laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
+  const sinceOf = card => Math.max(card.mtime, ms(resumedAt), laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
     ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
     ...runs.filter(r => r.cardIds?.includes(card.id)).flatMap(r => [ms(r.start?.at), ms(r.finish?.at)]))
 
