@@ -114,5 +114,8 @@ test('audit-cards: off-board report.md source links in the report and never arch
     assert.match(readFileSync(findCard(dir, first.created[1].id).path, 'utf8'), new RegExp(String.raw`Blocked by:\*\* ${first.created[0].id}`))
     assert.match(readFileSync(findCard(dir, first.created[0].id).path, 'utf8'), /Source: 2026-09-24-injectbuddy-journey finding 1/)
     assert.equal(cardsFromAudit(dir, { report: path, findings: 'all', prefix: 'I' }).created.length, 0)
+    const legacy = join(dir, 'legacy.md')
+    writeFileSync(legacy, `# Old\n\nStatus: FINDINGS\n${report([finding(1)]).replace(/## Audit conclusion[\s\S]*$/, '')}`)
+    assert.equal(cardsFromAudit(dir, { report: legacy, findings: 'all', prefix: 'I' }).created.length, 1, 'legacy Status: header is accepted')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

@@ -48,7 +48,9 @@ function auditSource(tasksDir, { id, report }) {
 // Read-only view for the orchestrator's summary.
 export function auditFindings(tasksDir, source) {
   const { audit, text } = auditSource(tasksDir, typeof source === 'string' ? { id: source } : source)
-  if (auditStatus(text) !== 'FINDINGS') throw new Error(`${audit.id} has no FINDINGS conclusion`)
+  // Reports written before the ## Audit conclusion section carry a `Status:` header line.
+  const status = auditStatus(text) || (audit.column === 'report' ? text.match(/^Status:[^\S\r\n]*(INCOMPLETE|FINDINGS|CLEAR)\b/m)?.[1] : null)
+  if (status !== 'FINDINGS') throw new Error(`${audit.id} has no FINDINGS conclusion`)
   const findings = cardReadyFindings(text)
   return { audit, text, findings, links: Object.fromEntries(findings.map(f => [f.n, linkLine(text, f.n) || null])) }
 }
