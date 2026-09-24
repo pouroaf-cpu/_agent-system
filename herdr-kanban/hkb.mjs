@@ -239,6 +239,11 @@ else if (HEADING[verb]) {
   const heading = target === 'issues' && ['owner', 'park'].includes(verb) ? 'Kicked back' : HEADING[verb]
   writeCurrentFeedback(tasksDir, card, heading, note + tail)
 }
+// A plan that is now build-ready answers any earlier Owner question; a stale "Needs you"
+// left on a queued card reads as waiting on the operator (Injectbuddy I165, I178).
+else if (previousColumn === 'planning' && ['planned', 'queue'].includes(target) && /^## Current feedback\r?\nNeeds you:/m.test(readFileSync(card.path, 'utf8'))) {
+  writeCurrentFeedback(tasksDir, card, 'Resolved', 'a Planner made this card build-ready, so the earlier question no longer applies.\n')
+}
 
 const binding = readBindings(tasksDir)[card.id]
 appendHistory(tasksDir, card.id, { event: 'handoff', stage: previousColumn, outcome: verb, note, run: binding?.agent_session, agent: binding?.name, text: readFileSync(card.path, 'utf8') })

@@ -60,7 +60,7 @@ console.log('Planner readiness validation passed')
 
 // Plan check at Planner handoff: Files must exist (unless marked new) and callers must be listed.
 {
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
@@ -83,9 +83,13 @@ console.log('Planner readiness validation passed')
     const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     let result = hkb()
     assert.notEqual(result.status, 0); assert.match(result.stderr, /src\/missing\.mjs does not exist/)
-    writeFileSync(card, `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\nChanges:')}`)
+    writeFileSync(card, `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\nChanges:')}\n## Current feedback\nNeeds you: an old question from Owner\nHistory entry: x\n`)
     result = hkb()
     assert.equal(result.status, 0, result.stderr)
+    // The build-ready plan answers the old Owner question (Injectbuddy I165, I178).
+    const { findCard } = await import('./lib/cards.mjs')
+    const planned = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
+    assert.doesNotMatch(planned, /^Needs you:/m); assert.match(planned, /^Resolved:/m)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
 
