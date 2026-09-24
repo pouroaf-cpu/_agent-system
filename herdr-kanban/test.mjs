@@ -2198,13 +2198,16 @@ test('explicit operator pause survives a later circuit breaker reset', async () 
   const start = source.indexOf("  if (req.method === 'POST' && url.pathname === '/api/config')")
   const end = source.indexOf("  if (req.method === 'POST' && url.pathname === '/api/priority')", start)
   let response
-  const route = new Function('json', 'writeFileSync', 'resetBreaker', `
+  // The file on disk was hand-edited after startup; a settings save must keep that edit.
+  const onDisk = JSON.stringify({maxConcurrentAgents:0, projects:[], workflowLimits:{maxRunsPerStage:25}})
+  const route = new Function('json', 'writeFileSync', 'readFileSync', 'resetBreaker', `
     const CONFIG_PATH = 'unused'; const clients = []; const res = {}; const announcedBreakers = new Set();
     let config = {maxConcurrentAgents:0};
     return async (req, url) => { ${source.slice(start, end)} };
-  `)((_res, _status, value) => { response = structuredClone(value) }, () => {}, () => {})
+  `)((_res, _status, value) => { response = structuredClone(value) }, () => {}, () => onDisk, () => {})
   await route({method:'POST', async *[Symbol.asyncIterator]() {yield '{"maxConcurrentAgents":0}'}}, {pathname:'/api/config'})
   assert.equal(response.config.maxConcurrentAgents, 0)
+  assert.equal(response.config.workflowLimits.maxRunsPerStage, 25)
   await route({method:'POST'}, {pathname:'/api/breaker-reset'})
   assert.equal(response.config.maxConcurrentAgents, 0)
 })

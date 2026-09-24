@@ -920,6 +920,9 @@ const handleRequest = async (req, res) => {
     for await (const chunk of req) body += chunk
     try {
       const patch = JSON.parse(body || '{}')
+      // Other writers (project pause, hand edits like workflowLimits) change the
+      // file after startup; patch the current file, not the startup copy.
+      Object.assign(config, JSON.parse(readFileSync(CONFIG_PATH, 'utf8')))
       if ('maxConcurrentAgents' in patch) {
         const n = Number(patch.maxConcurrentAgents)
         if (!Number.isInteger(n) || n < 0 || n > 10) {
