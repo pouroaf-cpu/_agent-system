@@ -302,7 +302,10 @@ export function recordedOverlapBlockers(card, projectPath, registry) {
 }
 
 function commitsAfter(entry) {
-  const result = git(entry.worktreePath, ['rev-list', '--reverse', `${entry.baseCommit}..HEAD`])
+  // Commits already on integration are not the card's, even when the card branch
+  // was brought up to date by hand and the recorded base is older (Tradeflow T-31).
+  const integrationHead = git(entry.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
+  const result = git(entry.worktreePath, ['rev-list', '--reverse', 'HEAD', `^${entry.baseCommit}`, `^${integrationHead}`])
   return result.stdout.trim().split(/\r?\n/).filter(Boolean)
 }
 

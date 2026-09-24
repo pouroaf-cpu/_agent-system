@@ -475,3 +475,19 @@ test('integrationCheck timeout kills the whole process tree and fails', async ()
   assert.match(result.output, /timed out after 1\.5s/)
   assert.ok(Date.now() - started < 20000, 'the grandchild node process did not hold the check open')
 })
+
+test('commits a card branch picked up from integration are not counted as card commits', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(f.integration, 'other.js'), 'other card\n')
+    git(f.integration, 'add', 'other.js'); git(f.integration, 'commit', '-m', 'other card landed')
+    const wt = prepared.entry.worktreePath
+    git(wt, 'merge', '--ff-only', git(f.integration, 'rev-parse', 'HEAD')) // brought up to date by hand
+    writeFileSync(join(wt, 'app.js'), 'card one\n'); git(wt, 'commit', '-am', 'T-1 change')
+    f.complete('T-1')
+    const results = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.equal(results[0].status, 'integrated', JSON.stringify(results))
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
