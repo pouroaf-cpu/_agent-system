@@ -5,6 +5,7 @@ node_modules/
 board.config.local.json
 .review-claims.json*
 review-workspaces/
+review-evidence/
 .deliveries/
 .card-runs/
 .workflow-state.json

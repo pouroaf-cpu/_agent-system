@@ -71,14 +71,25 @@ test('Queue cards waiting on a prerequisite in Owner or still moving are allowed
   put('queue', 'T-5', '**Blocked by:** T-99\n')
   writeFileSync(join(tasks, '.board.json'), JSON.stringify({ 'T-3': { pane_id: 'b3' } }))
   const agents = [{ pane_id: 'b3', agent_status: 'working' }]
-  const holds = { 'T-4': 'files busy, held by T-3 — lib/a.mjs' }
+  put('queue', 'T-6')
+  const holds = { 'T-4': 'files busy, held by T-3 — lib/a.mjs', 'T-6': 'installing dependencies in C:\\project' }
   checkStalls({ tasksDir: tasks, agents, holds, now: 0 })
   const stalls = checkStalls({ tasksDir: tasks, agents, holds, now: 25 * MIN })
   assert.deepEqual(stalls.map(s => s.id), ['T-5'], 'only the card waiting on a prerequisite that does not exist')
   assert.equal(findCard(tasks, 'T-5').column, 'owner')
   assert.equal(findCard(tasks, 'T-2').column, 'queue')
   assert.equal(findCard(tasks, 'T-4').column, 'queue')
+  assert.equal(findCard(tasks, 'T-6').column, 'queue', 'a background dependency install is a wait')
   assert.deepEqual(checkStalls({ tasksDir: tasks, agents, holds, builderSlotsFree: 0, now: 60 * MIN }), [], 'a full Builder cap is a wait, not a stall')
+})
+
+test('the low-disk pause is a wait and restarts every stall window', t => {
+  const { tasks, put } = board(t)
+  put('planning', 'T-1')
+  checkStalls({ tasksDir: tasks, now: 0 })
+  assert.deepEqual(checkStalls({ tasksDir: tasks, paused: true, now: 60 * MIN }), [])
+  assert.deepEqual(checkStalls({ tasksDir: tasks, now: 70 * MIN }), [])
+  assert.equal(findCard(tasks, 'T-1').column, 'planning')
 })
 
 test('a stopped Builder still stuck after T-11 recovery goes straight to Owner, hold kept', t => {

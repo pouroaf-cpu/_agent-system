@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove } from './lib/card-planner.mjs'
-import { alertOwnerCards } from './lib/owner-alerts.mjs'
+import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -32,6 +32,7 @@ const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
+const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
@@ -41,7 +42,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, freeGb } = await import('./lib/worktrees.mjs')
 const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
@@ -90,6 +91,27 @@ function schedulerActivity(project, message) {
   const event = /retry|spawn failed/i.test(message) ? 'retry' : /held|busy|not ready/i.test(message) ? 'hold' : 'scheduler'
   console.log(message)
   activity(project, cardId, event, message, event === 'retry' ? 'error' : 'info')
+}
+
+// Low-disk pause, shared by every project: checked at most every 10 minutes.
+// Under 3 GB free no new agents or worktrees start; above 4 GB they resume.
+const disk = { at: 0, low: false }
+function diskLow(now = Date.now()) {
+  if (now - disk.at < 10 * 60 * 1000) return disk.low
+  disk.at = now
+  let gb
+  try { gb = freeGb(config.projectsRoot) } catch { return disk.low }
+  const drive = config.projectsRoot.slice(0, 2)
+  if (!disk.low && gb < 3) {
+    disk.low = true
+    const message = `Kanban: drive ${drive} low on space (${gb.toFixed(1)} GB free); new agents paused`
+    for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 4 GB is free`, 'error')
+    pushover(`Kanban: drive ${drive} low on space`, message).catch(err => console.error(`low-disk Pushover failed: ${err.message}`))
+  } else if (disk.low && gb > 4) {
+    disk.low = false
+    for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
+  }
+  return disk.low
 }
 
 function archiveNoReview(project, tasksDir) {
@@ -330,8 +352,9 @@ async function pollProject(project) {
     const { agents, herdrUp } = await pollAgents(project)
     broadcast(project, 'agents', { project, agents, herdrUp })
     if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
+    const lowDisk = diskLow()
     if (activeCardRun(project)) {
-      await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
+      if (!lowDisk) await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
       broadcastBoard(project)
       return
     }
@@ -344,7 +367,7 @@ async function pollProject(project) {
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
-        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20,
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk,
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)
@@ -473,9 +496,9 @@ async function pollProject(project) {
 
     // Builders are the main flow. Start them before slower planner/reviewer
     // housekeeping so a guarded poll never starves Queue capacity.
-    await tick(project, agents)
+    if (!lowDisk) await tick(project, agents)
 
-    if (autoEnabled) {
+    if (autoEnabled && !lowDisk) {
       if (config.leadPlanner?.autoIssues) {
       const planner = await runCardPlanner({
         project,
@@ -1221,6 +1244,7 @@ async function startPollers() {
   pollersStarted = true
   console.log(`kanban: http://127.0.0.1:${port}`)
   console.log(`herdr: ${(await isRunning()) ? 'up' : 'down'}`)
+  cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
 
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.

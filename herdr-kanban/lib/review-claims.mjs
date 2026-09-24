@@ -8,6 +8,7 @@ import { requestPlannerCorrection } from './card-planner.mjs'
 import { recordOperationalFailure, evidenceFingerprint } from './workflow-state.mjs'
 import { projectEnvironment } from './project-control.mjs'
 import { isCardId, isReviewerAgent } from './ids.mjs'
+import { cleanClosedReviewSnapshots } from './review-snapshots.mjs'
 
 export const MAX_REVIEWERS = 4
 const file = root => join(root, '.review-claims.json')
@@ -21,7 +22,11 @@ export function readReviewClaims(root) {
 }
 const active = claim => !claim.closedAt
 const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
+// Claims only close inside a transaction; closed snapshots are then cleaned in the background.
 function transaction(root, update) {
+  try { return ledger(root, update) } finally { cleanClosedReviewSnapshots(root) }
+}
+function ledger(root, update) {
   const lock = `${file(root)}.lock`
   let fd
   if (existsSync(lock)) {

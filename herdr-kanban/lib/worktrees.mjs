@@ -1,9 +1,9 @@
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, rmdirSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, rmdirSync, statfsSync } from 'node:fs'
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 
@@ -200,6 +200,55 @@ function prepareDependencies(workspacePath, source) {
 
 export function prepareWorktreeEnvironment(entry) {
   prepareDependencies(entry.workspacePath, entry.integrationWorkspace)
+}
+
+export const freeGb = (path) => { const s = statfsSync(path); return s.bavail * s.bsize / 1e9 }
+const installs = new Map() // folder -> { running, failures, error }
+
+function runInstall(folder, command, logPath) {
+  return new Promise((done, fail) => {
+    const out = openSync(logPath, 'a')
+    let finished = false
+    const finish = (err) => { if (finished) return; finished = true; closeSync(out); err ? fail(err) : done() }
+    const child = spawn(command, { cwd: folder, shell: true, windowsHide: true, stdio: ['ignore', out, out] })
+    child.on('error', finish)
+    child.on('close', code => finish(code === 0 ? null : new Error(`${command} exited with code ${code}; see ${logPath}`)))
+  })
+}
+
+// Before a Builder starts: when the integration folder has a lockfile but no
+// node_modules, install there once in the background instead of sending the card
+// to Owner. Returns a hold reason, or null when the card may start.
+export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5 }) {
+  try {
+    const folder = resolve(gitSettings?.integrationPath || projectPath, card.workspace || '.')
+    if (!existsSync(join(folder, 'package.json'))) return null
+    const key = norm(folder), state = installs.get(key) || { failures: 0 }
+    if (state.running) return `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
+    if (state.failures >= 2) return `dependency install failed twice in ${folder}: ${state.error}`
+    const entry = readWorktrees(tasksDir)[card.id.toUpperCase()]
+    if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
+    if (!state.failures && existsSync(join(folder, 'node_modules'))) return null
+    if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
+    if (!state.failures && existsSync(join(dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()), 'node_modules'))) return null
+    const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
+    if (!Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) return null
+    const command = existsSync(join(folder, 'pnpm-lock.yaml')) ? 'pnpm install --frozen-lockfile'
+      : existsSync(join(folder, 'yarn.lock')) ? 'yarn install --frozen-lockfile'
+      : existsSync(join(folder, 'package-lock.json')) ? 'npm ci --no-audit --no-fund' : null
+    if (!command) return null
+    const gb = free(folder)
+    if (gb < minFreeGb) return `Drive ${parse(folder).root.replace(/[\\/]$/, '')} has only ${gb.toFixed(1)} GB free; free up space so dependencies can install`
+    mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
+    const logPath = join(tasksDir, '.evidence', `dependency-install-${Date.now()}.log`)
+    installs.set(key, { ...state, running: true })
+    Promise.resolve().then(() => install(folder, command, logPath)).then(
+      () => installs.delete(key),
+      err => installs.set(key, { failures: state.failures + 1, error: String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300) }))
+    return `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
+  } catch {
+    return null // the spawn path reports the dependency problem as before
+  }
 }
 
 function filesFor(card, workspace) {

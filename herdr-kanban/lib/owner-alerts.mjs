@@ -15,7 +15,7 @@ export function ownerReason(text) {
   return text.slice(at).replace(/\*\*Needs you\*\*[^\n]*\n+/, '').replace(/^Needs you:\s*/, '').split(/\n\s*\n/)[0].replace(/\s+/g, ' ').trim().slice(0, 400)
 }
 
-async function pushover(title, message, env = process.env) {
+export async function pushover(title, message, env = process.env) {
   const token = env.PUSHOVER_APP_TOKEN, user = env.PUSHOVER_USER_KEY
   if (!token || !user) throw new Error('Pushover credentials are not configured')
   const res = await fetch('https://api.pushover.net/1/messages.json', {

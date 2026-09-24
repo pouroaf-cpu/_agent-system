@@ -20,7 +20,7 @@ const seen = new Map() // `${tasksDir}|${id}` -> { column, mtime, since }
 
 const oneLine = (s, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max)
 
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, now = Date.now() }) {
+export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, paused = false, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = claims.filter(c => !c.closedAt && resolve(c.tasksDir) === resolve(tasksDir))
@@ -41,11 +41,12 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // Allowed waits: capacity, an unfinished prerequisite, or files held by another live
   // card. Only the stuck prerequisite is escalated, never the cards queued behind it.
   const allowedWait = (card) => {
+    if (paused) return true // low-disk pause: nothing may start, so nothing is stuck
     if (card.column === 'queue') {
       if (builderSlotsFree <= 0) return true
       const blockers = unmetBlockers(card, board, registry)
       if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
-      return /held by [A-Z]+-?\d+/i.test(String(holds[card.id] || ''))
+      return /held by [A-Z]+-?\d+|^installing dependencies in /i.test(String(holds[card.id] || ''))
     }
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true

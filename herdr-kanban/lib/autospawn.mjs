@@ -22,7 +22,7 @@ import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
-import { overlapHoldReason, readWorktrees, integrationStartHoldReason } from './worktrees.mjs'
+import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependencyInstallHold } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
 import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
@@ -281,6 +281,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
         || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
         || (slots <= 0 ? 'slots full' : null)
+        || dependencyInstallHold({ card: freshCard, projectPath, tasksDir, gitSettings })
       if (hold) {
         const dupId = duplicateLiveId(freshCard, fresh)
         const dupKey = duplicateIssueKey(freshCard, fresh)
@@ -296,7 +297,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         const transient = ['slots full', 'cooling down after failed spawn'].includes(hold)
           || hold.startsWith('files busy') && fileHolder && holderOf(fresh).includes(fileHolder)
         const workflow = readWorkflow(tasksDir)[freshCard.id] || {}
-        if (allowedDependencyWait) {
+        if (allowedDependencyWait || hold.startsWith('installing dependencies in ')) {
           held[freshCard.id] = hold
           delete workflow.queueHoldSince
           updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
