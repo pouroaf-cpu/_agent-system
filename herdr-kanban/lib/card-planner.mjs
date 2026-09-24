@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval } from './cards.mjs'
+import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard } from './cards.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
@@ -165,7 +165,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     // Owner is an explicit stop, including older technical-exhaustion cards.
     for (let card of [...board.issues, ...board.planning]) {
       if (onlyIds && !onlyIds.includes(card.id)) continue
-      if (!card.cardOwned && !card.audit) continue
+      // A legacy card in Planning has no Planner path: convert it, then plan it normally.
+      if (!card.cardOwned && !card.audit) {
+        if (card.column !== 'planning') continue
+        card = convertLegacyCard(tasksDir, card)
+      }
       // Waiting only on an operator-only approval: ask the operator, never re-prompt (T-148).
       if (awaitsOperatorApproval(readFileSync(card.path, 'utf8'))) {
         askForApproval(tasksDir, card)

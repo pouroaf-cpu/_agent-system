@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
-import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, historyPath } from './card-history.mjs'
 import { CARD_ID, nextCardId } from './ids.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
@@ -592,6 +592,29 @@ function constraintsFor(tasksDir, category) {
   const section = (name) => text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.trim()
   return [section('all'), section(category)].filter(Boolean).join('\n\n')
     || '<!-- No project-specific constraints for this category. -->'
+}
+
+// Legacy cards (migrated from TASKS.md, not card-owned) have no Planner path, so they
+// sat in Planning until the stall watchdog sent them to Owner (Healthypets T-01..03).
+// Convert in place to the card-owned template: same file, ID and title; the authored
+// body (before the first --- board-event separator, headings demoted) becomes the
+// Approved brief. The full original text is saved to card history first.
+export function convertLegacyCard(tasksDir, card, now = new Date()) {
+  const original = readFileSync(card.path, 'utf8')
+  if (card.audit || /^\*\*Workflow:\*\* card-owned$/m.test(original)) return card
+  const entry = appendHistory(tasksDir, card.id, { event: 'legacy-conversion-source', sourcePath: card.path, sourceHash: createHash('sha256').update(original).digest('hex'), text: original })
+  const lines = original.split(/\r?\n/)
+  const body = lines.slice(lines.findIndex(line => HEADING.test(line)) + 1).join('\n')
+    .split(/^---[ \t]*$/m)[0].replace(/^#{1,2}(?= )/gm, '###').trim()
+  const brief = `${body}\n\nConverted from a legacy card on ${now.toISOString()}; the original text, including its board history, is saved in ${historyPath(tasksDir, card.id).replaceAll('\\', '/')} (entry ${entry.id}).`
+  const values = { ID: card.id, TITLE: card.title, CREATED: original.match(/^\*\*Created:\*\*\s*(\S+)/m)?.[1] || now.toISOString(), CATEGORY: card.category, WORKSPACE: card.workspace || '.', MISSION: '', BRIEF: brief, PROJECT_CONSTRAINTS: constraintsFor(tasksDir, card.category) }
+  const text = readFileSync(TEMPLATE, 'utf8')
+    .replace(/\{\{(ID|TITLE|CREATED|CATEGORY|WORKSPACE|MISSION|BRIEF|PROJECT_CONSTRAINTS)\}\}/g, (_, key) => values[key])
+    .replace(/^\*\*Priority\*\* \d+\/10$/m, `**Priority** ${card.priority || 5}/10${card.blockedBy?.length ? `\n**Blocked by:** ${card.blockedBy.join(', ')}` : ''}`)
+  const temp = `${card.path}.convert-${process.pid}.tmp`
+  writeFileSync(temp, text, { flag: 'wx' })
+  renameSync(temp, card.path)
+  return parseCard(card.path, card.column)
 }
 
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
