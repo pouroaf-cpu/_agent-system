@@ -19,6 +19,7 @@ import { historyPath, appendHistory } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
+const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
 const PUBLIC = join(HERE, 'public')
 const CONFIG_PATH = process.env.KANBAN_CONFIG ?? join(HERE, 'board.config.json')
 const REVIEW_ROOT = dirname(CONFIG_PATH)
@@ -895,11 +896,16 @@ const handleRequest = async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
     try {
-      const input = req.method === 'GET' ? { project: url.searchParams.get('project'), id: url.searchParams.get('id') } : JSON.parse(body || '{}')
+      const input = req.method === 'GET' ? { project: url.searchParams.get('project'), id: url.searchParams.get('id'), report: url.searchParams.get('report') || undefined } : JSON.parse(body || '{}')
       const p = input.project
       if (!config.projects.includes(p)) throw new Error('Unknown project')
+      // Off-board Auditor reports live only under Projects/_audits (_roles/AUDITOR.md).
+      if (input.report) {
+        input.report = normalize(input.report)
+        if (!input.report.toLowerCase().startsWith(AUDITS_ROOT.toLowerCase()) || extname(input.report) !== '.md') throw new Error(`report must be a .md file under ${AUDITS_ROOT}`)
+      }
       if (req.method === 'GET') {
-        const { audit, findings, links } = auditFindings(tasksDirOf(p), input.id)
+        const { audit, findings, links } = auditFindings(tasksDirOf(p), input)
         return json(res, 200, { ok: true, audit: { id: audit.id, title: audit.title, column: audit.column }, findings, links })
       }
       const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''

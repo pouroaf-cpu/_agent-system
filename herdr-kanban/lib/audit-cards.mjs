@@ -2,6 +2,7 @@
 // Links go under the audit's ## Remediation links as `- F<n>: <card id>` or
 // `- F<n>: declined — <reason>`, the lines auditArchiveError already checks.
 import { readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 import { createCard, findCard, moveCard } from './cards.mjs'
 import { auditStatus, cardReadyFindings, section } from './audit-routing.mjs'
 import { CARD_ID } from './ids.mjs'
@@ -30,20 +31,32 @@ export function briefFor(auditId, f) {
   ].join('\n\n')
 }
 
-// Read-only view for the orchestrator's summary.
-export function auditFindings(tasksDir, id) {
+// An audit is either a board audit card (id) or an off-board report.md (report),
+// the Auditor agent's output in Projects/_audits. A report's links are written into
+// the report itself; the orchestrator archives its folder, not the board.
+function auditSource(tasksDir, { id, report }) {
+  if (report) {
+    const text = readFileSync(report, 'utf8')
+    const auditId = text.match(/^Audit ID:[^\S\r\n]*(\S.*?)\s*$/m)?.[1] || basename(dirname(report))
+    return { audit: { id: auditId, title: text.match(/^# (.+)$/m)?.[1]?.trim() || auditId, path: report, column: 'report' }, text }
+  }
   const audit = findCard(tasksDir, id)
   if (!audit.audit) throw new Error(`${audit.id} is not an audit card`)
-  const text = readFileSync(audit.path, 'utf8')
+  return { audit, text: readFileSync(audit.path, 'utf8') }
+}
+
+// Read-only view for the orchestrator's summary.
+export function auditFindings(tasksDir, source) {
+  const { audit, text } = auditSource(tasksDir, typeof source === 'string' ? { id: source } : source)
   if (auditStatus(text) !== 'FINDINGS') throw new Error(`${audit.id} has no FINDINGS conclusion`)
   const findings = cardReadyFindings(text)
   return { audit, text, findings, links: Object.fromEntries(findings.map(f => [f.n, linkLine(text, f.n) || null])) }
 }
 
-export function cardsFromAudit(tasksDir, { id, findings = [], decline = [], reason = '', prefix, mission = '' }) {
-  const { audit, findings: all, links } = auditFindings(tasksDir, id)
+export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = [], reason = '', prefix, mission = '' }) {
+  const { audit, findings: all, links } = auditFindings(tasksDir, { id, report })
   if (audit.column === 'archive') return { audit: audit.id, created: [], links, archived: true, remaining: [] }
-  if (!['owner', 'planning'].includes(audit.column)) throw new Error(`${audit.id} is in ${audit.column}; turn findings into cards once the report is in Owner or Planning`)
+  if (!report && !['owner', 'planning'].includes(audit.column)) throw new Error(`${audit.id} is in ${audit.column}; turn findings into cards once the report is in Owner or Planning`)
   const known = new Set(all.map(f => f.n))
   const numbers = (list, name) => {
     if (!Array.isArray(list) || list.some(n => !known.has(n))) throw new Error(`${name} must list finding numbers from: ${[...known].join(', ')}`)
@@ -78,6 +91,7 @@ export function cardsFromAudit(tasksDir, { id, findings = [], decline = [], reas
     writeFileSync(card.path, text.replace(/^\*\*Priority\*\*[^\S\r\n]*\d+[^\S\r\n]*\/[^\S\r\n]*10/m, `**Priority** ${card.priority}/10${blockers.length ? `\n**Blocked by:** ${blockers.join(', ')}` : ''}`))
   }
   const remaining = all.map(f => f.n).filter(n => !cardOf(n) && !declined(n))
-  if (!remaining.length) moveCard(tasksDir, audit.id, 'archive')
-  return { audit: audit.id, created: created.map(({ n, id }) => ({ n, id })), links, archived: !remaining.length, archivedNow: !remaining.length, remaining }
+  const done = !remaining.length && !report
+  if (done) moveCard(tasksDir, audit.id, 'archive')
+  return { audit: audit.id, created: created.map(({ n, id }) => ({ n, id })), links, archived: done, archivedNow: done, remaining }
 }

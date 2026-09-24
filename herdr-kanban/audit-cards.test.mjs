@@ -100,3 +100,19 @@ test('audit-cards: Blocked by, links, idempotency, decline and archive', () => {
     assert.throws(() => cardsFromAudit(dir, { id: c1.id, findings: 'all' }), /not an audit/)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('audit-cards: off-board report.md source links in the report and never archives', () => {
+  const dir = fixture()
+  try {
+    const path = join(dir, 'report.md')
+    writeFileSync(path, `# Journey audit\n\nAudit ID: 2026-09-24-injectbuddy-journey\n${report([finding(1), finding(2, { dependsOn: [1] })])}`)
+    const first = cardsFromAudit(dir, { report: path, findings: [1, 2], prefix: 'I' })
+    assert.equal(first.audit, '2026-09-24-injectbuddy-journey')
+    assert.deepEqual(first.remaining, [])
+    assert.equal(first.archived, false, 'the orchestrator archives report folders')
+    assert.match(readFileSync(path, 'utf8'), /## Remediation links[\s\S]*- F1: I-?\d+[\s\S]*- F2: I-?\d+/)
+    assert.match(readFileSync(findCard(dir, first.created[1].id).path, 'utf8'), new RegExp(String.raw`Blocked by:\*\* ${first.created[0].id}`))
+    assert.match(readFileSync(findCard(dir, first.created[0].id).path, 'utf8'), /Source: 2026-09-24-injectbuddy-journey finding 1/)
+    assert.equal(cardsFromAudit(dir, { report: path, findings: 'all', prefix: 'I' }).created.length, 0)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
