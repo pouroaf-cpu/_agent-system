@@ -102,3 +102,14 @@ test('cards queued behind a stalled prerequisite stay queued; only the prerequis
   assert.equal(findCard(tasks, 'T-42').column, 'queue')
   assert.equal(findCard(tasks, 'T-25').column, 'completed')
 })
+
+test('with nothing recorded, the Owner note says what the board observed (Healthypets legacy cards)', t => {
+  const { tasks } = board(t)
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  writeFileSync(join(tasks, 'planning', 'T-01.md'), '# T-01 — legacy card\n\n## Goal\n\nOld TASKS.md entry.\n')
+  checkStalls({ tasksDir: tasks, agents: [], now: 0 })
+  const [stall] = checkStalls({ tasksDir: tasks, agents: [], now: 20 * MIN })
+  assert.equal(stall.action, 'moved to Owner')
+  const text = readFileSync(findCard(tasks, 'T-01').path, 'utf8')
+  assert.match(text, /Last hold\/error: none recorded; the board observed that no Planner was ever started for this card \(legacy card format, not card-owned\)\./)
+})

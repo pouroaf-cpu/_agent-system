@@ -52,6 +52,23 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational
   }
 
+  // When nothing was recorded, say what the board can see instead of "none recorded".
+  const live = p => agents.some(a => a.pane_id === p)
+  const observed = (card) => {
+    if (['planning', 'issues'].includes(card.column)) {
+      const p = planners[card.id]?.paneId
+      if (!p) return `no Planner was ever started for this card${card.cardOwned || card.audit ? '' : ' (legacy card format, not card-owned)'}`
+      return live(p) ? `its Planner ${p} is idle without a handoff` : `its Planner ${p} is no longer running and did not hand off`
+    }
+    if (['queue', 'working'].includes(card.column)) {
+      const p = bindings[card.id]?.pane_id || workflow[card.id]?.builder?.pane_id
+      if (!p) return 'no Builder was ever started for this card'
+      return live(p) ? `its Builder ${p} is idle without a handoff` : `its Builder ${p} is no longer running`
+    }
+    if (card.column === 'review' && !mine.some(c => c.cards.includes(card.id))) return 'no Reviewer has claimed this card'
+    return 'no agent, binding or hold is recorded for this card'
+  }
+
   const stalls = []
   for (const card of idle.values()) {
     const entry = seen.get(`${tasksDir}|${card.id}`)
@@ -74,7 +91,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     } else {
       action = 'moved to Owner'
       const moved = moveCard(tasksDir, card.id, 'owner')
-      writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} sat in ${lane} for ${mins} minutes with no agent working on it. Last hold/error: ${hold || 'none recorded'}. ${limit ? 'Dragging it back resets its workflow-limit counters.' : tried ? 'The automatic retry already ran and did not move it.' : 'No automatic recovery applies.'} All work is preserved. Should the board try again (drag it back to ${lane}), or do you want to change or cancel it?`)
+      writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} sat in ${lane} for ${mins} minutes with no agent working on it. Last hold/error: ${hold || `none recorded; the board observed that ${observed(card)}`}. ${limit ? 'Dragging it back resets its workflow-limit counters.' : tried ? 'The automatic retry already ran and did not move it.' : 'No automatic recovery applies.'} All work is preserved. Should the board try again (drag it back to ${lane}), or do you want to change or cancel it?`)
     }
     appendFileSync(join(tasksDir, 'stalls.log'), `${at}\t${card.id}\t${card.column}\t${reason}\t${action}\n`)
     stalls.push({ id: card.id, column: card.column, reason, action })
