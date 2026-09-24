@@ -617,6 +617,24 @@ export function convertLegacyCard(tasksDir, card, now = new Date()) {
   return parseCard(card.path, card.column)
 }
 
+// Blocked-by prerequisites not yet landed: Completed and integrated, or Archive.
+export function unmetBlockers(card, board, integrated = {}) {
+  const live = Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)
+  return (card.blockedBy || []).filter((id) => {
+    const alive = live.filter((c) => c.id === id)
+    const archived = board.archive.filter((c) => c.id === id)
+    if (!alive.length && archived.length === 1) return false
+    return !(alive.length === 1 && archived.length === 0 && alive[0].column === 'completed' && integrated[id]?.state === 'integrated')
+  })
+}
+// Unmet prerequisites that are still live cards: an allowed wait (TF44). A
+// prerequisite missing from the board can never land, so that is not a wait.
+export function waitingOnPrerequisites(card, board, integrated = {}) {
+  const unmet = unmetBlockers(card, board, integrated)
+  const live = new Set(Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards.map((c) => c.id)))
+  return unmet.length && unmet.every((id) => live.has(id)) ? unmet : []
+}
+
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
 // one the project keeps issuing legacy T- ids.
 export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', now = new Date() }) {

@@ -13,7 +13,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive } from './cards.mjs'
+import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
@@ -112,14 +112,8 @@ export function slotsFree({ tasksDir, agents, max, now = Date.now() }) {
 // anyway and paying for a builder to boot, read the card, and immediately
 // kick itself back — cards stalled on the same unmet dependency, repeatedly,
 // before this gate existed.
-export function unmetBlockers(card, board, integrated = {}) {
-  return (card.blockedBy || []).filter((id) => {
-    const live = liveCards(board).filter((c) => c.id === id)
-    const archived = board.archive.filter((c) => c.id === id)
-    if (!live.length && archived.length === 1) return false
-    return !(live.length === 1 && archived.length === 0 && live[0].column === 'completed' && integrated[id]?.state === 'integrated')
-  })
-}
+// Lives in cards.mjs so the Planner can use it without an import cycle.
+export { unmetBlockers }
 
 const liveCards = (board) => Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)
 

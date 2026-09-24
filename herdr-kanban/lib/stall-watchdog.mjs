@@ -6,7 +6,7 @@
 // Planner, or moves the card to Owner.
 import { appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { readBoard, moveCard, columnByKey } from './cards.mjs'
+import { readBoard, moveCard, columnByKey, waitingOnPrerequisites } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
@@ -47,6 +47,8 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
       if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
       return /held by [A-Z]+-?\d+/i.test(String(holds[card.id] || ''))
     }
+    // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
+    if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
     // Legacy Completed cards with no board worktree wait for the operator's disposition by design.
     if (card.column === 'completed' && !registry[card.id]) return true
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational

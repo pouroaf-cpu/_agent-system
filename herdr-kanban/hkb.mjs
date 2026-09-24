@@ -17,10 +17,10 @@
 
 import { existsSync, appendFileSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion } from './lib/cards.mjs'
+import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection } from './lib/card-planner.mjs'
@@ -104,6 +104,7 @@ if (verb === 'rework' && !note) fail('rework needs feedback the builder can act 
 let card
 let previousColumn
 let approvalWait = false
+let prerequisiteWait = false
 try {
   const current = findCard(tasksDir, cardId)
   // Review runs on integrated code, so every Builder handoff goes to Completed first.
@@ -163,7 +164,13 @@ try {
     if (!canArchive(current)) fail('pass needs current nonempty Reviewer evidence and latest Review verdict: PASS already recorded')
     assertReviewInputs(reviewRoot, tasksDir, current.id)
   }
-  if (['issue', 'rework'].includes(verb) && !approvalWait) {
+  // A Planner reporting that Blocked-by prerequisites have not landed is a valid
+  // wait, not a failed plan (TF44): the card stays in Planning until they land.
+  prerequisiteWait = verb === 'issue' && !approvalWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
+  if (prerequisiteWait) {
+    target = 'planning'
+    appendHistory(tasksDir, current.id, { event: 'planner-prerequisite-wait', stage: current.column, note, waitingFor: waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)) })
+  } else if (['issue', 'rework'].includes(verb) && !approvalWait) {
     const category = failureCategory(note)
     if (category === 'incidental') fail('Incidental findings alone are not a failed handoff: record evidence/classification in the current result and use the normal done/pass handoff only when every agreed criterion is met. In-scope or change-caused defects still require issue/rework.')
     target = failureDestination(category, current.column)
@@ -226,7 +233,7 @@ activityLog({
   cardId: card.id,
   event: previousColumn === 'working' ? `builder-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
     : previousColumn === 'review' ? `reviewer-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
-    : previousColumn === 'planning' ? `planner-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
+    : previousColumn === 'planning' ? `planner-${prerequisiteWait ? 'wait' : ['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
     : ['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'move',
   message: `${previousColumn} -> ${target} (${verb})`,
 })

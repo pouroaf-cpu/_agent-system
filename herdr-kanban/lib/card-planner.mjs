@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard } from './cards.mjs'
+import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
+import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
@@ -14,7 +15,7 @@ import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignm
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
-import { readDelivery } from './delivery-state.mjs'
+import { readDelivery, saveDelivery } from './delivery-state.mjs'
 const busy = new Set()
 export function correctionFingerprint(text) {
   const last = text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1)
@@ -177,7 +178,38 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         continue
       }
       let owner = owners[card.id]
-      const held = operationalHold(tasksDir, card, projectPath)
+      // Blocked-by prerequisites still unfinished: planning now only produces
+      // "not build-ready yet" and loops to Owner (TF44). Wait without a Planner;
+      // a Planner that already reported stays idle and is not a no-handoff.
+      const waitingFor = card.column === 'planning' && !cardRunContext() && waitingOnPrerequisites(card, board, readWorktrees(tasksDir))
+      if (waitingFor?.length) {
+        const busyPlanner = owner && agents.some(a => a.pane_id === owner.paneId && !['idle', 'done'].includes(a.agent_status))
+        if (owner?.submitted && !busyPlanner) {
+          owner.submitted = false
+          delete owner.inactiveSince
+          save(tasksDir, owners)
+          appendHistory(tasksDir, card.id, { event: 'planner-prerequisite-wait', stage: 'planning', waitingFor })
+        }
+        continue
+      }
+      // An uncertain delivery never resolves by waiting (T-41). Once its pane is gone,
+      // or idle past the handoff grace, it failed: retire that Planner, start a fresh one.
+      const delivery = owner?.paneId && owner.lifecycle === 'active' && !cardRunContext() && readDelivery(session, owner.paneId)
+      const deliveryAgent = delivery && agents.find(a => a.pane_id === owner.paneId)
+      const deliveryFailed = delivery?.status === 'uncertain' && (!deliveryAgent || (['idle', 'done'].includes(deliveryAgent.agent_status) && now - Date.parse(delivery.at || 0) >= handoffGraceMs))
+      if (deliveryFailed) {
+        saveDelivery(session, owner.paneId, { ...delivery, status: 'failed', reason: 'Uncertain delivery resolved as failed; a fresh Planner takes over' })
+        appendHistory(tasksDir, card.id, { event: 'planner-delivery-failed', stage: card.column, paneId: owner.paneId, pane: deliveryAgent || null, deliveryAt: delivery.at })
+        updateWorkflow(tasksDir, card.id, { operational: null })
+        owner.submitted = false
+        delete owner.inactiveSince
+        if (!deliveryAgent) {
+          owner.revokedPaneIds = [...new Set([...(owner.revokedPaneIds || []), owner.paneId])]
+          await paneClose(owner.paneId, session).catch(() => {})
+        }
+        save(tasksDir, owners)
+      }
+      const held = !deliveryFailed && operationalHold(tasksDir, card, projectPath)
       // A Planner that stopped without a handoff is not a reason to park the card
       // in Issues (older boards did; T-8, 2026-09-24): lift that hold and recover.
       const plannerHold = !!held && card.column === 'issues' && !!owner && PLANNER_NO_HANDOFF.test(held) && !cardRunContext()
@@ -191,7 +223,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         save(tasksDir, owners)
         if (owner.noHandoffCount >= 2) { askOwnerAfterNoHandoffs(card, owner); continue }
       }
-      let fresh = plannerHold
+      let fresh = plannerHold || deliveryFailed
       if (owner?.lifecycle === 'retiring') continue
       if (owner?.lifecycle === 'retired') {
         if (!owner.recoveryReady || !cardRunContext()) continue
@@ -275,8 +307,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       // Corrections and retries go to a fresh session, never back into an idle
       // (possibly day-old) one. An uncertain delivery keeps its pane for inspection.
       const pending = owner && agent && readDelivery(session, owner.paneId)
-      if (owner && agent && (!pending || ['confirmed', 'cancelled'].includes(pending.status))) {
-        await retire(card, owner, agent, fresh ? 'Planner ended without a handoff' : 'Correction goes to a fresh Planner')
+      if (owner && agent && (!pending || ['confirmed', 'cancelled', 'failed'].includes(pending.status))) {
+        await retire(card, owner, agent, deliveryFailed ? 'Planner prompt delivery failed' : fresh ? 'Planner ended without a handoff' : 'Correction goes to a fresh Planner')
         agent = null
         fresh = true
       }
