@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
@@ -38,6 +38,25 @@ export function laneBeforeOwner(tasksDir, id) {
     try { const entry = JSON.parse(line); if (entry.event === 'transition' && entry.to === 'owner') from = entry.from } catch { /* torn line */ }
   }
   return from
+}
+// When the card last moved into `column` (ms), from its history transitions; null when
+// history does not say. Histories reach ~0.5MB and every poll asks, so the answer is
+// cached per file size+mtime.
+const entered = new Map() // path -> { key, at }
+export function laneEnteredAt(tasksDir, id, column) {
+  const path = historyPath(tasksDir, id)
+  let stat
+  try { stat = statSync(path) } catch { return null }
+  const key = `${stat.size}:${stat.mtimeMs}:${column}`
+  if (entered.get(path)?.key !== key) {
+    let at = null
+    for (const line of readFileSync(path, 'utf8').split('\n')) {
+      if (!line.includes('"transition"')) continue
+      try { const e = JSON.parse(line); if (e.event === 'transition') at = e.to === column ? Date.parse(e.at) : null } catch { /* torn line */ }
+    }
+    entered.set(path, { key, at })
+  }
+  return entered.get(path).at
 }
 const historyMarker =/^\*\*(?:Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \d+|Technical recovery|Diagnostic recovery|Dirty snapshot)\*\*/m
 export function focusedText(text, role) {

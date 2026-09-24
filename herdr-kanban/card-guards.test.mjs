@@ -94,8 +94,7 @@ test('workflow limits count only runs since the operator retried; a held card re
   assert.match(checkWorkflowLimits(tasks, 'T-4', 'planner'), /maxRunsPerStage reached \(3\/2\)/)
 
   // The stall watchdog skips the useless retry and asks the operator, naming the limit.
-  checkStalls({ tasksDir: tasks, now: 0 })
-  const [stall] = checkStalls({ tasksDir: tasks, now: 20 * 60000 })
+  const [stall] = checkStalls({ tasksDir: tasks, now: Date.now() + 20 * 60000 })
   assert.equal(stall.action, 'moved to Owner')
   assert.match(readFileSync(findCard(tasks, 'T-4').path, 'utf8'), /Last hold\/error: maxRunsPerStage reached \(3\/2\); dispatch held\.[\s\S]*resets its workflow-limit counters/)
 

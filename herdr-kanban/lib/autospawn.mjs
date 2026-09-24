@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
-import { spawnForCard, deliver, START_TIMEOUT_MS } from './spawn.mjs'
+import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
@@ -351,14 +351,14 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           },
         })
         bind(tasksDir, moved.id, result)
-        updateWorkflow(tasksDir, moved.id, { builder: result, operational: null })
+        updateWorkflow(tasksDir, moved.id, { builder: result, operational: null, startFailure: null })
         clearRetries(tasksDir, moved.id)
         herdrLog(`${moved.id} → working (auto-spawn)`)
         started.push(moved.id)
         slots--
       } catch (err) {
         if (err.paused) { held[moved.id] = err.message; continue }
-        recordOperationalFailure(tasksDir, moved, err.message, projectPath, gitSettings)
+        if (!err.startFailed) recordOperationalFailure(tasksDir, moved, err.message, projectPath, gitSettings)
         recordSpawnFailure({ project, cap: max, reason: err.message })
         if (err.preservePane) {
           log?.(`${moved.id}: ${err.message}`)
@@ -368,7 +368,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         }
         unbind(tasksDir, moved.id)   // the provisional claim dies with the pane
         moveCard(tasksDir, moved.id, 'queue')
-        held[moved.id] = `Operational recovery held: ${err.message}`
+        if (!err.startFailed) held[moved.id] = `Operational recovery held: ${err.message}`
+        else if (!recordStartFailure(tasksDir, moved.id, 'builder', err.message)) held[moved.id] = `Builder start failed; retrying once with a fresh tab: ${err.message}`
         onChange?.()
         continue
       }
@@ -683,7 +684,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     beginSpawn(paneId)
     try {
       // Same generous startup budget as a builder — Opus is no faster to boot.
-      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? name
+      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(err => { throw startFailed(err) }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({
@@ -693,10 +694,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
       } catch {}
       await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path }), session)
       updateReviewClaim(reviewRoot, claim.id, { phase: 'running', submittedAt: Date.now() })
-      for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null })
+      for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
-      throw Object.assign(new Error(`reviewer spawn failed: ${err.message}`), { paused: err.paused, preservePane: err.preservePane })
+      throw Object.assign(new Error(`reviewer spawn failed: ${err.message}`), { paused: err.paused, preservePane: err.preservePane, startFailed: err.startFailed })
     } finally {
       endSpawn(paneId)
     }
@@ -704,8 +705,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     // Reviewer ownership is in the separate global claim ledger, never Builder slots.
     return { pane_id: paneId, tab_id: created?.tab?.tab_id, model, name, cards: cards.map((c) => c.id) }
   } catch (err) {
-    if (!err.paused && !err.busy) for (const card of assignedCards) recordOperationalFailure(tasksDir, card, err.message, projectPath)
-    if (claim && paneId) updateReviewClaim(reviewRoot, claim.id, { phase: 'uncertain', error: err.message })
+    if (err.startFailed) for (const card of assignedCards) recordStartFailure(tasksDir, card.id, 'reviewer', err.message)
+    else if (!err.paused && !err.busy) for (const card of assignedCards) recordOperationalFailure(tasksDir, card, err.message, projectPath)
+    // A start failure closed its pane, so the claim is released for the retry.
+    if (claim && paneId && !err.startFailed) updateReviewClaim(reviewRoot, claim.id, { phase: 'uncertain', error: err.message })
     else if (claim) failReviewClaim(reviewRoot, claim.id, err.message)
     throw err
   }

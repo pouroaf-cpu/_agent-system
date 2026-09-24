@@ -22,7 +22,7 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
     prepareCardWorktree: () => { calls.push(['prepare']); return { workspacePath: root } }, cleanupPreparedWorktree: () => {},
   } })
   mock.module('./lib/bindings.mjs', { namedExports: { readBindings: () => ({}), unbind: () => {} } })
-  mock.module('./lib/cards.mjs', { namedExports: { readBoard: () => ({ queue: [card] }) } })
+  mock.module('./lib/cards.mjs', { namedExports: { readBoard: () => ({ queue: [card] }), findCard: () => card, moveCard: () => card, columnByKey: () => ({}) } })
   mock.module('./lib/request-usage.mjs', { namedExports: { recordUsageFinish: async () => {}, readUsage: () => ({}) } })
   mock.module('./lib/project-control.mjs', { namedExports: { assertPromptAllowed: () => { calls.push(['pause-check']); if (paused) throw new Error('paused') } } })
   mock.module('./lib/card-run.mjs', { namedExports: {

@@ -33,7 +33,7 @@ const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
-const { checkStalls } = await import('./lib/stall-watchdog.mjs')
+const { checkStalls, laneTimes } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
@@ -227,9 +227,11 @@ function boardPayload(project) {
   const board = readBoard(tasksDirOf(project))
   const planners = readCardPlanners(tasksDirOf(project))
   const workflow = readWorkflow(tasksDirOf(project))
-  let indicators = {}
+  let indicators = {}, times = {}
   try { indicators = stageIndicators({ tasksDir: tasksDirOf(project), reviewRoot: REVIEW_ROOT, board, planners, claims: readReviewClaims(REVIEW_ROOT), agents: cached.agents, workflow }) }
   catch (error) { console.error(`${project}: stage indicators unavailable — ${error.message}`) }
+  try { times = laneTimes({ tasksDir: tasksDirOf(project), board, planners, workflow, claims: readReviewClaims(REVIEW_ROOT), agents: cached.agents }) }
+  catch (error) { console.error(`${project}: lane times unavailable — ${error.message}`) }
   const blockerIds = {}
   try {
     const registry = readWorktrees(tasksDirOf(project))
@@ -254,6 +256,8 @@ function boardPayload(project) {
     planners,
     workflow,
     stageIndicators: indicators,
+    // Per card in Planning/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole }.
+    laneTimes: times,
     bindings: readBindings(tasksDirOf(project)),
     retries: readRetries(tasksDirOf(project)),
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or

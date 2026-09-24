@@ -6,7 +6,7 @@ export { readCardPlanners } from './planner-state.mjs'
 import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, sessionOf } from './herdr.mjs'
-import { deliver, START_TIMEOUT_MS } from './spawn.mjs'
+import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
@@ -40,7 +40,7 @@ export function requestPlannerCorrection(dir, cardId) {
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
 // restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
-  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null })
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
 // Board Approve button on an Owner card: record the decision, add the operator-only
@@ -97,6 +97,18 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       const moved = moveCard(tasksDir, card.id, 'owner')
       writeCurrentFeedback(tasksDir, moved, 'Needs you', `Two Planner sessions in a row stopped without handing off ${card.id} (last: ${String(owner.noHandoffReason || 'no handoff').split('; pane evidence')[0]}). Their output is saved in the card history. Should the board try planning it again (drag it back to Planning), or do you want to change or cancel the brief?`)
     }
+    // A failed agent start or a prompt left unsubmitted: close that pane now; the next
+    // poll retries once with a fresh tab, and a second failure in a row goes to Owner.
+    const failStart = async (card, owner, error) => {
+      if (!error.startFailed) throw error
+      await paneClose(owner.paneId, session).catch(() => {})
+      owner.revokedPaneIds = [...new Set([...(owner.revokedPaneIds || []), owner.paneId])]
+      owner.submitted = false
+      owner.startRetry = true
+      save(tasksDir, owners)
+      recordStartFailure(tasksDir, card.id, 'planner', error.message)
+      throw error
+    }
     // fresh: a deliberate new session for a correction or no-handoff retry, not a
     // replacement for a failed launch, so it does not use up the replacement.
     const launch = async (card, previous = null, { fresh = false } = {}) => {
@@ -127,7 +139,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
       save(tasksDir, owners)
-      owner.name = (await agentStart({ name: owner.name, paneId, model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? owner.name
+      owner.name = (await agentStart({ name: owner.name, paneId, model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
     const submit = async (card, owner, agent) => {
@@ -143,14 +155,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       delete owner.inactiveSince
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
-      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Remain idle after the plan. The board will return corrections to this session and retire it on archive.' + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session)
+      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Remain idle after the plan. The board will return corrections to this session and retire it on archive.' + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
       }
       assertPlannerAssignment(tasksDir, card.id, owner)
       if (owner.deliveryFailures) { delete owner.deliveryFailures; save(tasksDir, owners) }
-      updateWorkflow(tasksDir, card.id, { operational: null })
+      updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
       return true
     }
     // Retirement preserves the ledger and card; only the agent pane is closed.
@@ -233,7 +245,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         save(tasksDir, owners)
         if (owner.noHandoffCount >= 2) { askOwnerAfterNoHandoffs(card, owner); continue }
       }
-      let fresh = plannerHold || deliveryFailed
+      let fresh = plannerHold || deliveryFailed || !!owner?.startRetry
       if (owner?.lifecycle === 'retiring') continue
       if (owner?.lifecycle === 'retired') {
         if (!owner.recoveryReady || !cardRunContext()) continue
@@ -332,7 +344,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           ;({ owner, agent } = await launch(card, previous, { fresh }))
           spawnedNewAgent = true
         } catch (error) {
-          if (error.paused) throw error
+          if (error.paused || error.startFailed) throw error
           recordOperationalFailure(tasksDir, card, error.message, projectPath)
           escalate(error)
           throw error
@@ -341,7 +353,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       try {
         await submit(card, owner, agent)
       } catch (error) {
-        if (error.paused) throw error
+        if (error.paused || error.startFailed) throw error // failStart already closed the pane and counted it
         if (cardRunContext()) { stopCardRun(project, card.id, error.message); throw error }
         if (error.preservePane) {
           recordOperationalFailure(tasksDir, card, error.message, projectPath)
@@ -358,7 +370,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           spawnedNewAgent = true
           await submit(card, owner, agent)
         } catch (replacementError) {
-          escalate(replacementError)
+          if (!replacementError.startFailed) escalate(replacementError)
           throw replacementError
         }
       }

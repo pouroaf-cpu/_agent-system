@@ -2059,8 +2059,8 @@ test('deliver does not resend a full prompt when the pane already shows Pasted C
     sendKeys: async () => {},
     list: async () => [],
     confirmMs: 1,
-  }), /press Enter/)
-  assert.equal(sends, 1, 'the recovery is manual Enter, not a duplicate paste')
+  }), /unsubmitted .* after 3 Enter presses/)
+  assert.equal(sends, 1, 'the recovery is Enter, never a duplicate paste')
 })
 
 test('deliver presses Enter once for staged Pasted Content and accepts confirmed working state', async () => {

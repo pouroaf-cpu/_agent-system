@@ -5,37 +5,72 @@
 // It never deletes or resets work: it only lifts a hold, asks for a fresh
 // Planner, or moves the card to Owner.
 import { appendFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { readBoard, moveCard, columnByKey, waitingOnPrerequisites } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneEnteredAt } from './card-history.mjs'
+import { readUsage } from './request-usage.mjs'
+import { readDelivery } from './delivery-state.mjs'
+import { sessionOf } from './herdr.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 
-// ponytail: in-memory clock, so a restart gives every card a fresh window.
-const seen = new Map() // `${tasksDir}|${id}` -> { column, mtime, since }
-
 const oneLine = (s, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max)
+const ms = at => Date.parse(at || '') || 0
+const ROLE = { planning: 'planner', issues: 'planner', queue: 'builder', working: 'builder', review: 'reviewer' }
 
+// Live agents bound to a card, busiest first: its Planner, Builder and Reviewer panes.
+function boundAgents(id, { agents, bindings, planners, workflow, claims }) {
+  const panes = [['planner', planners[id]?.paneId], ['builder', bindings[id]?.pane_id], ['builder', workflow[id]?.builder?.pane_id],
+    ...claims.filter(c => c.cards.includes(id)).map(c => ['reviewer', c.paneId])]
+  return panes.flatMap(([role, pane]) => agents.filter(a => pane && a.pane_id === pane).map(agent => ({ role, agent })))
+    .sort((a, b) => (b.agent.agent_status === 'working') - (a.agent.agent_status === 'working'))
+}
+const openClaims = (claims, tasksDir) => claims.filter(c => !c.closedAt && resolve(c.tasksDir) === resolve(tasksDir))
+
+// Lane timer data for the board: when each card entered its lane (history, else file
+// mtime) and whether a live agent bound to it is working right now.
+export function laneTimes({ tasksDir, board, agents = [], claims = [], planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), bindings = readBindings(tasksDir) }) {
+  const ctx = { agents, bindings, planners, workflow, claims: openClaims(claims, tasksDir) }
+  const result = {}
+  for (const card of ['planning', 'queue', 'working', 'review', 'completed'].flatMap(column => board[column] || [])) {
+    const [bound] = boundAgents(card.id, ctx)
+    result[card.id] = {
+      since: new Date(laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime).toISOString(),
+      agentActive: bound?.agent.agent_status === 'working',
+      agentRole: bound?.role ?? null,
+    }
+  }
+  return result
+}
+
+// The stall clock is durable so a board restart never resets it: the latest of the
+// card file changing, the card entering its lane, an agent starting or finishing on it
+// (usage runs, bindings), the last recovery, and the last time this watchdog saw an
+// agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
 export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, paused = false, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
-  const mine = claims.filter(c => !c.closedAt && resolve(c.tasksDir) === resolve(tasksDir))
-  const working = new Set(agents.filter(a => a.agent_status === 'working').map(a => a.pane_id))
+  const mine = openClaims(claims, tasksDir)
+  const runs = Object.values(readUsage(tasksDir).runs || {})
+  const ctx = { agents, bindings, planners, workflow, claims: mine }
   const busy = id => !!bindings[id]?.spawning || mine.some(c => c.cards.includes(id) && c.phase === 'starting') ||
-    [bindings[id]?.pane_id, planners[id]?.paneId, workflow[id]?.builder?.pane_id, ...mine.filter(c => c.cards.includes(id)).map(c => c.paneId)].some(p => p && working.has(p))
+    boundAgents(id, ctx).some(b => b.agent.agent_status === 'working')
+  const reset = id => { if (now - ms(workflow[id]?.stallResetAt) >= 60000) workflow[id] = updateWorkflow(tasksDir, id, { stallResetAt: new Date(now).toISOString() }) }
+  const sinceOf = card => Math.max(card.mtime, laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
+    ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
+    ...runs.filter(r => r.cardIds?.includes(card.id)).flatMap(r => [ms(r.start?.at), ms(r.finish?.at)]))
 
   const byId = new Map(Object.entries(board).filter(([k]) => k !== 'archive').flatMap(([, cards]) => cards).map(c => [c.id, c]))
   const idle = new Map()
   for (const card of byId.values()) {
     if (card.column === 'owner') continue
-    const key = `${tasksDir}|${card.id}`, prev = seen.get(key)
-    const since = !prev || prev.column !== card.column || prev.mtime !== card.mtime || busy(card.id) ? now : prev.since
-    seen.set(key, { column: card.column, mtime: card.mtime, since })
-    if (now - since >= minutes * 60000) idle.set(card.id, card)
+    if (busy(card.id)) { reset(card.id); continue }
+    const since = sinceOf(card)
+    if (now - since >= minutes * 60000) idle.set(card.id, { card, since })
   }
 
   // Allowed waits: capacity, an unfinished prerequisite, or files held by another live
@@ -56,33 +91,36 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   }
 
   // When nothing was recorded, say what the board can see instead of "none recorded".
+  // An idle agent whose prompt never went in (e.g. a paste left unsubmitted) is a failed
+  // delivery, not an agent that finished without a handoff.
+  const session = sessionOf(basename(resolve(tasksDir, '..')))
   const live = p => agents.some(a => a.pane_id === p)
+  const idleAs = (role, p) => ['uncertain', 'failed'].includes(readDelivery(session, p)?.status) ? `its ${role} ${p} is idle and never accepted its prompt (failed delivery)` : `its ${role} ${p} is idle without a handoff`
   const observed = (card) => {
     if (['planning', 'issues'].includes(card.column)) {
       const p = planners[card.id]?.paneId
       if (!p) return `no Planner was ever started for this card${card.cardOwned || card.audit ? '' : ' (legacy card format, not card-owned)'}`
-      return live(p) ? `its Planner ${p} is idle without a handoff` : `its Planner ${p} is no longer running and did not hand off`
+      return live(p) ? idleAs('Planner', p) : `its Planner ${p} is no longer running and did not hand off`
     }
     if (['queue', 'working'].includes(card.column)) {
       const p = bindings[card.id]?.pane_id || workflow[card.id]?.builder?.pane_id
       if (!p) return 'no Builder was ever started for this card'
-      return live(p) ? `its Builder ${p} is idle without a handoff` : `its Builder ${p} is no longer running`
+      return live(p) ? idleAs('Builder', p) : `its Builder ${p} is no longer running`
     }
     if (card.column === 'review' && !mine.some(c => c.cards.includes(card.id))) return 'no Reviewer has claimed this card'
     return 'no agent, binding or hold is recorded for this card'
   }
 
   const stalls = []
-  for (const card of idle.values()) {
-    const entry = seen.get(`${tasksDir}|${card.id}`)
-    if (allowedWait(card)) { entry.since = now; continue }
-    const at = new Date(now).toISOString(), mins = Math.round((now - entry.since) / 60000)
+  for (const { card, since } of idle.values()) {
+    if (allowedWait(card)) { reset(card.id); continue }
+    const at = new Date(now).toISOString(), mins = Math.round((now - since) / 60000)
     const lane = columnByKey(card.column).label
     // One retry per lane visit: a card file that changed since the retry is a new visit.
     const last = workflow[card.id]?.stallRecovery
     const tried = last?.column === card.column && last.mtime === card.mtime
     // A workflow-limit hold never clears by retrying, so it goes straight to Owner with its reason.
-    const role = { planning: 'planner', issues: 'planner', queue: 'builder', working: 'builder', review: 'reviewer' }[card.column]
+    const role = ROLE[card.column]
     const limit = role && checkWorkflowLimits(tasksDir, card.id, role)
     const hold = oneLine(limit || workflow[card.id]?.operational?.reason || holds[card.id] || registry[card.id]?.reason || (tried && last.hold))
     const reason = `no change for ${mins}m and no agent working${hold ? `; last hold: ${hold}` : ''}`
@@ -90,7 +128,6 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (action) {
       updateWorkflow(tasksDir, card.id, { stallRecovery: { column: card.column, mtime: card.mtime, at, action, hold } })
       appendHistory(tasksDir, card.id, { event: 'stall-recovery', stage: card.column, reason, action })
-      entry.since = now // give the recovery a full window
     } else {
       action = 'moved to Owner'
       const moved = moveCard(tasksDir, card.id, 'owner')

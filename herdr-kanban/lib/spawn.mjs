@@ -4,12 +4,13 @@
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList } from './herdr.mjs'
 import { workerPrompt, paneLabel, agentName } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
-import { readBoard } from './cards.mjs'
+import { readBoard, findCard, moveCard, columnByKey } from './cards.mjs'
+import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
 import { recordUsageFinish } from './request-usage.mjs'
 import { cleanupPreparedWorktree, prepareCardWorktree } from './worktrees.mjs'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertCardRunSelection, cardRunContext, bindCardRunAssignment } from './card-run.mjs'
-import { readWorkflow } from './workflow-state.mjs'
+import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries } from './delivery-state.mjs'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -41,14 +42,36 @@ export async function deliverWith({
   } catch (first) {
     if (first.paused) throw first
     if ((await list(session).catch(() => [])).some(a => a.pane_id === paneId && a.agent_status === 'working')) return
-    const pane = String(await read(paneId, session).catch(() => ''))
-    if (/Pasted Content/i.test(pane)) {
-      await sendKeys(paneId, ['enter'], session).catch(err => { if (err.paused) throw Object.assign(err, { staged: true }) })
-      if (await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return
-      throw preservePane(`agent prompt is staged as Pasted Content; press Enter in ${paneId} to submit it, do not resend the full task`)
+    if (stagedPrompt(await read(paneId, session).catch(() => ''), text)) {
+      const result = await submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs })
+      if (result === 'working') return
+      // Still staged after three Enters: nothing ran, so this is a failed start. An
+      // explicit card run keeps the pane for its manual Enter recovery.
+      if (result === 'staged' && cardRunContext()) throw preservePane(`agent prompt is staged as Pasted Content; press Enter in ${paneId} to submit it, do not resend the full task`)
+      if (result === 'staged') throw startFailed(Object.assign(new Error(`agent prompt stayed unsubmitted in ${paneId} after 3 Enter presses`), { unsubmitted: true }))
     }
     throw preservePane(`Delivery unconfirmed: ${first.message}; inspect the existing session before retrying`)
   }
+}
+
+// Codex collapses a long paste into "[Pasted Content N chars]" and can swallow the Enter
+// (Tradeflow T-41). The prompt is staged, not delivered, while the pane tail shows that
+// placeholder or the prompt's own text on the `›` input line.
+export function stagedPrompt(pane, text = '') {
+  const tail = String(pane).trimEnd().split(/\r?\n/).slice(-15)
+  if (tail.some(line => /Pasted Content/i.test(line))) return true
+  const input = tail.findLast(line => /^[\s│|]*›/.test(line))?.replace(/^[\s│|]*›\s*/, '').replace(/[\s│|]+$/, '')
+  return !!input && input.length >= 8 && text.replace(/\s+/g, ' ').includes(input.slice(0, 60))
+}
+// Press Enter up to three times, rechecking after each. 'working', 'staged' (never
+// submitted) or 'unknown' (no longer staged, not working either).
+async function submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs }) {
+  for (let i = 0; i < 3; i++) {
+    await sendKeys(paneId, ['enter'], session).catch(err => { if (err.paused) throw Object.assign(err, { staged: true }) })
+    if (await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return 'working'
+    if (!stagedPrompt(await read(paneId, session).catch(() => ''), text)) return 'unknown'
+  }
+  return 'staged'
 }
 
 export async function deliver(paneId, text, session, builderGuard = null) {
@@ -68,6 +91,7 @@ export async function deliver(paneId, text, session, builderGuard = null) {
     saveDelivery(session, paneId, { text, key, status: 'confirmed', ...(runId ? { runId } : {}) })
   } catch (err) {
     if (err.paused) saveDelivery(session, paneId, { text, key, status: runId ? 'cancelled' : 'paused', staged: !!err.staged, ...(runId ? { runId } : {}) })
+    if (err.unsubmitted) saveDelivery(session, paneId, { text, key, status: 'failed', reason: err.message })
     throw err
   }
 }
@@ -83,15 +107,31 @@ export async function resumeDeliveries(session) {
     if (!agent || !['idle', 'done'].includes(agent.agent_status)) continue
     if (pending.builderGuard) assertGuardActive(pending.builderGuard, agent.agent_session)
     if (pending.staged) {
-      const pane = String(await paneRead(pending.paneId, session))
-      if (!/Pasted Content/i.test(pane)) continue
-      await paneSendKeys(pending.paneId, ['enter'], session)
-      if (await waitPaneWorking(pending.paneId, session)) saveDelivery(session, pending.paneId, { ...pending, status: 'confirmed' })
-      else saveDelivery(session, pending.paneId, { ...pending, status: 'uncertain' })
+      if (!stagedPrompt(await paneRead(pending.paneId, session), pending.text)) continue
+      const result = await submitStaged(pending.paneId, pending.text, session, { read: paneRead, sendKeys: paneSendKeys, list: agentList, confirmMs: 10000 })
+      saveDelivery(session, pending.paneId, { ...pending, status: result === 'working' ? 'confirmed' : 'uncertain' })
       continue
     }
     await deliver(pending.paneId, pending.text, session, pending.builderGuard)
   }
+}
+
+// A failed `agent start` (pane busy, timeout, agent quit at once) is not a hold: the
+// caller has closed that pane, and the next poll retries once with a fresh tab. A
+// second failure in a row for the same card and role asks the operator. Returns the
+// card moved to Owner, or null when the retry is still to come.
+export const startFailed = (err) => Object.assign(err, { startFailed: !err.paused && !err.preservePane && !cardRunContext() })
+export function recordStartFailure(tasksDir, cardId, role, reason) {
+  const card = findCard(tasksDir, cardId)
+  const prior = readWorkflow(tasksDir)[card.id]?.startFailure
+  const count = prior?.role === role ? prior.count + 1 : 1
+  appendHistory(tasksDir, card.id, { event: 'start-failed', stage: card.column, role, reason, count })
+  updateWorkflow(tasksDir, card.id, { startFailure: { role, count, reason, at: new Date().toISOString() } })
+  if (count < 2 || card.column === 'owner') return null
+  const lane = columnByKey(card.column).label
+  const moved = moveCard(tasksDir, card.id, 'owner')
+  writeCurrentFeedback(tasksDir, moved, 'Needs you', `The ${role[0].toUpperCase() + role.slice(1)} for ${card.id} failed to start twice in a row (last error: ${String(reason).replace(/\s+/g, ' ').slice(0, 300)}). All work is preserved. Should the board try again? Drag it back to ${lane} to retry.`)
+  return moved
 }
 
 // Claude Code can take minutes to reach an interactive prompt on a machine with
@@ -177,7 +217,7 @@ export async function spawnForCard({
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })
-    throw Object.assign(new Error(`agent start failed: ${err.message}`), { preservePane: err.preservePane })
+    throw Object.assign(new Error(`agent start failed: ${err.message}`), { preservePane: err.preservePane, startFailed: startFailed(err).startFailed })
   }
 
   // Submission is keystrokes, so it can silently land in the input box without
