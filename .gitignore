@@ -43,3 +43,5 @@ north-king-country-junior-rules/
 !/_agent-system/
 /_agent-system/*
 !/_agent-system/dashboard.html
+
+!/herdr-kanban/TASK-TEMPLATE.md
