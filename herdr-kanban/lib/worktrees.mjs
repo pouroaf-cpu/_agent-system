@@ -283,6 +283,8 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     if (entry.state === 'integrated') continue
     let live
     try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
+    // An archived card is closed: its preserved worktree must never block live cards.
+    if (live?.column === 'archive') continue
     // Preserve locks on existing changes even if a correction narrows the card.
     const files = [...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })

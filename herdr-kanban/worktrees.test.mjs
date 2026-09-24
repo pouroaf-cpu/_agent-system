@@ -85,6 +85,8 @@ test('exact overlapping card files are held while unrelated files are free', () 
     writeFileSync(join(f.integration, 'other.js'), 'other\n')
     const third = f.addCard('T-3', 'other.js')
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: third, projectPath: f.integration }), null)
+    moveCard(f.tasks, 'T-1', 'archive', { operatorArchive: true })
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), null)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
