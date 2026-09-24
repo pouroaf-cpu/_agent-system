@@ -76,6 +76,9 @@ export function stagedInput(pane, text = '') {
 // submitted) or 'unknown' (no longer staged, not working either).
 export async function submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs }) {
   for (let i = 0; i < 3; i++) {
+    // Codex takes an Enter that arrives while it is still absorbing the paste as a
+    // newline inside it; a late Enter submits (Tradeflow TF56). Let the paste settle.
+    await new Promise(resolve => setTimeout(resolve, Math.min(3000, confirmMs)))
     await sendKeys(paneId, ['enter'], session).catch(err => { if (err.paused) throw Object.assign(err, { staged: true }) })
     if (await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return 'working'
     if (!stagedPrompt(await read(paneId, session).catch(() => ''), text)) return 'unknown'
