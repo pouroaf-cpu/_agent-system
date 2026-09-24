@@ -393,7 +393,7 @@ async function pollProject(project) {
     if (gitSettings) {
       const waiting = {} // why each card is not integrated yet, for the stall watchdog's Owner note
       integrationHolds.set(project, waiting)
-      for (const result of await reconcileCompletedHandoffs({ tasksDir, project })) {
+      for (const result of await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck })) {
         if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
         if (result.status === 'integrated') {
           activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)

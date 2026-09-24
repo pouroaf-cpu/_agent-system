@@ -423,6 +423,26 @@ function rebaseCardOnto(entry, head) {
 
 export const updateWorktree = updateEntry
 
+// Bring a Completed card's one commit up to the integration HEAD in its own
+// worktree, so a project integrationCheck tests exactly what would land.
+// Null when reconcile should judge the card itself (not Completed, invalid commit).
+export function rebaseCompletedOntoIntegration(tasksDir, cardId) {
+  let entry = readWorktrees(tasksDir)[cardId]
+  const card = readBoard(tasksDir).completed.find((c) => c.id === cardId)
+  if (!entry || !card || !['building', 'ready', 'issue', 'rebased'].includes(entry.state)) return null
+  if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {
+    entry = updateEntry(tasksDir, cardId, { baseCommit: entry.rebaseTarget, rebaseTarget: null })
+  }
+  let commit
+  try { commit = validateCompleted(card, entry) } catch { return null }
+  const head = git(entry.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
+  if (entry.baseCommit === head) return { status: 'current', commit }
+  const rebase = rebaseCardOnto({ ...entry, commit }, head)
+  if (!rebase.clean) return { status: 'conflict', reason: `integration conflict while rebasing onto master ${head.slice(0, 12)}`, files: rebase.files, hunks: rebase.hunks, head }
+  updateEntry(tasksDir, cardId, { baseCommit: head, commit: rebase.commit })
+  return { status: 'current', commit: rebase.commit }
+}
+
 // Completed card commits are integrated one at a time. Results are intentionally
 // data-only: the server owns board routing and logging.
 export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {

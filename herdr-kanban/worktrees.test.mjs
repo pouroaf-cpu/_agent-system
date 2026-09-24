@@ -10,6 +10,7 @@ import { overlapHoldReason, prepareCardWorktree, readWorktrees, reconcileComplet
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
+import { reconcileCompletedHandoffs, runShell } from './lib/completed-handoff.mjs'
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
@@ -425,4 +426,52 @@ test('autocrlf true without attributes recovers both mixed EOL and LF retry then
       assert.equal(git(f.integration, 'show', 'HEAD:app.js'), 'builder\nsecond')
     } finally { rmSync(f.root, { recursive: true, force: true }) }
   }
+})
+
+test('integrationCheck: rebased card passes and integrates, a failure returns to a Builder, a second failure asks Owner', async () => {
+  const f = fixture()
+  try {
+    const t1 = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1', 'app.js'), gitSettings: f.settings })
+    const t2 = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-2', 'lib.js'), gitSettings: f.settings })
+    // The check exists only on master: it passes only if the card was rebased first.
+    writeFileSync(join(f.integration, 'check.mjs'), "import fs from 'node:fs'\nfor (const f of ['app.js', 'lib.js']) if (fs.existsSync(f) && fs.readFileSync(f, 'utf8').includes('bad')) { console.log('found bad in ' + f); process.exit(1) }\n")
+    git(f.integration, 'add', 'check.mjs')
+    git(f.integration, 'commit', '-m', 'suite')
+    const handoff = (dir, file, text) => { writeFileSync(join(dir, file), text); git(dir, 'add', file); git(dir, 'commit', '-m', 'card') }
+    const run = () => reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test', integrationCheck: 'node check.mjs' })
+    const evidence = () => readdirSync(join(f.tasks, '.evidence')).map(name => readFileSync(join(f.tasks, '.evidence', name), 'utf8'))
+
+    handoff(t1.workspacePath, 'app.js', 'good\n'); f.complete('T-1')
+    assert.equal((await run()).find(r => r.id === 'T-1').status, 'integrated')
+    assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'good\n')
+    assert.match(evidence().join(), /result: PASS/)
+
+    const master = git(f.integration, 'rev-parse', 'HEAD')
+    handoff(t2.workspacePath, 'lib.js', 'bad\n'); f.complete('T-2')
+    const [failed] = (await run()).filter(r => r.id === 'T-2')
+    assert.deepEqual([failed.status, failed.to], ['returned', 'queue'])
+    assert.equal(git(f.integration, 'rev-parse', 'HEAD'), master, 'nothing integrated')
+    assert.equal(git(f.integration, 'status', '--porcelain'), '', 'master checkout untouched')
+    assert.equal(existsSync(join(t2.workspacePath, 'check.mjs')), true, 'the card worktree was rebased onto master')
+    assert.match(readFileSync(findCard(f.tasks, 'T-2').path, 'utf8'), /integration check node check\.mjs failed[\s\S]*found bad in lib\.js/)
+    assert.match(evidence().join(), /result: FAIL[\s\S]*found bad in lib\.js/)
+
+    // The Builder hands off again without a fix: one plain question to Owner.
+    const entries = JSON.parse(readFileSync(join(f.tasks, '.board-worktrees.json'), 'utf8'))
+    entries['T-2'].state = 'building' // prepareCardWorktree resumes a returned card this way
+    writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify(entries))
+    f.complete('T-2')
+    const [second] = (await run()).filter(r => r.id === 'T-2')
+    assert.equal(second.to, 'owner')
+    assert.match(readFileSync(findCard(f.tasks, 'T-2').path, 'utf8'), /Needs you[\s\S]*T-2 still does not integrate with master after 2 tries[\s\S]*\?/)
+    assert.equal(git(f.integration, 'rev-parse', 'HEAD'), master)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('integrationCheck timeout kills the whole process tree and fails', async () => {
+  const started = Date.now()
+  const result = await runShell('node -e "setTimeout(() => {}, 60000)"', tmpdir(), 1500)
+  assert.equal(result.ok, false)
+  assert.match(result.output, /timed out after 1\.5s/)
+  assert.ok(Date.now() - started < 20000, 'the grandchild node process did not hold the check open')
 })
