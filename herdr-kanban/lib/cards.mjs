@@ -531,7 +531,7 @@ export function findCard(tasksDir, cardId) {
 
   const live = all.filter((c) => c.column !== 'archive')
   if (live.length > 1) {
-    throw new Error(`${id} is ambiguous — ${live.map((c) => `${c.column}/${c.file}`).join(' and ')}`)
+    throw Object.assign(new Error(`${id} is ambiguous — ${live.map((c) => `${c.column}/${c.file}`).join(' and ')}`), { ambiguous: id })
   }
   return live[0] ?? all[0]
 }

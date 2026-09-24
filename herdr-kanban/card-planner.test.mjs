@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, appendFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCard, moveCard, findCard } from './lib/cards.mjs'
@@ -80,5 +80,28 @@ try {
     assert.equal(findCard(replacementDir, replacementCard.id).column, 'owner', 'human decisions are not automatically recovered')
     assert.notEqual(correctionFingerprint('**Kicked back** date\nA'), correctionFingerprint('**Kicked back** date\nB'))
   } finally { rmSync(replacementDir, { recursive: true, force: true }) }
-  console.log('Planner pickup, idle retention, fresh-Planner correction, no-handoff retry then Owner, and archive retirement passed')
+  // Tradeflow T-42: a card in Issues with a 0-byte twin in Working holds only itself;
+  // the run goes on to plan other cards instead of throwing (which tripped the breaker).
+  const dupDir = mkdtempSync(join(tmpdir(), 'card-planner-dup-'))
+  try {
+    const twin = moveCard(dupDir, createCard(dupDir, { title: 'Twin', brief: 'Duplicated card' }).id, 'issues')
+    mkdirSync(join(dupDir, 'working'), { recursive: true })
+    writeFileSync(join(dupDir, 'working', twin.file), '')
+    const other = createCard(dupDir, { title: 'Other', brief: 'Unrelated card' })
+    let dupAgents = [], dupPanes = 0
+    const holds = []
+    const dupIo = {
+      agentList: async () => dupAgents, agentWorkspaceOr: async () => 'workspace',
+      tabCreate: async () => ({ root_pane: { pane_id: `dup-${++dupPanes}` } }), waitForPrompt: async () => {},
+      agentStart: async ({ name, paneId }) => { dupAgents = [{ name, pane_id: paneId, agent_status: 'idle' }] },
+      deliver: async () => {}, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+      paneClose: async () => {}, paneRead: async () => '',
+    }
+    const run = await runCardPlanner({ project: 'Dup', projectPath: dupDir, tasksDir: dupDir, boardRoot: dupDir, model: 'test', io: dupIo, onHold: err => holds.push(err.message) })
+    assert.deepEqual(run.cards, [other.id], 'the other card is still planned')
+    assert.equal(holds.length, 1)
+    for (const path of [`working/${twin.file}`, `issues/${twin.file}`]) assert.ok(holds[0].includes(path), holds[0])
+    assert.ok(existsSync(join(dupDir, 'working', twin.file)) && existsSync(twin.path), 'both copies are kept')
+  } finally { rmSync(dupDir, { recursive: true, force: true }) }
+  console.log('Planner pickup, idle retention, fresh-Planner correction, no-handoff retry then Owner, and archive retirement passed; a duplicated card id holds only that card')
 } finally { rmSync(dir, { recursive: true, force: true }) }

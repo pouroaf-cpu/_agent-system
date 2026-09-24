@@ -87,6 +87,19 @@ function activity(project, cardId, event, message, level = 'info') {
   return activityLog({ tasksDir: tasksDirOf(project), project, cardId, event, message, level })
 }
 
+// Two live copies of one card id hold only that card: log it once and never count it
+// toward the project breaker (Tradeflow T-42 tripped auto-spawn for every card).
+const ambiguousLogged = new Set()
+function ambiguousHold(project, err) {
+  if (!err?.ambiguous) return false
+  const key = `${project}:${err.message}`
+  if (!ambiguousLogged.has(key)) {
+    ambiguousLogged.add(key)
+    activity(project, err.ambiguous, 'hold', `${err.message}; card held, both copies kept — remove the stale copy by hand`, 'error')
+  }
+  return true
+}
+
 function schedulerActivity(project, message) {
   const prefixes = ['T-', config.cardPrefixes?.[project]].filter(Boolean).join('|')
   const cardId = String(message).match(new RegExp(String.raw`\b(?:${prefixes})\d+\b`, 'i'))?.[0]?.toUpperCase() ?? '-'
@@ -452,7 +465,7 @@ async function pollProject(project) {
           gitSettings,
         })
       } catch (err) {
-        activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
+        if (!ambiguousHold(project, err)) activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
       }
     }
 
@@ -461,7 +474,7 @@ async function pollProject(project) {
         try {
           if (await recoverBuilderNoHandoff({ tasksDir, cardId: card.id, agents, session: sessionOf(project), workspace: integrationPathOf(project), gitSettings })) dirty = true
         } catch (err) {
-          activity(project, card.id, 'recovery-held', `Builder recovery needs attention: ${err.message}`, 'error')
+          if (!ambiguousHold(project, err)) activity(project, card.id, 'recovery-held',`Builder recovery needs attention: ${err.message}`, 'error')
         }
       }
     }
@@ -519,8 +532,9 @@ async function pollProject(project) {
         engine: engineFor('planning'),
         assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
         mission: config.mission,
+        onHold: (err) => ambiguousHold(project, err),
       }).catch((err) => {
-        if (err.paused) return null
+        if (err.paused || ambiguousHold(project, err)) return null
         recordSpawnFailure({ project, cap: config.maxConcurrentAgents, reason: err.message })
         if (!err.busy && !/nothing in Issues/.test(err.message)) {
           console.log(`lead planner skipped — ${err.message}`)

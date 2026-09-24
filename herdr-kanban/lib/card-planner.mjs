@@ -72,7 +72,7 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 }
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, deliver, recordUsageStart, recordUsageFinish }
-export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
+export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
   const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, deliver, recordUsageStart, recordUsageFinish } = io
@@ -180,6 +180,12 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     // Owner is an explicit stop, including older technical-exhaustion cards.
     for (let card of [...board.issues, ...board.planning]) {
       if (onlyIds && !onlyIds.includes(card.id)) continue
+      // Two live copies of one id hold only that card, never the whole run (Tradeflow T-42).
+      try { findCard(tasksDir, card.id) } catch (err) {
+        if (!err.ambiguous || cardRunContext()) throw err
+        onHold?.(err)
+        continue
+      }
       // A legacy card in Planning has no Planner path: convert it, then plan it normally.
       if (!card.cardOwned && !card.audit) {
         if (card.column !== 'planning') continue
