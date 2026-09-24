@@ -102,6 +102,11 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       // agent at this board-named pane instead (Injectbuddy T-148).
       if (identity && runs.some(r => r.sessionId === identity && r.paneId !== paneId) && agent?.name === builder.name) identity = agent.agent_session?.value
       const matches = a => a?.pane_id === paneId && a.name === builder.name && a.agent_session?.value === identity
+      // The handoff already landed and the pane is gone (closed while the card sat in Owner,
+      // Tradeflow T-38): there is nothing left to preserve or close, so it counts as retired.
+      if (!agent && saved.completedStage === 'working' && !Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) {
+        updateWorkflow(tasksDir, card.id, { builderRetired: { paneId, started: builder.started, sessionId: identity || null, at: new Date().toISOString(), note: 'pane already closed' } })
+      } else {
       if (!identity || !matches(agent)) throw new Error(`${card.id}: finished Builder identity unavailable; preserve checkout`)
       if (agent.agent_status === 'working') { results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for Builder handoff turn to finish' }); continue }
       if (!['done', 'idle'].includes(agent.agent_status)) throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)
@@ -116,6 +121,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       if (!matches(current) || !['done', 'idle'].includes(current.agent_status) || !['completed', 'review'].includes(findCard(tasksDir, card.id).column)) throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
       await io.paneClose(paneId, session)
       updateWorkflow(tasksDir, card.id, { builderRetired: { paneId, started: builder.started, sessionId: identity, historyId: history.id, at: history.at } })
+      }
     }
     const retired = readWorkflow(tasksDir)[card.id]?.builderRetired
     if (retired && (await io.agentList(session, { ensureSession: false })).some(a => a.pane_id === retired.paneId)) {

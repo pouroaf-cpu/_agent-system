@@ -293,3 +293,18 @@ test('a replacement Builder recorded with the previous pane session is still ret
     paneClose: async () => { agent = null }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
   assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')
 })
+
+test('a finished Builder whose pane is already gone counts as retired, so the card still integrates (Tradeflow T-38)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-gone-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', commit: 'saved' } }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { completedStage: 'working', builder: { pane_id: 'p', name: 'builder' } } }))
+  let closed = 0
+  const io = { agentList: async () => [], paneRead: async () => '', recordUsageFinish: async () => {},
+    paneClose: async () => { closed++ }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
+  assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')
+  assert.equal(closed, 0)
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1'].builderRetired.note, 'pane already closed')
+})
