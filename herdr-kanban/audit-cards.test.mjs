@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -105,7 +105,9 @@ test('audit-cards: off-board report.md source links in the report and never arch
   const dir = fixture()
   try {
     const path = join(dir, 'report.md')
-    writeFileSync(path, `# Journey audit\n\nAudit ID: 2026-09-24-injectbuddy-journey\n${report([finding(1), finding(2, { dependsOn: [1] })])}`)
+    const shot = join(dir, 'evidence', '1.png').replaceAll('\\', '/')
+    mkdirSync(join(dir, 'evidence')); writeFileSync(shot, 'png')
+    writeFileSync(path, `# Journey audit\n\nAudit ID: 2026-09-24-injectbuddy-journey\n${report([finding(1, { evidence: [shot] }), finding(2, { dependsOn: [1] })])}`)
     const first = cardsFromAudit(dir, { report: path, findings: [1, 2], prefix: 'I' })
     assert.equal(first.audit, '2026-09-24-injectbuddy-journey')
     assert.deepEqual(first.remaining, [])
@@ -113,6 +115,10 @@ test('audit-cards: off-board report.md source links in the report and never arch
     assert.match(readFileSync(path, 'utf8'), /## Remediation links[\s\S]*- F1: I-?\d+[\s\S]*- F2: I-?\d+/)
     assert.match(readFileSync(findCard(dir, first.created[1].id).path, 'utf8'), new RegExp(String.raw`Blocked by:\*\* ${first.created[0].id}`))
     assert.match(readFileSync(findCard(dir, first.created[0].id).path, 'utf8'), /Source: 2026-09-24-injectbuddy-journey finding 1/)
+    // Evidence is copied into the project so archiving the audit folder never breaks the card.
+    const local = join(dir, '.evidence', '2026-09-24-injectbuddy-journey', 'evidence', '1.png').replaceAll('\\', '/')
+    assert.equal(readFileSync(local, 'utf8'), 'png')
+    assert.ok(readFileSync(findCard(dir, first.created[0].id).path, 'utf8').includes(`- ${local}`))
     assert.equal(cardsFromAudit(dir, { report: path, findings: 'all', prefix: 'I' }).created.length, 0)
     const legacy = join(dir, 'legacy.md')
     writeFileSync(legacy, `# Old\n\nStatus: FINDINGS\n${report([finding(1)]).replace(/## Audit conclusion[\s\S]*$/, '')}`)

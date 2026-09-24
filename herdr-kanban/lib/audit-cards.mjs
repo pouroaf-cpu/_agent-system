@@ -1,8 +1,8 @@
 // Turn an audit's card-ready findings into remediation cards (POST /api/audit-cards).
 // Links go under the audit's ## Remediation links as `- F<n>: <card id>` or
 // `- F<n>: declined — <reason>`, the lines auditArchiveError already checks.
-import { readFileSync, writeFileSync } from 'node:fs'
-import { basename, dirname } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createCard, findCard, moveCard } from './cards.mjs'
 import { auditStatus, cardReadyFindings, section } from './audit-routing.mjs'
 import { CARD_ID } from './ids.mjs'
@@ -78,9 +78,21 @@ export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = 
     links[n] = `declined — ${reason.trim()}`
     setLink(audit.path, n, links[n])
   }
+  // A report's evidence is copied into the project (TASKS/.evidence/<audit>/) so the
+  // cards never cite _audits paths, which move on archive (Tradeflow TF49-TF61).
+  const localEvidence = (file) => {
+    if (!report) return file
+    const source = resolve(dirname(report), file)
+    if (!existsSync(source) || !statSync(source).isFile()) return file
+    const inside = relative(dirname(report), source)
+    const target = join(tasksDir, '.evidence', audit.id.replace(/[^\w.-]+/g, '-').replace(/^\.+/, ''), inside.startsWith('..') || isAbsolute(inside) ? basename(source) : inside)
+    mkdirSync(dirname(target), { recursive: true })
+    copyFileSync(source, target)
+    return target.replaceAll('\\', '/')
+  }
   const created = []
   for (const f of all.filter(f => selected.includes(f.n) && !cardOf(f.n))) {
-    const card = createCard(tasksDir, { title: f.title, brief: briefFor(audit.id, f), category: f.category, workspace: f.workspace, mission, prefix })
+    const card = createCard(tasksDir, { title: f.title, brief: briefFor(audit.id, { ...f, evidence: f.evidence.map(localEvidence) }), category: f.category, workspace: f.workspace, mission, prefix })
     // Link before anything else can fail, so a retry never duplicates this finding.
     links[f.n] = card.id
     setLink(audit.path, f.n, card.id)
