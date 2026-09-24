@@ -19,7 +19,7 @@ async function pushover(title, message, env = process.env) {
   const token = env.PUSHOVER_APP_TOKEN, user = env.PUSHOVER_USER_KEY
   if (!token || !user) throw new Error('Pushover credentials are not configured')
   const res = await fetch('https://api.pushover.net/1/messages.json', {
-    method: 'POST', body: new URLSearchParams({ token, user, title, message, priority: '0' }), signal: AbortSignal.timeout(10000),
+    method: 'POST', body: new URLSearchParams({ token, user, title, message, priority: '0' }), signal: AbortSignal.timeout(30000),
   })
   if ((await res.json().catch(() => ({})))?.status !== 1) throw new Error(`Pushover did not accept the alert (HTTP ${res.status})`)
 }
