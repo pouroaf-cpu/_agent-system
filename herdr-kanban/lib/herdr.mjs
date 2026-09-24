@@ -449,6 +449,21 @@ export async function focusAgent(paneId, session) {
   return agent
 }
 
+export async function openProjectSession(session, spawnClient = spawn, cli = herdr) {
+  try {
+    parseAgentList(await cli(['agent', 'list'], { session, ensureSession: false }))
+  } catch (err) {
+    throw new Error(`herdr session ${session} is unavailable: ${err.message}`)
+  }
+  const workspaces = (await cli(['workspace', 'list'], { session, ensureSession: false }))?.workspaces
+  if (!Array.isArray(workspaces)) throw new Error('workspace list: malformed response')
+  const workspace = findWorkspace(workspaces, AGENT_WORKSPACE)
+  if (workspace) await cli(['workspace', 'focus', workspace], { session, ensureSession: false })
+  const child = spawnClient(HERDR, ['session', 'attach', session], { detached: true, stdio: 'ignore', windowsHide: false })
+  child.on('error', () => {})
+  child.unref()
+}
+
 export async function paneSendKeys(paneId, keys, session) {
   assertPromptAllowed(session)
   return herdr(['pane', 'send-keys', paneId, ...keys], { session })

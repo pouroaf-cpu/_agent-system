@@ -26,7 +26,7 @@ const lanHost = process.env.KANBAN_LAN_HOST
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard } = await import('./lib/cards.mjs')
-const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -689,6 +689,16 @@ const handleRequest = async (req, res) => {
       const { project: selected, paneId } = JSON.parse(body)
       if (!config.projects.includes(selected)) throw new Error('Unknown project')
       await focusAgent(paneId, sessionOf(selected))
+      return json(res, 200, { ok: true })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/herdr-open') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: selected } = JSON.parse(body)
+      if (!config.projects.includes(selected)) throw new Error('Unknown project')
+      await openProjectSession(sessionOf(selected))
       return json(res, 200, { ok: true })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }

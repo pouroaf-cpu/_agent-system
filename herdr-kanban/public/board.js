@@ -82,6 +82,17 @@ let state = null;                 // last board payload
 const projectPaused = () => state?.control?.paused ?? state?.config?.maxConcurrentAgents === 0;
 const explicitCardRunning = () => (state?.cardRuns || []).some(r => r.status === 'running');
 
+document.getElementById('herdr-open').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/herdr-open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'could not open herdr session');
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+});
+
 document.getElementById('project-control').addEventListener('click', async () => {
   const button = document.getElementById('project-control');
   button.disabled = true;
