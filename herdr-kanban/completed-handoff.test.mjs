@@ -266,3 +266,19 @@ test('integration conflicts never loop: one Builder resolution, then Owner; a cl
   writeFileSync(findCard(tasksDir, 'T-2').path, planned('T-2').replace('process.exit(0)', 'process.exit(3)'))
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, false)
 })
+
+test('a replacement Builder recorded with the previous pane session is still retired', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-replaced-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', commit: 'saved' } }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { completedStage: 'working', builder: { pane_id: 'p2', name: 'b-t-1-2' } } }))
+  writeFileSync(join(tasksDir, '.request-usage.json'), JSON.stringify({ runs: {
+    a: { paneId: 'p1', role: 'builder', cardIds: ['T-1'], sessionId: 'old' },
+    b: { paneId: 'p2', role: 'builder', cardIds: ['T-1'], sessionId: 'old' } } }))
+  let agent = { pane_id: 'p2', name: 'b-t-1-2', agent_session: { value: 'new' }, agent_status: 'done' }
+  const io = { agentList: async () => agent ? [agent] : [], paneRead: async () => 'out', recordUsageFinish: async () => {},
+    paneClose: async () => { agent = null }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
+  assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')
+})

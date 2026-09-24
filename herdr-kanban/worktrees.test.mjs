@@ -491,3 +491,16 @@ test('commits a card branch picked up from integration are not counted as card c
     assert.equal(results[0].status, 'integrated', JSON.stringify(results))
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('an untracked evidence log in the card worktree does not hold integration', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    const wt = prepared.entry.worktreePath
+    writeFileSync(join(wt, 'app.js'), 'card one\n'); git(wt, 'commit', '-am', 'T-1 change')
+    writeFileSync(join(wt, 'builder-e2e.log'), 'evidence\n')
+    f.complete('T-1')
+    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})

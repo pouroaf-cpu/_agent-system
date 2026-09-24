@@ -92,10 +92,16 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     const saved = readWorkflow(tasksDir)[card.id], builder = saved?.builder
     if (builder?.pane_id && (saved.builderRetired?.paneId !== builder.pane_id || saved.builderRetired?.started !== builder.started)) {
       const paneId = builder.pane_id
-      const identity = Object.values(readUsage(tasksDir).runs).findLast(r => r.paneId === paneId && r.role === 'builder' && r.cardIds?.length === 1 && r.cardIds[0] === card.id && r.sessionId)?.sessionId
-      const matches = a => a?.pane_id === paneId && a.name === builder.name && a.agent_session?.value === identity
+      const runs = Object.values(readUsage(tasksDir).runs)
+      let identity = runs.findLast(r => r.paneId === paneId && r.role === 'builder' && r.cardIds?.length === 1 && r.cardIds[0] === card.id && r.sessionId)?.sessionId
       const inventory = await io.agentList(session, { ensureSession: false })
       const agent = inventory.find(a => a.pane_id === paneId)
+      // A replacement Builder started in the same worktree can be recorded with the
+      // previous Builder's session (herdr detects Codex sessions by working folder).
+      // A recorded session that also belongs to another pane is stale: trust the live
+      // agent at this board-named pane instead (Injectbuddy T-148).
+      if (identity && runs.some(r => r.sessionId === identity && r.paneId !== paneId) && agent?.name === builder.name) identity = agent.agent_session?.value
+      const matches = a => a?.pane_id === paneId && a.name === builder.name && a.agent_session?.value === identity
       if (!identity || !matches(agent)) throw new Error(`${card.id}: finished Builder identity unavailable; preserve checkout`)
       if (agent.agent_status === 'working') { results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for Builder handoff turn to finish' }); continue }
       if (!['done', 'idle'].includes(agent.agent_status)) throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)

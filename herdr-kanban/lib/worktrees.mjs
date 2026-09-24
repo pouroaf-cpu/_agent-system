@@ -400,7 +400,11 @@ function acquireLock(tasksDir) {
 
 function validateCompleted(card, entry) {
   if (!existsSync(entry.worktreePath)) throw new Error(`card worktree is missing: ${entry.worktreePath}`)
-  if (!clean(entry.worktreePath)) throw new Error('card worktree still has uncommitted changes')
+  // Untracked files outside the card's own files (a Builder's evidence log) never
+  // reach integration, so they must not hold it (Injectbuddy T-148).
+  const untracked = new Set(git(entry.worktreePath, ['ls-files', '--others', '--exclude-standard', '-z']).stdout.split('\0').filter(Boolean))
+  const cardOwn = new Set(expectedRepoFiles(card, entry))
+  if (operationInProgress(entry.worktreePath) || semanticDirtyFiles(entry.worktreePath).some(f => !untracked.has(f) || cardOwn.has(slash(f)))) throw new Error('card worktree still has uncommitted changes')
   const commits = commitsAfter(entry)
   if (commits.length !== 1) throw new Error(`expected exactly one card commit; found ${commits.length}`)
   const actual = commitFiles(entry, commits[0])
