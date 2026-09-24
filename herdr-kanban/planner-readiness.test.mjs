@@ -57,3 +57,34 @@ assert.throws(() => validatePlan(realistic.replace('**Plan readiness:** build-re
 assert.throws(() => validatePlan(realistic.replace('Outcome: preserve the approved keyboard behavior.', 'Outcome:')),
   /agreed outcome/i)
 console.log('Planner readiness validation passed')
+
+// Plan check at Planner handoff: Files must exist (unless marked new) and callers must be listed.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const root = mkdtempSync(join(tmpdir(), 'plan-check-'))
+  try {
+    assert.throws(() => validatePlan(realistic, { workspace: root }), /Plan check failed: ## Files path src\/app\.mjs does not exist/)
+    mkdirSync(join(root, 'src')); writeFileSync(join(root, 'src', 'app.mjs'), '')
+    assert.throws(() => validatePlan(realistic, { workspace: root }), /test\/keyboard\.test\.mjs does not exist/)
+    const newFile = realistic.replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —')
+    assert.throws(() => validatePlan(newFile, { workspace: root }), /Callers checked/)
+    assert.throws(() => validatePlan(newFile.replace('Changes:', '**Callers checked:**\nChanges:'), { workspace: root }), /Callers checked/, 'an empty line is not a check')
+    validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\nChanges:'), { workspace: root })
+    validatePlan(realistic) // no workspace = not a handoff; cards already queued are never re-checked
+
+    // hkb applies the check when a Planner hands off from Planning.
+    const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
+    const card = join(tasks, 'planning', 'T-1.md')
+    writeFileSync(card, `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('src/app.mjs', 'src/missing.mjs')}`)
+    const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
+    let result = hkb()
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /src\/missing\.mjs does not exist/)
+    writeFileSync(card, `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\nChanges:')}`)
+    result = hkb()
+    assert.equal(result.status, 0, result.stderr)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}

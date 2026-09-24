@@ -117,7 +117,17 @@ export function assertReviewInputs(root, tasksDir, cardId) {
   const card = findCard(tasksDir, cardId)
   const expected = claim.inputFingerprints[cardId]
   if (JSON.stringify(projectEnvironment(claim.project)) !== JSON.stringify(claim.environment ?? null)) throw new Error('Approved environment changed; affected review checks must run again')
-  if (evidenceFingerprint(card, claim.snapshot.path) !== expected || evidenceFingerprint(card, claim.integrationPath) !== expected) throw new Error('Relevant code, environment manifest or acceptance criteria changed; affected review checks must run again')
+  // The snapshot is the reviewed code. Integration may move on after review
+  // (later cards); that is their review's concern, not a reason to refuse this PASS.
+  if (evidenceFingerprint(card, claim.snapshot.path) !== expected) throw new Error('Relevant code, environment manifest or acceptance criteria changed; affected review checks must run again')
+}
+
+// Integration cherry-picks with -x, so the card's own commit is either an
+// ancestor or named in a cherry-pick trailer.
+export function snapshotContains(path, commit) {
+  const git = args => spawnSync('git', ['-C', path, ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+  if (git(['merge-base', '--is-ancestor', commit, 'HEAD']).status === 0) return true
+  return !!git(['log', '--format=%H', '--fixed-strings', `--grep=(cherry picked from commit ${commit})`, 'HEAD']).stdout?.trim()
 }
 
 export function busyReviewCards(root, tasksDir, agents) {

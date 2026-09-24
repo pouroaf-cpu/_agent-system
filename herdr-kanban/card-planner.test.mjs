@@ -10,13 +10,13 @@ try {
   assert.equal(card.createdAt, '2026-09-11T00:00:00.000Z')
   assert.equal(card.cardOwned, true)
   assert.throws(() => createCard(dir, { title: '../x\ninvalid', brief: 'x' }))
-  let agents = [], starts = 0, submissions = 0, usage = 0, closes = 0
+  let agents = [], starts = 0, submissions = 0, usage = 0, closes = 0, panes = 0
   const io = {
     agentList: async () => agents, agentWorkspaceOr: async () => 'workspace',
-    tabCreate: async () => ({ root_pane: { pane_id: 'pane-1' } }), waitForPrompt: async () => {},
-    agentStart: async ({ name }) => { starts++; agents = [{ name, pane_id: 'pane-1', agent_status: 'idle' }] },
+    tabCreate: async () => ({ root_pane: { pane_id: `pane-${++panes}` } }), waitForPrompt: async () => {},
+    agentStart: async ({ name, paneId }) => { starts++; agents = [{ name, pane_id: paneId, agent_status: 'idle' }] },
     deliver: async () => { submissions++ }, recordUsageStart: () => { usage++ }, recordUsageFinish: async () => {},
-    paneClose: async () => { closes++; agents = [] }
+    paneClose: async () => { closes++; agents = [] }, paneRead: async () => 'saved planner output'
   }
   const args = { project: 'Proof', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-5.5', io }
   const first = await runCardPlanner(args)
@@ -25,12 +25,15 @@ try {
   assert.equal(starts, 1); assert.equal(submissions, 1)
   moveCard(dir, card.id, 'owner'); await runCardPlanner(args)
   assert.equal(closes, 0)
+  // A correction goes to a fresh Planner; the idle one is retired, its output saved.
   moveCard(dir, card.id, 'issues'); const correction = await runCardPlanner(args)
-  assert.equal(correction.spawnedNewAgent, false)
-  assert.equal(starts, 1); assert.equal(submissions, 2); assert.equal(usage, 2)
+  assert.equal(correction.spawnedNewAgent, true)
+  assert.equal(starts, 2); assert.equal(submissions, 2); assert.equal(usage, 2); assert.equal(closes, 1)
+  assert.equal(readCardPlanners(dir)[card.id].paneId, 'pane-2')
+  assert.deepEqual(readCardPlanners(dir)[card.id].revokedPaneIds, ['pane-1'])
   appendFileSync(findCard(dir, card.id).path, '\n## Reviewer evidence\nIndependent outcome check passed.\n**Review verdict:** PASS\n')
   moveCard(dir, card.id, 'archive'); await runCardPlanner(args)
-  assert.equal(closes, 1); assert.ok(readCardPlanners(dir)[card.id].closedAt)
+  assert.equal(closes, 2); assert.ok(readCardPlanners(dir)[card.id].closedAt)
 
   const replacementDir = mkdtempSync(join(tmpdir(), 'card-planner-replace-'))
   try {
@@ -48,7 +51,7 @@ try {
         delivered.push(paneId)
         if (paneId === 'pane-1' && delivered.filter(id => id === paneId).length > 1) throw new Error('original planner stalled')
       },
-      recordUsageStart: () => {}, recordUsageFinish: async () => {}, paneClose: async (paneId) => {
+      recordUsageStart: () => {}, recordUsageFinish: async () => {}, paneRead: async () => "old output", paneClose: async (paneId) => {
         currentAgents = currentAgents.filter(a => a.pane_id !== paneId)
       },
     }
@@ -57,25 +60,25 @@ try {
     requestPlannerCorrection(replacementDir, replacementCard.id)
     const corrected = await runCardPlanner(replacementArgs)
     assert.equal(corrected.spawnedNewAgent, true)
-    assert.deepEqual(delivered, ['pane-1', 'pane-1', 'pane-2'])
+    assert.deepEqual(delivered, ['pane-1', 'pane-2'], 'the correction never goes back to the idle pane-1')
     const replacementOwner = readCardPlanners(replacementDir)[replacementCard.id]
     assert.equal(replacementOwner.paneId, 'pane-2')
     assert.equal(replacementOwner.previousPaneId, 'pane-1')
-    assert.equal(replacementOwner.replacementAttempts, 1)
-    // An accepted prompt that exits without handoff is a durable Issues
-    // fallback; it must not be replaced or retried into ambiguity.
+    assert.equal(replacementOwner.replacementAttempts, 0, 'a fresh correction Planner is not a failed-launch replacement')
+    // An accepted prompt that exits without handoff gets one fresh Planner,
+    // then stops in Owner; it never spins.
     await runCardPlanner({ ...replacementArgs, now: 1000000, handoffGraceMs: 10 })
     await runCardPlanner({ ...replacementArgs, now: 1000011, handoffGraceMs: 10 })
-    assert.equal(findCard(replacementDir, replacementCard.id).column, 'issues')
-    const beforeCooldown = delivered.length
-    await runCardPlanner({ ...replacementArgs, now: 1000034 })
-    assert.equal(delivered.length, beforeCooldown, 'Issues fallback does not spin during recovery hold')
+    assert.equal(findCard(replacementDir, replacementCard.id).column, 'planning')
+    assert.deepEqual(delivered, ['pane-1', 'pane-2', 'pane-3'])
+    await runCardPlanner({ ...replacementArgs, now: 1000020, handoffGraceMs: 10 })
+    await runCardPlanner({ ...replacementArgs, now: 1000031, handoffGraceMs: 10 })
+    assert.equal(findCard(replacementDir, replacementCard.id).column, 'owner')
     await runCardPlanner({ ...replacementArgs, now: 2000034 })
-    assert.equal(findCard(replacementDir, replacementCard.id).column, 'issues')
-    moveCard(replacementDir, replacementCard.id, 'owner')
+    assert.equal(delivered.length, 3, 'Owner fallback does not spin')
     await runCardPlanner(replacementArgs)
     assert.equal(findCard(replacementDir, replacementCard.id).column, 'owner', 'human decisions are not automatically recovered')
     assert.notEqual(correctionFingerprint('**Kicked back** date\nA'), correctionFingerprint('**Kicked back** date\nB'))
   } finally { rmSync(replacementDir, { recursive: true, force: true }) }
-  console.log('Planner pickup, idle retention, same-session correction and archive retirement passed')
+  console.log('Planner pickup, idle retention, fresh-Planner correction, no-handoff retry then Owner, and archive retirement passed')
 } finally { rmSync(dir, { recursive: true, force: true }) }

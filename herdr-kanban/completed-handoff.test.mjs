@@ -51,7 +51,7 @@ test('no-review done waits for integration, yes still reviews, and verified unch
 
   putCard(tasksDir, 'working', 'T-3', 'yes')
   assert.equal(runHkb(tasksDir, 'done', 'T-3').status, 0)
-  assert.equal(findCard(tasksDir, 'T-3').column, 'review')
+  assert.equal(findCard(tasksDir, 'T-3').column, 'completed', 'Auto-review cards integrate before review')
 
   for (const [id, flag, expected] of [['T-4', 'no', 'archive'], ['T-5', null, 'archive'], ['T-6', 'yes', 'review']]) {
     putCard(tasksDir, 'working', id, flag)
@@ -116,7 +116,7 @@ test('review failure and rework continue to enable Auto-review', t => {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const failed = putCard(tasksDir, 'review', 'T-1', null)
   writeFileSync(failed, `${readFileSync(failed, 'utf8').replace('**Workflow:** card-owned\n', '')}\n**Review feedback**\n\n## Reviewer evidence\n\n[implementation] Defect found.\n\n**Review verdict:** FAIL\n`)
-  assert.equal(routeReviewVerdicts(tasksDir, { log: () => {} })[0].to, 'queue')
+  assert.equal(routeReviewVerdicts(tasksDir, { log: () => {} })[0].to, 'planning', 'a failed review of integrated code goes back to the Planner')
   assert.equal(findCard(tasksDir, 'T-1').autoReview, true)
   putCard(tasksDir, 'working', 'T-2', null)
   assert.equal(runHkb(tasksDir, 'rework', 'T-2', '[evidence] verification incomplete').status, 0)
@@ -169,4 +169,56 @@ test('finished Builder whose card sits in Review is retired and integrated', asy
   const io = { agentList: async () => agent ? [agent] : [], paneRead: async () => 'out', recordUsageFinish: async () => {},
     paneClose: async () => { agent = null }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
   assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')
+})
+
+test('Auto-review yes: done, Completed, integrated, Review on integrated code, PASS archives', t => {
+  const root = mkdtempSync(join(tmpdir(), 'review-after-integration-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const registry = entry => writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry }))
+  putCard(tasksDir, 'working', 'T-1', 'yes')
+  registry({ state: 'building' })
+  assert.equal(runHkb(tasksDir, 'done', 'T-1').status, 0)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+  assert.deepEqual(promoteAutoReview(tasksDir), [], 'no review before integration')
+  assert.deepEqual(archiveNoReviewCards(tasksDir).archived, [], 'Auto-review cards are not archived unreviewed')
+  registry({ state: 'integrated', cleaned: true, commit: 'abc' })
+  assert.deepEqual(promoteAutoReview(tasksDir), ['T-1'])
+  appendReviewPass({ path: findCard(tasksDir, 'T-1').path }, 'AC1 checked on integrated code')
+  assert.equal(routeReviewVerdicts(tasksDir, { log: () => {} })[0].to, 'completed')
+  assert.deepEqual(archiveNoReviewCards(tasksDir).archived, ['T-1'])
+  assert.equal(findCard(tasksDir, 'T-1').column, 'archive')
+
+  // Legacy: a card sent to Review before integration goes back to Completed to integrate.
+  putCard(tasksDir, 'review', 'T-2', 'yes')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-2': { state: 'building' } }))
+  promoteAutoReview(tasksDir)
+  assert.equal(findCard(tasksDir, 'T-2').column, 'completed')
+})
+
+test('reviewer snapshot contains the integrated card commit and a real PASS survives later integration', async t => {
+  const { snapshotContains, assertReviewInputs } = await import('./lib/review-claims.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'review-snapshot-')), repo = join(root, 'repo'), snap = join(root, 'snap'), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const git = (cwd, ...args) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
+  mkdirSync(repo)
+  git(repo, 'init', '-q', '-b', 'main')
+  writeFileSync(join(repo, 'example.js'), 'base\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'base')
+  git(repo, 'checkout', '-qb', 'card')
+  writeFileSync(join(repo, 'example.js'), 'card change\n'); git(repo, 'commit', '-qam', 'card')
+  const cardCommit = git(repo, 'rev-parse', 'HEAD')
+  git(repo, 'checkout', '-q', 'main')
+  assert.equal(snapshotContains(repo, cardCommit), false, 'integration HEAD without the card commit is refused')
+  git(repo, 'cherry-pick', '-x', cardCommit)
+  assert.equal(snapshotContains(repo, cardCommit), true, 'cherry-picked card commit is found by its -x trailer')
+
+  // Snapshot = reviewed code. Integration moving on afterwards must not void a real PASS.
+  git(repo, 'worktree', 'add', '-q', '--detach', snap, 'HEAD')
+  const cardPath = putCard(tasksDir, 'review', 'T-1', 'yes')
+  writeFileSync(cardPath, readFileSync(cardPath, 'utf8').replace('**Workflow version:** 2\n', '**Workflow version:** 2\n\n## Files\n- `example.js` — changed\n'))
+  const fingerprint = evidenceFingerprint(findCard(tasksDir, 'T-1'), snap)
+  writeFileSync(join(root, '.review-claims.json'), JSON.stringify({ version: 1, claims: [{ id: 'c1', project: 'Proof', tasksDir, cards: ['T-1'], createdAt: 1, phase: 'running', snapshot: { path: snap }, integrationPath: repo, environment: null, inputFingerprints: { 'T-1': fingerprint } }] }))
+  writeFileSync(join(repo, 'example.js'), 'a later card changed this\n')
+  assert.doesNotThrow(() => assertReviewInputs(root, tasksDir, 'T-1'))
+  writeFileSync(join(snap, 'example.js'), 'reviewed code edited\n')
+  assert.throws(() => assertReviewInputs(root, tasksDir, 'T-1'), /must run again/)
 })

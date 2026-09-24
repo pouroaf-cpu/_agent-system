@@ -18,8 +18,10 @@ const AUDIT_TEMPLATES = {
 }
 export const AUDITS = Object.keys(AUDIT_TEMPLATES)
 
-export function validatePlan(text, { requireReadiness = false } = {}) {
-  const section = (name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
+// `workspace` (absolute) is passed only at a Planner handoff, so cards already
+// queued or working are never blocked retroactively by the plan check.
+export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null } = {}) {
+  const section = (name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').replace(/^\*\*Callers checked:\*\*\s*$/gm, '').trim()
   const workspace = text.match(/^\*\*Workspace:\*\*\s*([^\n]+)$/im)?.[1]?.trim() || '.'
   const readinessLine = text.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)?.[0]
   const readiness = text.match(/^\*\*Plan readiness:\*\*\s*(build-ready|investigation)\s*$/im)?.[1]?.toLowerCase()
@@ -68,6 +70,12 @@ export function validatePlan(text, { requireReadiness = false } = {}) {
     if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
     const fileSection = section('Files')
     if ([...fileSection.matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
+    if (planRoot) {
+      for (const [, path, rest] of fileSection.matchAll(/^[-*]\s+`([^`]+)`([^\n]*)/gm)) {
+        if (!/\(new\b[^)]*\)/i.test(rest) && !existsSync(resolve(planRoot, path))) throw new Error(`Plan check failed: ## Files path ${path} does not exist in ${planRoot.replaceAll('\\', '/')}. Fix the path, or mark a file this card creates with (new).`)
+      }
+      if (!/^\*\*Callers checked:\*\*[ \t]*\S/m.test(plan)) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
+    }
   }
 }
 
@@ -487,10 +495,12 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
 
   const card = findCard(tasksDir, cardId)
   if (card.column === toKey) return card
-  if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed && !(!card.autoReview && hasBuilderPass(card))) {
-    throw new Error(card.autoReview ? `${card.id} requires an evidenced Reviewer PASS before Completed` : `${card.id} requires Builder PASS before Completed`)
+  // Completed means "built, ready to integrate". Review runs after integration,
+  // so Auto-review cards need only the Builder PASS here.
+  if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed && !hasBuilderPass(card)) {
+    throw new Error(`${card.id} requires Builder PASS before Completed`)
   }
-  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment })
+  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment, workspace: options.planWorkspace })
   if (card.column === 'archive' && toKey !== 'archive') {
     // Only reachable when every copy of the id is archived; moving one back out
     // silently is more surprising than refusing.

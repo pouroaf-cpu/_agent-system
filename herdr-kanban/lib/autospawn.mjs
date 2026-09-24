@@ -25,7 +25,7 @@ import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.
 import { overlapHoldReason, readWorktrees, integrationStartHoldReason } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
-import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs } from './review-claims.mjs'
+import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
 import { recoveryState } from './recovery.mjs'
 
 // A Builder that disappears or ends without hkb done/issue leaves Working
@@ -446,13 +446,22 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
   return spent.map((a) => a.pane_id)
 }
 
-// A completed card marked auto-review, or a card-owned legacy completion with
-// no recorded PASS, is surfaced in Review. Trivial cards keep their focused
-// completion path.
+// Review runs on integrated code: an Auto-review card is surfaced in Review only
+// once its commit is integrated. Trivial cards keep their focused completion path.
 export function promoteAutoReview(tasksDir, { all = false } = {}) {
   const promoted = []
   const worktrees = readWorktrees(tasksDir)
-  for (const card of readBoard(tasksDir).completed) {
+  const board = readBoard(tasksDir)
+  // Legacy: a card handed to Review before integration can never be reviewed
+  // (the snapshot lacks its code). Send it back to Completed so it integrates.
+  for (const card of board.review) {
+    const entry = worktrees[card.id]
+    if (!card.cardOwned || card.audit || !entry || entry.state === 'integrated' || !hasBuilderPass(card)) continue
+    if (currentReviewDecision(readFileSync(card.path, 'utf8'))) continue
+    moveCard(tasksDir, card.id, 'completed')
+    herdrLog(`${card.id} → completed (integrate before review)`)
+  }
+  for (const card of board.completed) {
     if (!card.autoReview) continue
     if (card.reviewPassed) continue
     if (card.trivial) continue
@@ -471,13 +480,14 @@ export function archiveNoReviewCards(tasksDir) {
   const board = readBoard(tasksDir)
   const archived = [], skipped = []
   for (const card of ['review', 'completed'].flatMap(column => board[column])) {
-    if (!card.cardOwned || card.autoReview || card.audit) continue
+    // Reviewed cards are archived here too, once their PASS has routed them to Completed.
+    if (!card.cardOwned || card.audit || (card.autoReview && !(card.column === 'completed' && card.reviewPassed))) continue
     const worktree = worktrees[card.id]
     const reason = !hasBuilderPass(card) ? 'missing Builder PASS' : worktree?.state !== 'integrated' ? `worktree state is ${worktree?.state ?? 'missing'}, not integrated` : null
     if (reason) { skipped.push({ id: card.id, reason }); continue }
     if (!canArchive(card)) { skipped.push({ id: card.id, reason: 'archive gate rejected the card' }); continue }
     moveCard(tasksDir, card.id, 'archive')
-    appendHistory(tasksDir, card.id, { event: 'note', note: 'Archived without independent review (Auto-review: no)' })
+    appendHistory(tasksDir, card.id, { event: 'note', note: card.autoReview ? 'Archived after Reviewer PASS on integrated code' : 'Archived without independent review (Auto-review: no)' })
     archived.push(card.id)
   }
   return { archived, skipped }
@@ -598,7 +608,8 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (cardIds?.length && (new Set(cardIds).size !== cardIds.length || cards.length !== cardIds.length)) throw new Error('Review group contains duplicate or unavailable cards')
     if (!inventory) throw new Error('Global reviewer inventory required')
     const integrated = readWorktrees(tasksDir)
-    for (const card of cards.filter(c => c.column === 'completed')) {
+    // Reviewers review integrated code; an isolated card commit must be integrated first.
+    for (const card of cards.filter(c => c.column === 'completed' || integrated[c.id])) {
       if (integrated[card.id]?.state !== 'integrated') throw new Error(`${card.id}: integration receipt required before review`)
     }
     claim = reserveReview(reviewRoot, { project, tasksDir, cards: cards.map(c => c.id), inventory: await inventory() })
@@ -615,6 +626,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     const reviewerEngine = auditMcpEngine(selectedEngine, cards, tasksDir)
     const environment = projectEnvironment(project)
     const snapshot = prepareReviewSnapshot(reviewRoot, projectPath, claim.id)
+    for (const card of cards) {
+      const commit = integrated[card.id]?.commit
+      if (snapshot.head && commit && !snapshotContains(snapshot.path, commit)) throw new Error(`${card.id}: review snapshot ${snapshot.head} does not contain integrated commit ${commit}`)
+    }
     updateReviewClaim(reviewRoot, claim.id, { snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
 
     const workspace = await agentWorkspaceOr(projectPath, session)

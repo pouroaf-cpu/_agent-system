@@ -70,6 +70,8 @@ export function recordOperationalFailure(tasksDir, card, reason, workspace, gitS
 export function failureCategory(note) {
   return note.match(/^\s*\[(implementation|planning|operational|evidence|incidental)\]/i)?.[1]?.toLowerCase() || 'evidence'
 }
+// Review runs on integrated code, so a failed review needs a planned fix, not a
+// Builder replay of the already-integrated commit.
 export function failureDestination(category, current) {
-  return category === 'planning' ? 'planning' : category === 'implementation' ? 'queue' : current
+  return category === 'planning' || (category === 'implementation' && current === 'review') ? 'planning' : category === 'implementation' ? 'queue' : current
 }

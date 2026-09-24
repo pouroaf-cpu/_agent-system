@@ -16,11 +16,11 @@
 // supply — no amount of agent effort will resolve it.
 
 import { existsSync, appendFileSync, readFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection } from './lib/card-planner.mjs'
@@ -54,6 +54,19 @@ const HEADING = { issue: 'Kicked back', owner: 'Needs you', park: 'Parked', rewo
 
 // Repeated failed reviews require deeper Planner diagnosis, never a human dump.
 const MAX_REVIEW_ROUNDS = 3
+
+// The card's workspace in the project's integration checkout: where a Planner's
+// ## Files paths must already exist at handoff.
+function integrationWorkspace(card) {
+  const projectPath = dirname(tasksDir)
+  let gitSettings
+  try {
+    const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || fileURLToPath(new URL('./board.config.json', import.meta.url)), 'utf8'))
+    const name = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(projectPath).toLowerCase())
+    gitSettings = config.projectSettings?.[name]
+  } catch { /* No config: the project's own Git root is the integration checkout. */ }
+  return resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.')
+}
 
 function fail(msg) {
   console.error(`hkb: ${msg}`)
@@ -92,7 +105,8 @@ let card
 let previousColumn
 try {
   const current = findCard(tasksDir, cardId)
-  if (verb === 'done') target = current.trivial || !current.autoReview ? 'completed' : 'review'
+  // Review runs on integrated code, so every Builder handoff goes to Completed first.
+  if (verb === 'done') target = 'completed'
   if (verb === 'unchanged') target = current.trivial ? 'completed' : !current.autoReview ? 'archive' : 'review'
   if (verb === 'pass') target = 'completed'
   if (!columnByKey(target)) fail(`unknown column: ${target}`)
@@ -166,7 +180,8 @@ try {
       if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
     }
   }
-  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, correction: ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
+  const planWorkspace = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? integrationWorkspace(current) : undefined
+  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, planWorkspace, correction: ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   if (auditIntake && previousColumn !== 'planning') {

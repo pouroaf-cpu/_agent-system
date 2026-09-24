@@ -30,7 +30,8 @@ const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjec
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
-const { readReviewClaims } = await import('./lib/review-claims.mjs')
+const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
+const { checkStalls } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
@@ -70,6 +71,7 @@ let herdrFailed = false
 
 const announcedBreakers = new Set()
 const lastActivityHold = new Map()
+const integrationHolds = new Map() // project -> { cardId: why integration is waiting }, for the stall watchdog
 const finishedBindingSince = new Map()
 const orphanWorkingSince = new Map()
 const reconciliationPolls = new Set()
@@ -93,7 +95,7 @@ function archiveNoReview(project, tasksDir) {
   const result = archiveNoReviewCards(tasksDir)
   for (const id of result.archived) {
     lastActivityHold.delete(`${project}:${id}:no-review-archive`)
-    activity(project, id, 'move', 'archived without independent review (Auto-review: no)')
+    activity(project, id, 'move', 'archived after integration')
   }
   for (const { id, reason } of result.skipped) {
     const key = `${project}:${id}:no-review-archive`
@@ -288,6 +290,19 @@ async function pollProject(project) {
     }
     // Observe usage/results during Pause, but leave assignments and recovery intact.
     if (controlState(project, CONFIG_PATH).paused) { broadcastBoard(project); return }
+    // Safety net first, so a failure later in this poll cannot hide a stall.
+    if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
+      try {
+        const claims = readReviewClaims(REVIEW_ROOT)
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20,
+          builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
+        for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
+        if (stalls.length) broadcastBoard(project)
+      } catch (err) {
+        if (lastActivityHold.get(`${project}:stall-watchdog`) !== err.message) activity(project, '-', 'stall-watchdog', `stall check failed: ${err.message}`, 'error')
+        lastActivityHold.set(`${project}:stall-watchdog`, err.message)
+      }
+    }
     await resumeDeliveries(sessionOf(project))
 
     // Put the agents workspace back if it was closed, before anything spawns into it.
@@ -371,7 +386,10 @@ async function pollProject(project) {
     // A Builder hands off before integration. Validate and cherry-pick each
     // completed card serially, routing only the failing card back to its Planner.
     if (gitSettings) {
+      const waiting = {} // why each card is not integrated yet, for the stall watchdog's Owner note
+      integrationHolds.set(project, waiting)
       for (const result of await reconcileCompletedHandoffs({ tasksDir, project })) {
+        if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
         if (result.status === 'integrated') {
           activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
           dirty = true
@@ -393,7 +411,9 @@ async function pollProject(project) {
           activity(project, result.id, /conflict/i.test(result.reason) ? 'integration-conflict' : 'integration-block', result.reason, 'error')
           dirty = true
         } else {
-          activity(project, result.id, 'integration-held', result.reason, 'error')
+          const key = `${project}:${result.id}:handoff`
+          if (lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
+          lastActivityHold.set(key, result.reason)
         }
       }
     }

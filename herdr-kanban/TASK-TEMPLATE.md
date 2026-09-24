@@ -28,6 +28,7 @@
 
 ## Implementation plan
 <!-- Planner: set Plan readiness to build-ready only after recording outcome, unchanged constraints, observed cause/evidence, inspected revision/state, exact files and targets, concrete changes, runnable check/setup with expected result, and scope/stop rules. Unknown cause remains investigation. -->
+**Callers checked:** <!-- Planner: every file that references each changed function/export (grep for it), or none -->
 
 ## Acceptance criteria
 <!-- Orchestrator supplies agreed outcomes; Planner preserves them as - AC1: observable outcome bullets. -->

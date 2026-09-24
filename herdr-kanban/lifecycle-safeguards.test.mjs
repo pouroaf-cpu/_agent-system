@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { routeBuilderNoHandoff, recoverBuilderNoHandoff } from './lib/autospawn.mjs'
 import { workerPrompt, issuesSweeperPrompt } from './lib/prompt.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
-import { readWorkflow } from './lib/workflow-state.mjs'
+import { readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { runCardPlanner } from './lib/card-planner.mjs'
 
 test('Builder fallback routes Working to Issues and preserves assignment/worktree evidence', t => {
@@ -37,26 +37,63 @@ test('Planner and Builder prompts require prerequisite verification and one hand
   assert.match(planner, /exactly one .*move <ID> planned command/i)
 })
 
-test('Planner fallback routes a stopped session to Issues with saved pane evidence', async t => {
+test('Planner that stops without a handoff gets one fresh Planner with saved evidence, then Owner', async t => {
   const root = mkdtempSync(join(tmpdir(), 'planner-fallback-'))
   const tasks = join(root, 'TASKS'), planning = join(tasks, 'planning')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(planning, { recursive: true })
   writeFileSync(join(planning, 'T-3.md'), '# T-3 — planner handoff\n**Workflow:** card-owned\n## Approved brief\nDo the approved thing\n## Files\n- `app.mjs`\n## Implementation plan\nPlan it\n## Acceptance criteria\n- AC1: works\n')
   writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ 'T-3': { assignmentId: 'a', lifecycle: 'active', paneId: 'pane-3', submitted: true, replacementAttempts: 0 } }))
+  let agents = [{ pane_id: 'pane-3', agent_status: 'done', state_change_seq: 8 }], pane = 3
+  const delivered = [], closed = []
   const io = {
-    agentList: async () => [{ pane_id: 'pane-3', agent_status: 'done', state_change_seq: 8 }],
-    paneRead: async () => 'Planner stopped after checking route /missing',
-    agentWorkspaceOr: async () => root, tabCreate: async () => { throw new Error('not expected') },
-    waitForPrompt: async () => {}, agentStart: async () => {}, paneClose: async () => {},
-    deliver: async () => {}, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    agentList: async () => agents,
+    paneRead: async id => `${id} stopped after checking route /missing`,
+    agentWorkspaceOr: async () => root, tabCreate: async () => ({ root_pane: { pane_id: `pane-${++pane}` } }),
+    waitForPrompt: async () => {}, agentStart: async ({ paneId }) => { agents = [...agents, { pane_id: paneId, agent_status: 'idle' }] },
+    paneClose: async id => { closed.push(id); agents = agents.filter(a => a.pane_id !== id) },
+    deliver: async id => { delivered.push(id) }, recordUsageStart: () => {}, recordUsageFinish: async () => {},
   }
   const args = { project: 'Proof', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'test', io, handoffGraceMs: 10 }
   await runCardPlanner({ ...args, now: 0 })
   await runCardPlanner({ ...args, now: 11 })
-  assert.equal(findCard(tasks, 'T-3').column, 'issues')
-  assert.match(readFileSync(findCard(tasks, 'T-3').path, 'utf8'), /Planner fallback[\s\S]*route \/missing/)
-  assert.match(readFileSync(join(tasks, '.history', 'T-3.jsonl'), 'utf8'), /route \/missing/)
+  assert.equal(findCard(tasks, 'T-3').column, 'planning', 'the card is not parked in Issues')
+  assert.deepEqual(closed, ['pane-3']); assert.deepEqual(delivered, ['pane-4'])
+  assert.match(readFileSync(findCard(tasks, 'T-3').path, 'utf8'), /Planner fallback[\s\S]*fresh Planner/)
+  assert.match(readFileSync(join(tasks, '.history', 'T-3.jsonl'), 'utf8'), /pane-3 stopped after checking route \/missing/)
+  assert.equal(readWorkflow(tasks)['T-3']?.operational ?? null, null, 'no operational hold')
+  const owner = JSON.parse(readFileSync(join(tasks, '.card-planners.json'), 'utf8'))['T-3']
+  assert.equal(owner.paneId, 'pane-4'); assert.ok(owner.revokedPaneIds.includes('pane-3')); assert.equal(owner.noHandoffCount, 1)
+  // The fresh Planner also stops without a handoff: one plain-language Owner question, no third Planner.
+  await runCardPlanner({ ...args, now: 20 })
+  await runCardPlanner({ ...args, now: 31 })
+  assert.equal(findCard(tasks, 'T-3').column, 'owner')
+  assert.deepEqual(delivered, ['pane-4'])
+  assert.match(readFileSync(findCard(tasks, 'T-3').path, 'utf8'), /Needs you: Two Planner sessions in a row stopped[\s\S]*\?/)
+})
+
+test('a card parked in Issues by an old Planner no-handoff hold is recovered with a fresh Planner (T-8)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-hold-'))
+  const tasks = join(root, 'TASKS'), issues = join(tasks, 'issues')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(issues, { recursive: true })
+  writeFileSync(join(issues, 'T-8.md'), '# T-8 — held\n**Workflow:** card-owned\n## Approved brief\nDo it\n')
+  writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ 'T-8': { assignmentId: 'a', lifecycle: 'active', paneId: 'w1:pK', submitted: false, replacementAttempts: 0 } }))
+  recordOperationalFailure(tasks, findCard(tasks, 'T-8'), 'Planner session w1:pK ended without a valid handoff after 120000ms; observed status=idle, state_change_seq=4', root)
+  let agents = [{ pane_id: 'w1:pK', agent_status: 'idle' }]
+  const delivered = []
+  const io = {
+    agentList: async () => agents, paneRead: async () => 'old output', agentWorkspaceOr: async () => root,
+    tabCreate: async () => ({ root_pane: { pane_id: 'w1:pNew' } }), waitForPrompt: async () => {},
+    agentStart: async ({ paneId }) => { agents = [{ pane_id: paneId, agent_status: 'idle' }] }, paneClose: async () => {},
+    deliver: async id => { delivered.push(id) }, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+  }
+  const result = await runCardPlanner({ project: 'Proof', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'test', io })
+  assert.equal(result.spawnedNewAgent, true)
+  assert.deepEqual(delivered, ['w1:pNew'])
+  assert.equal(findCard(tasks, 'T-8').column, 'planning')
+  assert.equal(readWorkflow(tasks)['T-8'].operational, null)
+  assert.doesNotMatch(readFileSync(findCard(tasks, 'T-8').path, 'utf8'), /Failed return/, 'a quiet Planner is not a failed plan')
 })
 
 test('held Builder gets one nudge, returns to Working, then recovers to Planner if idle', async t => {

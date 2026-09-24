@@ -159,7 +159,8 @@ test('version-2 handoff validates a structured result and repeated completion is
 test('product corrections route by cause and retain the five-return stop', t => {
   const f = fixture(t)
   assert.equal(failureDestination('planning', 'review'), 'planning')
-  assert.equal(failureDestination('implementation', 'review'), 'queue')
+  assert.equal(failureDestination('implementation', 'review'), 'planning')
+  assert.equal(failureDestination('implementation', 'working'), 'queue')
   assert.equal(failureDestination('evidence', 'review'), 'review')
   const card = createCard(f.tasks, { title: 'correction', brief: 'correct result' })
   writeFileSync(card.path, `# ${card.id} — correction\n**Workflow:** card-owned\n${plan}`)
