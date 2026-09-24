@@ -353,6 +353,17 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   return { git: true, workspacePath, cwd: workspacePath, entry, created: true }
 }
 
+// ponytail: 30s memo so one poll's many overlap checks run git once per worktree.
+const emptyCheckouts = new Map()
+function holdsNoWork(entry) {
+  const hit = emptyCheckouts.get(entry.worktreePath)
+  if (hit && Date.now() - hit.at < 30_000) return hit.empty
+  let empty = false
+  try { empty = existsSync(entry.worktreePath) && clean(entry.worktreePath) && git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() === entry.baseCommit } catch { /* unknown keeps the lock */ }
+  emptyCheckouts.set(entry.worktreePath, { at: Date.now(), empty })
+  return empty
+}
+
 export function overlapHoldReason({ tasksDir, card, projectPath }) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   if (!candidate.size) return 'card not ready — no exact files listed'
@@ -366,6 +377,9 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
     // An archived card is closed: its preserved worktree must never block live cards.
     if (live?.column === 'archive') continue
+    // Back before Working with a clean checkout at its base, a card has no work to
+    // protect (Tradeflow T-36's empty worktree held 14 queued cards).
+    if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && holdsNoWork(entry)) continue
     // Preserve locks on existing changes even if a correction narrows the card.
     const files = [...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })

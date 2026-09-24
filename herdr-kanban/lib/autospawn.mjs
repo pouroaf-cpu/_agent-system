@@ -340,7 +340,9 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           ? `**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${reason}. Planner: correct the card/dependency before requeueing. Preserved work remains available.`
           : `**Needs you** ${new Date(now).toISOString()}\n\n${reason}. Decision needed: resolve this hold or authorize a recovery path before requeueing.`
         appendFileSync(moved.path, `\n\n---\n\n${note}\n`)
-        updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
+        // Handed to the Planner, the hold is recorded on the card; kept in workflow it made
+        // the Planner skip the card forever (Tradeflow T-36 sat in Planning with none).
+        updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null, ...(cardProblem ? { operational: null } : {}) })
         if (cardProblem) requestPlannerCorrection(tasksDir, moved.id)
         delete held[freshCard.id]
         log?.(`${moved.id}: routed to ${to} — ${reason}`)
