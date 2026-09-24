@@ -126,7 +126,9 @@ test('with nothing recorded, the Owner note says what the board observed (Health
   writeFileSync(join(tasks, 'planning', 'T-01.md'), '# T-01 — legacy card\n\n## Goal\n\nOld TASKS.md entry.\n')
   stamp(join(tasks, 'planning', 'T-01.md'), T)
   checkStalls({ tasksDir: tasks, agents: [], now: T })
-  const [stall] = checkStalls({ tasksDir: tasks, agents: [], now: T + 20 * MIN })
+  // Never started, nothing recorded: three windows before Owner (Injectbuddy I193).
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 20 * MIN }), [])
+  const [stall] = checkStalls({ tasksDir: tasks, agents: [], now: T + 60 * MIN })
   assert.equal(stall.action, 'moved to Owner')
   const text = readFileSync(findCard(tasks, 'T-01').path, 'utf8')
   assert.match(text, /Last hold\/error: none recorded; the board observed that no Planner was ever started for this card \(legacy card format, not card-owned\)\./)
@@ -162,9 +164,11 @@ test('a card idle since before the restart is caught on the first check; agent s
     a: { cardIds: ['T-3'], role: 'builder', start: { at: new Date(T + 10 * MIN).toISOString() }, finish: { at: new Date(T + 35 * MIN).toISOString() } },
   } }))
   // First check ever, 40 minutes after T: only T-1 has been quiet for 20 minutes.
-  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 40 * MIN }).map(s => s.id), ['T-1'])
+  // T-1 never had a Planner, so it waits three windows (Injectbuddy I193).
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 40 * MIN }).map(s => s.id), [])
   assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 50 * MIN }).map(s => s.id), ['T-2'])
   assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 55 * MIN }).map(s => s.id), ['T-3'])
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 60 * MIN }).map(s => s.id), ['T-1'])
 })
 
 test('lane times: since from the lane entry (else file mtime); agentActive only for a working bound agent', t => {

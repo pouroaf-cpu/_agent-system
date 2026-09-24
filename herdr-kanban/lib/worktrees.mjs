@@ -67,6 +67,24 @@ function operationInProgress(cwd) {
 
 const clean = (cwd) => !operationInProgress(cwd) && semanticDirtyFiles(cwd).length === 0
 
+// Agent tool output (Playwright MCP, Impeccable) lands in whatever checkout an agent
+// runs from. Untracked there, it made the Injectbuddy integration checkout "dirty" and
+// held every merge (2026-09-25). Ignore it locally for all of a repo's worktrees.
+const TOOL_OUTPUT = ['.playwright-mcp/', '.impeccable/']
+export function ignoreToolOutput(repoRoot) {
+  try {
+    const common = resolve(repoRoot, git(repoRoot, ['rev-parse', '--git-common-dir']).stdout.trim())
+    const path = join(common, 'info', 'exclude')
+    const text = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    const lines = text.split(/\r?\n/)
+    const missing = TOOL_OUTPUT.filter(line => !lines.includes(line))
+    if (!missing.length) return
+    mkdirSync(dirname(path), { recursive: true })
+    const sep = text && !text.endsWith('\n') ? '\n' : ''
+    writeFileSync(path, `${text}${sep}# kanban: agent tool output\n${missing.join('\n')}\n`)
+  } catch { /* best effort: the dirty check still protects the checkout */ }
+}
+
 // Operator must quiesce external writers; the integration caller already owns
 // the serial board lock. The index lock also excludes normal concurrent Git writes.
 export function normalizeGuardedEol(cwd) {
@@ -304,6 +322,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   const integrationWorkspace = resolve(integrationBase, card.workspace || '.')
   const repoRoot = gitRoot(integrationWorkspace)
   if (!repoRoot) return { git: false, workspacePath: integrationWorkspace, cwd: projectPath, created: false }
+  ignoreToolOutput(repoRoot)
   const hold = integrationStartHoldReason({ repoRoot, workspace: integrationWorkspace, card })
   if (hold) throw new Error(hold)
 
@@ -615,6 +634,7 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
         // An interrupted operation may now contain human conflict resolutions.
         // Preserve it; never abort a pre-existing cherry-pick automatically.
         updateEntry(tasksDir, entry.cardId, { state: 'ready', commit })
+        ignoreToolOutput(entry.repoRoot)
         if (!clean(entry.repoRoot)) {
           results.push({ id: entry.cardId, status: 'held', reason: `integration worktree is dirty: ${entry.repoRoot}` })
           break

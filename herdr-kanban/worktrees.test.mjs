@@ -560,3 +560,17 @@ test('hkb done refuses a commit with out-of-scope files while the Builder can fi
     assert.equal(findCard(f.tasks, 'T-1').column, 'working')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('agent tool output in the integration checkout never blocks integration', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
+    writeFileSync(join(wt, 'app.js'), 'card one\n'); git(wt, 'commit', '-am', 'T-1 change')
+    // Injectbuddy 2026-09-25: a Planner's Playwright MCP wrote here and held every merge.
+    mkdirSync(join(f.integration, '.playwright-mcp'), { recursive: true })
+    writeFileSync(join(f.integration, '.playwright-mcp', 'console.log'), 'x\n')
+    f.complete('T-1')
+    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})

@@ -116,6 +116,11 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
 
   const stalls = []
   for (const { card, since } of idle.values()) {
+    // Never started and nothing recorded: the card is waiting its turn (priority order,
+    // a hold missing from this poll's snapshot), which only the board can fix, so it gets
+    // three windows before the operator is asked (Injectbuddy I182/I193 went to Owner twice).
+    const started = runs.some(r => r.cardIds?.includes(card.id)) || (['planning', 'issues'].includes(card.column) ? planners[card.id]?.paneId : (bindings[card.id]?.pane_id || workflow[card.id]?.builder?.pane_id))
+    if (['planning', 'queue'].includes(card.column) && !started && !card.blockedBy?.length && !workflow[card.id]?.operational && now - since < 3 * minutes * 60000) continue
     if (allowedWait(card)) { reset(card.id); continue }
     const at = new Date(now).toISOString(), mins = Math.round((now - since) / 60000)
     const lane = columnByKey(card.column).label
