@@ -185,9 +185,11 @@ const MISSION = /(?<!`)\*\*Mission:\*\*\s*([^\n]+)/i
 const BUILD_ATTEMPT = /^\*\*Build attempt\*\*/gm
 const REVIEW_FEEDBACK = /^\*\*Review feedback\*\*/gm
 const RESET_MARKER_LINE = /^\*\*(Build attempt|Review feedback)\*\*/i
-const REVIEWER_EVIDENCE_LINE = /^##\s+Reviewer evidence\s*$/i
+// Reviewers date their headings and bullet their verdicts; both forms count (Tradeflow T-35:
+// hkb pass refused two PASS reviews written as "## Reviewer evidence — <date>" / "- **Review verdict:** PASS").
+const REVIEWER_EVIDENCE_LINE = /^##\s+Reviewer evidence\b.*$/i
 const ANY_HEADING_LINE = /^#{1,6}\s+/
-const REVIEW_VERDICT_LINE = /^\*\*Review verdict:\*\*\s*(PASS|FAIL|UNKNOWN)\b/i
+const REVIEW_VERDICT_LINE = /^(?:[-*]\s+)?\*\*Review verdict:\*\*\s*(PASS|FAIL|UNKNOWN)\b/i
 const FILES_SECTION = /##\s*Files\s*\n([\s\S]*?)(?=\n##\s|\n*$)/i
 const FILE_LINE = /^-\s*`([^`]+)`/gm
 const DIRTY_SNAPSHOT = /^\*\*Dirty snapshot:\*\*[^\n]*\n+```json\n([\s\S]*?)\n```/gm

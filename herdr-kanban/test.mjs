@@ -1983,6 +1983,14 @@ TODO
 `), false)
 })
 
+test('review PASS parser accepts a dated heading and a bulleted verdict (Tradeflow T-35)', () => {
+  assert.equal(hasCurrentReviewPass(`## Reviewer evidence — 2026-09-24 20:16 UTC
+
+- **AC1 PASS:** guide openings verified at 390 and 1280
+- **Review verdict:** PASS
+`), true)
+})
+
 test('review PASS parser requires latest real verdict after latest build or rework', () => {
   assert.equal(hasCurrentReviewPass(`## Reviewer evidence
 
