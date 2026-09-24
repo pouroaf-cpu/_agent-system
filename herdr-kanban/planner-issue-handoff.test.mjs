@@ -59,3 +59,27 @@ test('a delivery herdr gave up on counts once the agent starts working', async (
     list: async () => (++looks >= 3 ? [{ pane_id: 'p', agent_status: 'working' }] : []),
   })
 })
+
+test('a Planner blocked on an interactive question goes to Owner with it after the grace', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planner-blocked-'))
+  try {
+    const card = createCard(dir, { title: 'Needs a label decision', brief: 'x' })
+    const owners = readCardPlanners(dir)
+    owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [] }
+    saveCardPlanners(dir, owners)
+    const agents = [{ name: 'p', pane_id: 'p1', agent_status: 'blocked' }]
+    const io = {
+      agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {}, tabCreate: async () => ({}),
+      agentStart: async () => {}, deliver: async () => {}, paneClose: async () => {}, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+      paneRead: async () => '? 1 question: which CTA label should non-syringe tools use?',
+    }
+    const run = (now) => runCardPlanner({ project: 'P', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-5.5', io, now, handoffGraceMs: 1000 }).catch(() => null)
+    await run(10000)
+    assert.equal(findCard(dir, card.id).column, 'planning', 'still inside the grace')
+    await run(12000)
+    // Injectbuddy I176/I181 sat blocked on an unanswerable prompt overnight.
+    const moved = findCard(dir, card.id)
+    assert.equal(moved.column, 'owner')
+    assert.match(moved.ask?.text || '', /which CTA label/)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

@@ -309,8 +309,26 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         save(tasksDir, owners)
       }
       let agent = owner && agents.find(a => a.pane_id === owner.paneId)
+      // A Planner asking an interactive question (Codex shows "blocked") waits for an
+      // answer nobody gives: past the grace it is the operator's question, so the card
+      // goes to Owner with it (Injectbuddy I176/I181 sat blocked overnight).
+      if (agent?.agent_status === 'blocked' && owner?.submitted) {
+        owner.blockedSince ??= new Date(now).toISOString()
+        save(tasksDir, owners)
+        if (now - Date.parse(owner.blockedSince) >= handoffGraceMs) {
+          const question = String(await readPane(owner.paneId, session).catch(() => '')).trim().slice(-1500)
+          await retire(card, owner, agent, 'Planner asked an interactive question')
+          owner.submitted = false
+          delete owner.blockedSince
+          save(tasksDir, owners)
+          const moved = moveCard(tasksDir, card.id, 'owner')
+          writeCurrentFeedback(tasksDir, moved, 'Needs you', `The Planner for ${card.id} stopped to ask a question instead of handing off. Its last screen:\n\n${question}\n\nAnswer on the card, then drag it back to Planning.`)
+        }
+        continue
+      }
       if (agent && !['idle', 'done'].includes(agent.agent_status)) {
         if (owner.inactiveSince) { delete owner.inactiveSince; save(tasksDir, owners) }
+        if (owner.blockedSince) { delete owner.blockedSince; save(tasksDir, owners) }
         continue
       }
       if (card.column === 'planning' && owner?.submitted) {
