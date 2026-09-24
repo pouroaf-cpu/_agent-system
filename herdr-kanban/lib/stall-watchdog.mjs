@@ -125,9 +125,11 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (allowedWait(card)) { reset(card.id); continue }
     const at = new Date(now).toISOString(), mins = Math.round((now - since) / 60000)
     const lane = columnByKey(card.column).label
-    // One retry per lane visit: a card file that changed since the retry is a new visit.
+    // One retry per lane visit. A visit starts when the card enters the lane; an agent
+    // appending to the card is not a new visit (Tradeflow T-38 looped in Review that way).
     const last = workflow[card.id]?.stallRecovery
-    const tried = last?.column === card.column && last.mtime === card.mtime
+    const enteredAt = laneEnteredAt(tasksDir, card.id, card.column) || 0
+    const tried = last?.column === card.column && (last.enteredAt != null ? last.enteredAt === enteredAt : last.mtime === card.mtime)
     // A workflow-limit hold never clears by retrying, so it goes straight to Owner with its reason.
     const role = ROLE[card.column]
     const limit = role && checkWorkflowLimits(tasksDir, card.id, role)
@@ -135,8 +137,15 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     const reason = `no change for ${mins}m and no agent working${hold ? `; last hold: ${hold}` : ''}`
     let action = tried || limit ? '' : recover(tasksDir, card, workflow[card.id])
     if (action) {
-      updateWorkflow(tasksDir, card.id, { stallRecovery: { column: card.column, mtime: card.mtime, at, action, hold } })
+      updateWorkflow(tasksDir, card.id, { stallRecovery: { column: card.column, mtime: card.mtime, enteredAt, at, action, hold } })
       appendHistory(tasksDir, card.id, { event: 'stall-recovery', stage: card.column, reason, action })
+    } else if (card.column === 'review' && tried && !limit) {
+      // A review that stalls again after its retry is a defect to diagnose, not an operator
+      // question: the Planner takes it, and its own 3-blocker cap reaches Owner (Tradeflow T-38).
+      action = 'sent to the Planner'
+      const moved = moveCard(tasksDir, card.id, 'planning')
+      requestPlannerCorrection(tasksDir, card.id)
+      writeCurrentFeedback(tasksDir, moved, 'Review feedback', `The review stalled twice (${hold || 'no verdict recorded'}). Diagnose the latest Reviewer evidence on this card and plan the fix.`)
     } else {
       action = 'moved to Owner'
       const moved = moveCard(tasksDir, card.id, 'owner')

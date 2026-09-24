@@ -201,3 +201,18 @@ test('time spent paused is not a stall: Start restarts the clock (Tradeflow, 15 
   const [stall] = checkStalls({ tasksDir: tasks, resumedAt, now: T + 7 * 60 * MIN + 61 * MIN })
   assert.match(stall.reason, /no change for 61m/)
 })
+
+test('an agent appending to the card does not buy another retry in the same lane visit (Tradeflow T-38 Review loop)', t => {
+  const { root, tasks, put } = board(t)
+  put('review', 'T-1')
+  recordOperationalFailure(tasks, findCard(tasks, 'T-1'), 'Reviewer ended without a verdict', root)
+  const [first] = checkStalls({ tasksDir: tasks, now: T + 20 * MIN })
+  assert.match(first.action, /lifted the operational hold/)
+  const path = findCard(tasks, 'T-1').path
+  appendFileSync(path, '\n## Reviewer evidence\nAC5 FAIL\n')
+  stamp(path, T + 25 * MIN)
+  recordOperationalFailure(tasks, findCard(tasks, 'T-1'), 'Reviewer ended without a verdict again', root)
+  const [second] = checkStalls({ tasksDir: tasks, now: T + 46 * MIN })
+  assert.equal(second.action, 'sent to the Planner')
+  assert.equal(findCard(tasks, 'T-1').column, 'planning')
+})
