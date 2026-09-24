@@ -23,9 +23,10 @@ try {
   await runCardPlanner(args)
   assert.equal(first.spawnedNewAgent, true)
   assert.equal(starts, 1); assert.equal(submissions, 1)
+  // Past Planning, the idle Planner is closed at once (each holds MCP servers).
   moveCard(dir, card.id, 'owner'); await runCardPlanner(args)
-  assert.equal(closes, 0)
-  // A correction goes to a fresh Planner; the idle one is retired, its output saved.
+  assert.equal(closes, 1); assert.ok(readCardPlanners(dir)[card.id].closedAt)
+  // A correction goes to a fresh Planner, never counted as a missing replacement.
   moveCard(dir, card.id, 'issues'); const correction = await runCardPlanner(args)
   assert.equal(correction.spawnedNewAgent, true)
   assert.equal(starts, 2); assert.equal(submissions, 2); assert.equal(usage, 2); assert.equal(closes, 1)

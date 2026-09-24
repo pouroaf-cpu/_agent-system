@@ -155,7 +155,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       delete owner.inactiveSince
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
-      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Remain idle after the plan. The board will return corrections to this session and retire it on archive.' + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
@@ -165,8 +165,10 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
       return true
     }
-    // Retirement preserves the ledger and card; only the agent pane is closed.
-    for (const card of board.archive) {
+    // Retirement preserves the ledger and card; only the agent pane is closed. A card
+    // past Planning never goes back to this session (corrections get a fresh one), and
+    // each idle Codex Planner holds its MCP servers: 27 of them overloaded herdr (Tradeflow).
+    for (const card of Object.entries(board).filter(([lane]) => !['planning', 'issues'].includes(lane)).flatMap(([, cards]) => cards)) {
       if (cardRunContext()) continue
       const owner = owners[card.id]
       if (!owner || owner.closedAt) continue
@@ -175,6 +177,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       await recordUsageFinish({ tasksDir, paneId: owner.paneId, agent, status: 'complete' })
       if (agent) await paneClose(owner.paneId, session)
       owner.closedAt = new Date().toISOString()
+      owner.submitted = false
+      owner.revokedPaneIds = [...new Set([...(owner.revokedPaneIds || []), owner.paneId])]
       save(tasksDir, owners)
     }
     // Owner is an explicit stop, including older technical-exhaustion cards.
@@ -352,6 +356,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       }
       if (!owner || !agent) {
         const previous = owner
+        // A Planner the board closed after its handoff is not a missing replacement.
+        if (previous?.closedAt) fresh = true
         if (previous && !fresh && previous.replacementAttempts >= 1) {
           escalate(new Error('Replacement planner is missing'))
           continue
