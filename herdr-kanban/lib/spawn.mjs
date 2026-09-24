@@ -14,6 +14,7 @@ import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries } from './de
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { assertGuardActive, assertRestrictedRuntimeVerified } from './builder-guard.mjs'
+import { activityLog } from './activity.mjs'
 
 // A prompt that never leaves the input box is the failure this guards against, so
 // the check is "did the agent start working", not "did the CLI return 0". One
@@ -114,8 +115,15 @@ export async function spawnForCard({
   const prepared = prepareCardWorktree({ projectPath, tasksDir, card, gitSettings })
   const saved = readWorkflow(tasksDir)[card.id]
   const prior = saved?.correction?.category === 'implementation' ? saved.builder : null
+  // A bare (legacy) pane id resolves in the project's old session and a qualified
+  // `id@default` one in the shared session; agentList(session) returns both forms.
   const resume = prior && (await agentList(session, { ensureSession: false })).find(a => a.pane_id === prior.pane_id && ['done', 'idle'].includes(a.agent_status))
-  if (prior && !resume) throw Object.assign(new Error('Responsible Builder session is missing or busy; recover that session before correction'), { preservePane: true })
+  // The prior Builder is gone or busy: a fresh Builder continues in the same card
+  // worktree (prepareCardWorktree reuses it) with the correction in its prompt.
+  const correctionNote = prior && !resume
+    ? ` Implementation correction: the previous Builder session (${prior.pane_id}) is unavailable, so you are its replacement. Continue from the existing commits and files in this workspace; do not restart or discard them. Correction to make: ${String(saved.correction.note || 'see the card Current feedback section').replace(/\s+/g, ' ').trim()}`
+    : ''
+  if (correctionNote) activityLog({ tasksDir, project, cardId: card.id, event: 'builder-replaced', message: `prior Builder ${prior.pane_id} missing or busy; starting a fresh Builder in ${prepared.workspacePath} for the implementation correction`, level: 'warn' })
   let created
   try {
     const workspace = await agentWorkspaceOr(projectPath, session)
@@ -178,7 +186,7 @@ export async function spawnForCard({
     const environment = gitSettings?.envFile
       ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing.`
       : ''
-    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath }) + environment, session)
+    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath }) + correctionNote + environment, session)
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })
