@@ -14,7 +14,7 @@ From this folder, run `.\kanban.ps1` to launch the board at `http://127.0.0.1:77
 
 - [HOW-IT-WORKS.md](HOW-IT-WORKS.md): card lifecycle, agent handoffs, audit and recovery, settings, and safe operation.
 - [hkb.mjs](hkb.mjs): CLI used for card handoffs.
-- [test.mjs](test.mjs): focused Node tests.
+- [test.mjs](test.mjs): focused Node tests. Run the whole suite with `node run-tests.mjs`.
 
 ## Optional agent tools
 

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { moveCard, parseCard, readBoard } from './lib/cards.mjs'
+import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
 import { overlapHoldReason, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
@@ -36,7 +36,8 @@ function fixture() {
     writeFileSync(path, `# ${id} — Card\n\n**Workflow:** card-owned\n**Workspace:** .\n\n## Files\n\n- \`${file}\` — change\n\n## Approved brief\n\nDo it.\n\n## Implementation plan\n\nChange it.\n\n## Acceptance criteria\n\n1. Done.\n`)
     return parseCard(path, 'queue')
   }
-  return { root, integration, tasks, settings, addCard }
+  const complete = (id) => { appendReviewPass(findCard(tasks, id), 'Independent check passed.'); return moveCard(tasks, id, 'completed') }
+  return { root, integration, tasks, settings, addCard, complete }
 }
 
 test('activity log is timestamped, single-line, and fail-open', () => {
@@ -62,7 +63,7 @@ test('a completed card commit is validated, integrated serially, and cleaned', (
     writeFileSync(join(prepared.workspacePath, 'app.js'), 'card one\n')
     git(prepared.workspacePath, 'add', 'app.js')
     git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
-    moveCard(f.tasks, 'T-1', 'completed')
+    f.complete('T-1')
 
     assert.deepEqual(reconcileCompletedWorktrees({ tasksDir: f.tasks }).map(({ id, status }) => ({ id, status })), [
       { id: 'T-1', status: 'integrated' },
@@ -98,7 +99,7 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
     writeFileSync(join(f.integration, 'app.js'), 'integration\n')
     git(f.integration, 'add', 'app.js')
     git(f.integration, 'commit', '-m', 'parallel integration')
-    moveCard(f.tasks, 'T-1', 'completed')
+    f.complete('T-1')
 
     const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
     assert.equal(result.status, 'issue')
@@ -117,7 +118,7 @@ test('a commit outside the exact card files is rejected and preserved', () => {
     writeFileSync(join(prepared.workspacePath, 'extra.js'), 'not on card\n')
     git(prepared.workspacePath, 'add', 'app.js', 'extra.js')
     git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
-    moveCard(f.tasks, 'T-1', 'completed')
+    f.complete('T-1')
 
     const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
     assert.equal(result.status, 'issue')
@@ -152,7 +153,7 @@ test('Builder handoff names the live central TASKS directory from an isolated wo
     boardRoot: 'C:\\board-app',
   })
   assert.match(text, /Workspace root: C:\/cards\/T-1/)
-  assert.match(text, /hkb\.mjs" --tasks "C:\/board\/TASKS" done T-1/)
+  assert.match(text, /hkb\.mjs' --tasks 'C:\\board\\TASKS' done T-1/)
 })
 
 test('crash after cherry-pick resumes without a duplicate integration and stale empty lock recovers', () => {
@@ -168,7 +169,7 @@ test('crash after cherry-pick resumes without a duplicate integration and stale 
     git(f.integration, 'cherry-pick', '-x', commit)
     const after = git(f.integration, 'rev-parse', 'HEAD')
     writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': { ...prepared.entry, state: 'integrating', commit, integrationBase } }))
-    moveCard(f.tasks, 'T-1', 'completed')
+    f.complete('T-1')
     const lock = join(f.tasks, '.board-integration.lock')
     writeFileSync(lock, '')
     utimesSync(lock, new Date(0), new Date(0))
@@ -270,7 +271,7 @@ test('Git-normalized EOL noise clears spawn/preflight and backed-up normalizatio
     writeFileSync(join(p.workspacePath, 'app.js'), 'builder\nsecond\n')
     git(p.workspacePath, 'add', 'app.js')
     git(p.workspacePath, 'commit', '-m', 'T-1')
-    moveCard(f.tasks, 'T-1', 'completed')
+    f.complete('T-1')
     const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
     assert.equal(result.status, 'integrated', result.reason)
     assert.equal(readWorktrees(f.tasks)['T-1'].cleaned, true)
@@ -310,7 +311,7 @@ test('independent Builder uses committed snapshot; dirty integration bytes/index
     writeFileSync(join(p.workspacePath, 'other.js'), 'builder\n')
     git(p.workspacePath, 'add', 'other.js')
     git(p.workspacePath, 'commit', '-m', 'T-2')
-    moveCard(f.tasks, 'T-2', 'completed')
+    f.complete('T-2')
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'held')
     assert.deepEqual(readFileSync(join(f.integration, 'app.js')), bytes)
     assert.deepEqual(readFileSync(join(f.integration, '.git', 'index')), index)
@@ -398,7 +399,7 @@ test('autocrlf true without attributes recovers both mixed EOL and LF retry then
       assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8'), 'base\r\nsecond\r\n')
       git(f.integration, 'update-index', '--refresh')
       assert.equal(git(f.integration, 'status', '--porcelain'), '')
-      moveCard(f.tasks, 'T-1', 'completed')
+      f.complete('T-1')
       const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
       assert.equal(result.status, 'integrated', result.reason)
       assert.equal(git(f.integration, 'show', 'HEAD:app.js'), 'builder\nsecond')

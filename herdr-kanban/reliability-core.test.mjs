@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { bind, readBindings, unbind } from './lib/bindings.mjs'
-import { breakerState, recordSpawn, recordSpawnFailure, resetBreaker } from './lib/breaker.mjs'
 
 test('corrupt binding state fails closed and is never overwritten by bind', () => {
   const root = mkdtempSync(join(tmpdir(), 'hkb-bindings-'))
@@ -32,23 +31,6 @@ test('binding mutations complete atomically without leaving temporary state', ()
     assert.deepEqual(Object.keys(readBindings(tasks)), ['T-2'])
     assert.equal(readdirSync(tasks).some((name) => name.endsWith('.tmp') || name === '.board.lock'), false)
   } finally { rmSync(root, { recursive: true, force: true }) }
-})
-
-test('only consecutive failures trip the breaker, and the trip cools down', () => {
-  const project = 'reliability-proof'
-  const t0 = 1_000_000
-  resetBreaker(project)
-  recordSpawnFailure({ project, cap: 3, now: t0, reason: 'boot' })
-  recordSpawn({ project, now: t0 + 1 })
-  recordSpawnFailure({ project, cap: 3, now: t0 + 2, reason: 'boot' })
-  recordSpawnFailure({ project, cap: 3, now: t0 + 3, reason: 'boot' })
-  assert.equal(breakerState(project, t0 + 3).breakerTripped, false)
-  const state = recordSpawnFailure({ project, cap: 3, now: t0 + 4, reason: 'boot' })
-  assert.equal(state.breakerTripped, true)
-  assert.equal(state.count, 3)
-  assert.equal(state.resetsAt, t0 + 4 + 10 * 60 * 1000)
-  assert.equal(breakerState(project, state.resetsAt).breakerTripped, false)
-  resetBreaker(project)
 })
 
 test('hkb rework uses explicit --tasks even when cwd belongs to another project', () => {

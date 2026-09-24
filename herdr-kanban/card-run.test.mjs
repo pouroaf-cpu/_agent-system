@@ -150,7 +150,7 @@ test('selected normal stages; Auto-review snapshot off stops ready, on starts on
   const f = fixture(t, 'planning'); let builds = 0, plans = 0, reviews = 0
   const io = {
     runCardPlanner: async o => { plans++; assert.deepEqual(o.onlyIds, ['T-1']); bindCardRunAssignment('Proof', ['T-1'], 'planner', 'planner'); prompt('planner'); moveCard(f.tasksDir, 'T-1', 'planned'); return { cards: ['T-1'] } },
-    autoSpawn: async o => { builds++; assert.deepEqual(o.onlyIds, ['T-1']); assert.equal(o.max, 1); moveCard(f.tasksDir, 'T-1', 'working'); bindCardRunAssignment('Proof', ['T-1'], 'builder', 'builder'); prompt('builder'); moveCard(f.tasksDir, 'T-1', 'completed'); return ['T-1'] },
+    autoSpawn: async o => { builds++; assert.deepEqual(o.onlyIds, ['T-1']); assert.equal(o.max, 1); moveCard(f.tasksDir, 'T-1', 'working'); bindCardRunAssignment('Proof', ['T-1'], 'builder', 'builder'); prompt('builder'); moveCard(f.tasksDir, 'T-1', 'review'); return ['T-1'] },
     spawnReviewer: async o => { reviews++; assert.deepEqual(o.cardIds, ['T-1']); moveCard(f.tasksDir, 'T-1', 'review'); bindCardRunAssignment('Proof', ['T-1'], 'reviewer', 'reviewer'); prompt('reviewer'); return {} },
   }
   f.authorize(false)
@@ -171,7 +171,7 @@ test('eligibility rejects blockers/Owner/completed/old assignments; operational 
   appendFileSync(findCard(f.tasksDir, 'T-1').path, '\n**Blocked by:** T-99\n')
   assert.match(eligibility(), /Blocked by T-99/)
   moveCard(f.tasksDir, 'T-1', 'owner'); assert.match(eligibility(), /Only approved/)
-  moveCard(f.tasksDir, 'T-1', 'completed'); assert.match(eligibility(), /Builder completion/)
+  moveCard(f.tasksDir, 'T-1', 'review'); assert.match(eligibility(), /Builder completion/)
   moveCard(f.tasksDir, 'T-1', 'queue')
   f.authorize()
   recordOperationalFailure(f.tasksDir, findCard(f.tasksDir, 'T-1'), 'setup missing', f.options.projectPath)
