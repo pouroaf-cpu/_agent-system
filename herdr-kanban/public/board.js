@@ -591,6 +591,20 @@ function cardNode(card) {
     tokens.textContent = usage.tokens ? `${fmtNum(usage.tokens.total)} tokens${usage.unknown ? ' (partial)' : ''}` : 'Usage unverified';
     n.append(tokens);
   }
+  // Operator buttons: Approve an Owner card, Finish a Review or Completed card.
+  const op = card.column === 'owner' ? 'approve' : ['review', 'completed'].includes(card.column) ? 'finish' : null;
+  if (op && !picking) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn card-op ' + (op === 'approve' ? 'queue-btn' : 'archive-btn');
+    b.textContent = op === 'approve' ? 'Approve' : 'Finish';
+    b.setAttribute('aria-label', (op === 'approve' ? 'Approve ' : 'Finish ') + card.id);
+    b.title = op === 'approve' ? 'Approve and send it back to work' : 'Integrate if needed, then archive';
+    b.draggable = false;
+    b.addEventListener('click', e => { e.stopPropagation(); operatorAction(op, card.id, b); });
+    b.addEventListener('keydown', e => e.stopPropagation());
+    n.append(b);
+  }
 
 
 
@@ -2445,6 +2459,27 @@ async function spawn(hit) {
 }
 
 
+
+const LANE_LABEL = { owner: 'Owner', planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', issues: 'Issues', review: 'Review', completed: 'Completed', archive: 'Archive' };
+async function operatorAction(op, id, button) {
+  if (MOCK) return toast('mock: would ' + op + ' ' + id);
+  button.disabled = true;
+  try {
+    const r = await fetch('/api/' + op, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: PROJECT, id })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || op + ' failed (' + r.status + ')');
+    const lane = LANE_LABEL[j.card?.column] || j.card?.column;
+    toast(op === 'approve' ? id + ' approved' + (j.investigation ? ' (investigation)' : '') + ', back to ' + lane
+      : j.held ? id + ' moved to Completed with operator PASS; archives after integration (held: ' + j.held + ')'
+      : id + ' finished and archived', j.held ? 'info' : undefined);
+  } catch (err) {
+    button.disabled = false;
+    toast(String(err.message || err));
+  }
+}
 
 async function move(id, to) {
 

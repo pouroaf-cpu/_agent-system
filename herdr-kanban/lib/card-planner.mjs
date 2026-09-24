@@ -13,7 +13,7 @@ import { controlState, assertPromptAllowed } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
 import { readDelivery } from './delivery-state.mjs'
 const busy = new Set()
 export function correctionFingerprint(text) {
@@ -40,6 +40,33 @@ export function requestPlannerCorrection(dir, cardId) {
 export function operatorRetry(tasksDir, cardId, to) {
   updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
+}
+// Board Approve button on an Owner card: record the decision, add the operator-only
+// investigation marker when that is all the plan waits on, then retry the card in
+// the lane it left (Planning for investigation approvals or when history is silent).
+const APPROVED = '**Investigation approved:** yes'
+export function operatorApprove(tasksDir, cardId, now = new Date()) {
+  const card = findCard(tasksDir, cardId)
+  if (card.column !== 'owner') throw new Error(`${card.id} is in ${card.column}; Approve works only on Owner cards`)
+  let text = readFileSync(card.path, 'utf8')
+  const investigation = awaitsOperatorApproval(text)
+  if (investigation) {
+    const head = text.split(/^## Approved brief/m)[0]
+    const existing = head.match(/^\*\*Investigation approved:\*\*[^\n]*$/im)
+    const readiness = head.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)
+    text = existing ? text.replace(existing[0], APPROVED)
+      : readiness ? text.replace(readiness[0], `${readiness[0]}\n${APPROVED}`)
+      : text.replace(/^## Approved brief/m, `${APPROVED}\n\n$&`)
+  }
+  writeFileSync(card.path, `${text}\n\n---\n\n**Operator decision** ${now.toISOString()}\n\nApproved by operator from board\n`)
+  const from = laneBeforeOwner(tasksDir, card.id)
+  // Working means an agent is on it; a retried build starts from Queue.
+  const lane = investigation || !from || ['planning', 'owner', 'archive'].includes(from) ? 'planning' : from === 'working' ? 'queue' : from
+  let moved
+  // A lane gate (plan check, Builder PASS) that refuses the card sends it to Planning.
+  try { moved = moveCard(tasksDir, card.id, lane) } catch (err) { if (lane === 'planning') throw err; moved = moveCard(tasksDir, card.id, 'planning') }
+  operatorRetry(tasksDir, card.id, moved.column)
+  return { card: moved, investigation }
 }
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, deliver, recordUsageStart, recordUsageFinish }

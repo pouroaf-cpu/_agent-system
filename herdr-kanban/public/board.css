@@ -506,6 +506,9 @@ body {
 }
 .btn.archive-btn:hover { background: #35855b; border-color: #35855b; }
 .btn.archive-btn[hidden] { display: none; }
+/* Approve/Finish on a card: lane colours from the drawer buttons, card-sized. */
+.btn.card-op { display: block; margin-top: 6px; font-size: 12px; padding: 5px 14px; box-shadow: none; }
+.btn.card-op:disabled { opacity: .6; cursor: wait; }
 
 .drawer-close { background: none; border: 0; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
 .drawer-close:hover { color: var(--text); }
@@ -717,6 +720,7 @@ body {
 
   .lane-head { min-height: 44px; padding: 9px 10px; }
   .card { padding: 10px; }
+  .btn.card-op { min-height: 44px; }
   .title { font-size: 13px; }
 
   .menu {

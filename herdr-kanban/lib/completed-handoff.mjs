@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
-import { findCard, moveCard } from './cards.mjs'
+import { findCard, moveCard, appendReviewPass } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { readUsage, recordUsageFinish } from './request-usage.mjs'
@@ -130,4 +130,29 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     } catch (err) { results.push({ id: entry.cardId, status: 'held', reason: err.message }) }
   }
   return results
+}
+
+// Board Finish button: close a Review or Completed card without losing its code.
+// Review gets an operator PASS (so Auto-review archives after integration instead of
+// returning to Review) and moves to Completed. A card with an unintegrated commit is
+// integrated now through the poll's path, for that card only; a hold is returned,
+// never forced. Only an integrated card, or one with no board worktree, is archived.
+export async function operatorFinish({ tasksDir, project, cardId, integrationCheck, git = true, io, now = new Date() }) {
+  let card = findCard(tasksDir, cardId)
+  if (!['review', 'completed'].includes(card.column)) throw new Error(`${card.id} is in ${card.column}; Finish works only on Review and Completed cards`)
+  if (card.column === 'review') {
+    appendReviewPass(card, `**Operator decision** ${now.toISOString()}\n\nOperator finished from board; no independent review`, now)
+    card = moveCard(tasksDir, card.id, 'completed')
+  }
+  let results = []
+  const entry = readWorktrees(tasksDir)[card.id]
+  if (entry && entry.state !== 'integrated') {
+    if (git) results = await reconcileCompletedHandoffs({ tasksDir, project, onlyIds: [card.id], integrationCheck, ...(io && { io }) })
+    const after = readWorktrees(tasksDir)[card.id]
+    if (after?.state !== 'integrated') {
+      const held = (git ? results.find(r => r.id === card.id && r.reason)?.reason : 'project has no Git integration settings') || after?.reason || `integration did not run (worktree state ${after?.state}); the board may be integrating another card, try again shortly`
+      return { card: findCard(tasksDir, card.id), results, held }
+    }
+  }
+  return { card: moveCard(tasksDir, card.id, 'archive', { operatorArchive: true }), results }
 }

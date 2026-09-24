@@ -29,7 +29,17 @@ export function droppedSections(tasksDir, id, text) {
   }
   return saved ? REQUIRED_SECTIONS.filter(name => sectionBody(saved, name) && !sectionBody(text, name)) : []
 }
-const historyMarker = /^\*\*(?:Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \d+|Technical recovery|Diagnostic recovery|Dirty snapshot)\*\*/m
+// The lane a card left when it last went to Owner, or null when history does not say.
+export function laneBeforeOwner(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return null
+  let from = null
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    try { const entry = JSON.parse(line); if (entry.event === 'transition' && entry.to === 'owner') from = entry.from } catch { /* torn line */ }
+  }
+  return from
+}
+const historyMarker =/^\*\*(?:Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \d+|Technical recovery|Diagnostic recovery|Dirty snapshot)\*\*/m
 export function focusedText(text, role) {
   // Project the whole card, not just the prefix before the first attempt. Legacy
   // approved Return N corrections can appear AFTER history markers.

@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, wat
 import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runCardPlanner, readCardPlanners, operatorRetry } from './lib/card-planner.mjs'
+import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove } from './lib/card-planner.mjs'
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
@@ -13,7 +13,7 @@ import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
 import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './lib/card-run.mjs'
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
-import { reconcileCompletedHandoffs } from './lib/completed-handoff.mjs'
+import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
@@ -105,6 +105,51 @@ function archiveNoReview(project, tasksDir) {
     schedulerActivity(project, `${id}: archive without independent review skipped — ${reason}`)
   }
   return result.archived.length > 0
+}
+
+// Logs and routes reconcileCompletedHandoffs results; true when the board changed.
+function logIntegrationResults(project, results, waiting = {}) {
+  const tasksDir = tasksDirOf(project)
+  let dirty = false
+  for (const result of results) {
+    if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
+    if (result.status === 'integrated') {
+      activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
+      dirty = true
+    } else if (result.status === 'cleaned') {
+      activity(project, result.id, 'cleanup', 'removed integrated card worktree and local branch')
+    } else if (result.status === 'cleanup-held') {
+      const key = `${project}:${result.id}:cleanup`
+      if (lastActivityHold.get(key) !== result.reason) {
+        lastActivityHold.set(key, result.reason)
+        activity(project, result.id, 'cleanup-held', result.reason)
+      }
+    } else if (result.status === 'returned') {
+      activity(project, result.id, 'integration-conflict', `${result.reason} — returned to ${result.to === 'owner' ? 'Owner' : 'a Builder'}`, 'error')
+      dirty = true
+    } else if (result.status === 'issue') {
+      try {
+        const card = findCard(tasksDir, result.id)
+        if (card.column === 'completed') {
+          recordOperationalFailure(tasksDir, card, result.reason, integrationPathOf(project), projectSettingsOf(project))
+        }
+      } catch {}
+      activity(project, result.id, /conflict/i.test(result.reason) ? 'integration-conflict' : 'integration-block', result.reason, 'error')
+      dirty = true
+    } else {
+      const key = `${project}:${result.id}:handoff`
+      if (lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
+      lastActivityHold.set(key, result.reason)
+    }
+  }
+  return dirty
+}
+
+// The operator's archive: move with operatorArchive, then release its binding and card run.
+// Planner assignments for archived cards are retired by the next planner pass.
+function operatorArchiveRelease(project, id) {
+  unbind(tasksDirOf(project), id)
+  stopCardRun(project, id, 'Archived by operator from board')
 }
 
 function tripBreakerIfNeeded(project) {
@@ -393,37 +438,7 @@ async function pollProject(project) {
     if (gitSettings) {
       const waiting = {} // why each card is not integrated yet, for the stall watchdog's Owner note
       integrationHolds.set(project, waiting)
-      for (const result of await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck })) {
-        if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
-        if (result.status === 'integrated') {
-          activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
-          dirty = true
-        } else if (result.status === 'cleaned') {
-          activity(project, result.id, 'cleanup', 'removed integrated card worktree and local branch')
-        } else if (result.status === 'cleanup-held') {
-          const key = `${project}:${result.id}:cleanup`
-          if (lastActivityHold.get(key) !== result.reason) {
-            lastActivityHold.set(key, result.reason)
-            activity(project, result.id, 'cleanup-held', result.reason)
-          }
-        } else if (result.status === 'returned') {
-          activity(project, result.id, 'integration-conflict', `${result.reason} — returned to ${result.to === 'owner' ? 'Owner' : 'a Builder'}`, 'error')
-          dirty = true
-        } else if (result.status === 'issue') {
-          try {
-            const card = findCard(tasksDir, result.id)
-            if (card.column === 'completed') {
-              recordOperationalFailure(tasksDir, card, result.reason, integrationPathOf(project), gitSettings)
-            }
-          } catch {}
-          activity(project, result.id, /conflict/i.test(result.reason) ? 'integration-conflict' : 'integration-block', result.reason, 'error')
-          dirty = true
-        } else {
-          const key = `${project}:${result.id}:handoff`
-          if (lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
-          lastActivityHold.set(key, result.reason)
-        }
-      }
+      dirty = logIntegrationResults(project, await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck }), waiting) || dirty
     }
       } finally {
         reconciliationPolls.delete(project)
@@ -851,14 +866,64 @@ const handleRequest = async (req, res) => {
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
       if (before.column === 'owner' && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
-      if (to === 'archive') {
-        unbind(tasksDirOf(p), id)
-        stopCardRun(p, id, 'Archived by operator from board')
-      }
+      if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)
       json(res, 200, { ok: true, card })
       broadcastBoard(p)
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/approve') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: p = config.projects[0], id } = JSON.parse(body)
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      const { card, investigation } = operatorApprove(tasksDirOf(p), id)
+      activity(p, card.id, 'move', `owner -> ${card.column} (approved by operator${investigation ? '; investigation approved' : ''})`)
+      herdrLog(`${card.id} approved → ${card.column} (board)`)
+      json(res, 200, { ok: true, card, investigation })
+      broadcastBoard(p)
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/finish') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    let p
+    try {
+      const parsed = JSON.parse(body)
+      p = parsed.project ?? config.projects[0]
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      // Same guard as the poll: one integration pass per project at a time.
+      if (reconciliationPolls.has(p)) return json(res, 409, { ok: false, error: 'The board is integrating right now; try Finish again in a few seconds' })
+      reconciliationPolls.add(p)
+      const before = findCard(tasksDirOf(p), parsed.id).column
+      let result
+      try {
+        const settings = projectSettingsOf(p)
+        result = await operatorFinish({ tasksDir: tasksDirOf(p), project: p, cardId: parsed.id, integrationCheck: settings?.integrationCheck, git: !!settings })
+      } finally { reconciliationPolls.delete(p) }
+      logIntegrationResults(p, result.results)
+      const { card, held } = result
+      broadcastBoard(p)
+      if (held) {
+        activity(p, card.id, 'integration-held', `Finish from board: ${held}`, 'error')
+        // A Review card has already moved to Completed with the operator PASS; it archives after integration.
+        if (before === 'review') return json(res, 200, { ok: true, card, held })
+        return json(res, 409, { ok: false, card, error: `${card.id} not finished: integration held — ${held}` })
+      }
+      operatorArchiveRelease(p, card.id)
+      activity(p, card.id, 'move', `${before} -> archive (finished by operator)`)
+      herdrLog(`${card.id} finished → archive (board)`)
+      json(res, 200, { ok: true, card })
     } catch (err) {
       json(res, 400, { ok: false, error: err.message })
     }
