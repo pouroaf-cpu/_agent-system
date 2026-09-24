@@ -8,28 +8,28 @@
 </head>
 <body>
   <header id="bar">
-    <div class="project-run-controls">
+    <div class="bar-left">
+      <button id="burger" class="btn icon" type="button" aria-label="Menu" aria-expanded="false" title="Menu">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 5h12M3 9h12M3 13h12"/></svg>
+      </button>
+      <select id="project-pick" class="project-pick" title="Project" aria-label="Project"></select>
+      <select id="stage-pick" class="stage-pick" title="Jump to state" aria-label="Jump to board state"></select>
+      <span id="project-status" class="project-status" role="status"></span>
+      <span id="conn" class="conn offline" title="Connection to the board server">offline</span>
+      <div id="agents" class="agents"></div>
+    </div>
+    <div class="bar-right">
+      <button id="review-btn" class="btn" hidden></button>
+      <button id="sweep-btn" class="btn" hidden></button>
+      <button id="archive-btn" class="btn" hidden></button>
+      <button id="archive-cancel" class="btn" hidden>Cancel</button>
+      <span id="slots" class="slots"></span>
       <button id="herdr-open" class="btn" type="button">Open herdr</button>
-      <button id="project-control" class="btn project-control is-pause" type="button" aria-label="Pause" title="Pause selected project">
-        <span id="project-control-icon" aria-hidden="true">Ⅱ</span>
+      <button id="project-control" class="btn" type="button" aria-label="Pause" title="Pause selected project">
+        <span id="project-control-icon" aria-hidden="true"></span>
         <span id="project-control-label">Pause</span>
       </button>
-      <span id="project-status" role="status"></span>
     </div>
-    <div class="bar-left">
-      <button id="burger" class="burger" aria-label="Menu" aria-expanded="false" title="Menu">
-        <span></span><span></span><span></span>
-      </button>
-      <select id="project-pick" class="project-pick" title="project"></select>
-      <select id="stage-pick" class="stage-pick" title="jump to state" aria-label="Jump to board state"></select>
-      <span id="conn" class="conn offline" title="connection">offline</span>
-      <span id="slots" class="slots" title="free agent slots"></span>
-    </div>
-    <div id="agents" class="agents"></div>
-    <button id="review-btn" class="btn review-btn" hidden></button>
-    <button id="sweep-btn" class="btn review-btn" hidden></button>
-    <button id="archive-btn" class="btn review-btn" hidden></button>
-    <button id="archive-cancel" class="btn pick-cancel" hidden>Cancel</button>
   </header>
 
   <div id="breaker-banner" class="breaker-banner" hidden>
@@ -38,12 +38,12 @@
   </div>
 
   <nav id="menu" class="menu" hidden>
-    <button class="menu-item" data-view="board"><span class="menu-ico">&#9636;</span> Kanban</button>
-    <button class="menu-item" data-view="agents"><span class="menu-ico">&#9673;</span> Agents <span id="menu-agents" class="menu-count">0</span></button>
-    <button class="menu-item" data-view="tasks"><span class="menu-ico">&#9776;</span> Historical requests <span id="menu-tasks" class="menu-count">0</span></button>
-    <button class="menu-item" data-view="archive"><span class="menu-ico">&#9638;</span> Archive <span id="menu-archive" class="menu-count">0</span></button>
-    <button class="menu-item" data-view="audits"><span class="menu-ico">&#9783;</span> Audits</button>
-    <button class="menu-item" data-view="settings"><span class="menu-ico">&#9881;</span> Settings</button>
+    <button class="menu-item" type="button" data-view="board">Kanban</button>
+    <button class="menu-item" type="button" data-view="agents">Agents <span id="menu-agents" class="menu-count">0</span></button>
+    <button class="menu-item" type="button" data-view="tasks">Historical requests <span id="menu-tasks" class="menu-count">0</span></button>
+    <button class="menu-item" type="button" data-view="archive">Archive <span id="menu-archive" class="menu-count">0</span></button>
+    <button class="menu-item" type="button" data-view="audits">Audits</button>
+    <button class="menu-item" type="button" data-view="settings">Settings</button>
   </nav>
   <div id="scrim" class="scrim" hidden></div>
 
@@ -57,14 +57,27 @@
     <div id="screen-body" class="screen-body"></div>
   </section>
 
-  <aside id="drawer" class="drawer" hidden>
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="drawer" class="drawer" hidden aria-labelledby="drawer-title">
     <div class="drawer-head">
-      <span id="drawer-id" class="id"></span>
+      <div class="drawer-top">
+        <span id="drawer-status" class="drawer-status"></span>
+        <span id="drawer-id" class="drawer-id"></span>
+        <button id="drawer-close" class="btn icon" type="button" aria-label="Close" title="Close (Esc)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+      <h2 id="drawer-title" class="drawer-title"></h2>
       <div class="drawer-actions">
-        <a id="drawer-history" class="btn" target="_blank" rel="noopener">Saved history/output</a>
-        <button id="drawer-queue" class="btn queue-btn" hidden>Back to Queue</button>
-        <button id="drawer-archive" class="btn archive-btn" hidden>Archive</button>
-        <button id="drawer-close" class="drawer-close" title="Close (Esc)">&times;</button>
+        <button id="drawer-queue" class="btn primary" type="button" hidden>Back to Queue</button>
+        <button id="drawer-archive" class="btn primary" type="button" hidden>Archive</button>
+        <a id="drawer-history" class="btn" target="_blank" rel="noopener">Saved history</a>
+        <div class="more">
+          <button id="drawer-more" class="btn icon" type="button" aria-label="More actions" title="More actions" aria-expanded="false" aria-controls="drawer-more-menu">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M3 8h.01M8 8h.01M13 8h.01"/></svg>
+          </button>
+          <div id="drawer-more-menu" class="more-menu" hidden></div>
+        </div>
       </div>
     </div>
     <div id="drawer-body" class="drawer-body"></div>
@@ -78,7 +91,7 @@
     </div>
   </dialog>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status"></div>
   <script src="dependency-hover.js"></script>
   <script src="board.js"></script>
 </body>

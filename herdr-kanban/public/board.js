@@ -9,71 +9,43 @@ const MOCK = new URLSearchParams(location.search).has('mock');
 
 
 const el = {
-
   project: document.getElementById('project-pick'),
-
   stage: document.getElementById('stage-pick'),
-
   conn: document.getElementById('conn'),
-
   agents: document.getElementById('agents'),
-
   lanes: document.getElementById('lanes'),
-
   toast: document.getElementById('toast'),
-
   drawer: document.getElementById('drawer'),
-
+  drawerBackdrop: document.getElementById('drawer-backdrop'),
   drawerId: document.getElementById('drawer-id'),
-
+  drawerTitle: document.getElementById('drawer-title'),
+  drawerStatus: document.getElementById('drawer-status'),
   drawerBody: document.getElementById('drawer-body'),
-
   drawerClose: document.getElementById('drawer-close'),
-
   drawerArchive: document.getElementById('drawer-archive'),
-
   drawerQueue: document.getElementById('drawer-queue'),
-
+  drawerMore: document.getElementById('drawer-more'),
+  drawerMoreMenu: document.getElementById('drawer-more-menu'),
   dlg: document.getElementById('spawn-dlg'),
-
   dlgMsg: document.getElementById('spawn-msg'),
-
   slots: document.getElementById('slots'),
-
   reviewBtn: document.getElementById('review-btn'),
-
   sweepBtn: document.getElementById('sweep-btn'),
-
   archiveBtn: document.getElementById('archive-btn'),
-
   archiveCancel: document.getElementById('archive-cancel'),
-
   burger: document.getElementById('burger'),
-
   menu: document.getElementById('menu'),
-
   scrim: document.getElementById('scrim'),
-
   screen: document.getElementById('screen'),
-
   screenTitle: document.getElementById('screen-title'),
-
   screenBody: document.getElementById('screen-body'),
-
   screenClose: document.getElementById('screen-close'),
-
   menuAgents: document.getElementById('menu-agents'),
-
   menuTasks: document.getElementById('menu-tasks'),
-
   menuArchive: document.getElementById('menu-archive'),
-
   breakerBanner: document.getElementById('breaker-banner'),
-
   breakerMsg: document.getElementById('breaker-msg'),
-
   breakerReset: document.getElementById('breaker-reset')
-
 };
 
 
@@ -354,7 +326,8 @@ function stallMs(card) {
 
 
 
-function setConn(kind) { el.conn.className = 'conn ' + kind; el.conn.textContent = kind; }
+const CONN_LABEL = { live: 'Live', reconnecting: 'Reconnecting…', offline: 'Offline' };
+function setConn(kind) { el.conn.className = 'conn ' + kind; el.conn.textContent = CONN_LABEL[kind] || kind; }
 
 
 
@@ -374,7 +347,6 @@ function toast(msg, kind) {
 
 
 
-function priClass(p) { return p >= 8 ? 'hot' : p >= 5 ? 'mid' : 'cool'; }
 
 
 
@@ -402,201 +374,143 @@ function stopPicking() {
 
 
 
+// Lane timer: how long a card has sat in its lane, and whether an agent is on it
+// right now. Comes from /api/board `laneTimes`; without it no timer is shown.
+const TIMED_LANES = { planning: 'Planning', queue: 'Queue', working: 'Working', review: 'Review', completed: 'Completed' };
+const ACTIVE_VERB = { planning: 'Planning', working: 'Building', review: 'Reviewing' };
+const ROLE_VERB = { planner: 'Planning', builder: 'Building', reviewer: 'Reviewing' };
+const AGENT_EXPECTED = new Set(['planning', 'working']);
+const IDLE_WARN_MS = 20 * 60000;
+
+// 45m, then 1h 20m, then 2d 3h.
+function fmtAge(ms) {
+  const m = Math.max(0, Math.floor(ms / 60000));
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 24 ? h + 'h ' + (m % 60) + 'm' : Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+}
+
+function laneTimer(card) {
+  const t = state?.laneTimes?.[card.id];
+  const label = TIMED_LANES[card.column];
+  if (!t || !label) return null;
+  const since = typeof t.since === 'number' ? t.since : Date.parse(t.since);
+  if (!Number.isFinite(since)) return null;
+  const age = Date.now() - since;
+  if (t.agentActive) {
+    const verb = ROLE_VERB[String(t.agentRole || '').toLowerCase()] || ACTIVE_VERB[card.column] || label;
+    return { text: verb + ' · ' + fmtAge(age), tone: 'active', title: (t.agentRole || 'Agent') + ' working · in ' + label + ' for ' + fmtAge(age) };
+  }
+  const expected = AGENT_EXPECTED.has(card.column);
+  return {
+    text: label + ' · ' + fmtAge(age) + (expected ? ' · no agent' : ''),
+    tone: expected && age > IDLE_WARN_MS ? 'owner' : 'muted',
+    title: 'In ' + label + ' for ' + fmtAge(age) + (expected ? '; no agent is working on it' : ''),
+  };
+}
+
+// The one status line a card carries, strongest signal first. Returns
+// { text, tone, title } or null. Tone names a status colour.
+function cardStatus(card) {
+  if (!state) return null;
+  const stalled = stallMs(card);
+  if (stalled) return { text: 'Stalled ' + fmtAge(stalled), tone: 'problem', title: 'Agent has been quiet for ' + fmtDur(stalled) };
+  const timer = laneTimer(card);
+  if (orphaned(card)) return { text: timer && timer.tone !== 'active' ? timer.text : 'No agent', tone: 'problem', title: 'In Working with nothing running on it — move it back to Queue to run it again' };
+  if (spawning.has(card.id)) return { text: 'Starting…', tone: 'active' };
+  if (card.column === 'owner') return { text: 'Waiting on you', tone: 'owner' };
+  const notice = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning;
+  if (notice) return { text: notice, tone: 'problem' };
+  const ind = state.stageIndicators?.[card.id];
+  const review = ind?.stage === 'Reviewer';
+  if (ind?.status === 'issue') return { text: review ? 'Review feedback' : 'Plan issue', tone: 'problem', title: ind.stage + ': ' + ind.reason };
+  if (ind?.status === 'passed') return { text: review ? 'Review passed' : 'Plan passed', tone: 'ok', title: ind.stage + ': ' + ind.reason };
+  const queued = reviewing.indexOf(card.id);
+  if (queued === 0) return timer?.tone === 'active' ? timer : { text: 'Reviewing', tone: 'active' };
+  if (queued > 0) return { text: 'Review queued', tone: 'muted' };
+  // Why the spawner passed this card over on its last tick. Only meaningful in Queue.
+  const hold = card.column === 'queue' ? state.holds?.[card.id] : null;
+  if (hold) return { text: hold, tone: 'muted' };
+  if (timer) return timer;
+  if (ind?.status === 'working') return { text: review ? 'Reviewing' : 'Planning', tone: 'active', title: ind.stage + ': ' + ind.reason };
+  const bind = card.column === 'working' && state.bindings?.[card.id];
+  if (bind) return { text: 'Building' + (bind.started ? ' · ' + fmtAge(Date.now() - Date.parse(bind.started)) : ''), tone: 'active' };
+  return null;
+}
+
+function paintStatus(node, card) {
+  const s = cardStatus(card);
+  let line = node.querySelector('.card-status');
+  if (!s) { line?.remove(); return; }
+  if (!line) { line = document.createElement('div'); node.prepend(line); }
+  line.className = 'card-status tone-' + s.tone;
+  line.textContent = s.text;
+  line.title = s.title || s.text;
+}
+
+const compactNum = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+
 function cardNode(card) {
-
   const n = document.createElement('div');
-
   const busy = spawning.has(card.id);
-
   const reviewIdx = reviewing.indexOf(card.id);
-
   n.className = 'card' + (busy ? ' spawning' : '') +
-
     (reviewIdx === 0 ? ' reviewing' : reviewIdx > 0 ? ' review-queued' : '');
-
   n.draggable = !busy;
-
   n.dataset.id = card.id;
-
   n.dataset.from = card.column;
   n.tabIndex = 0;
   n.addEventListener('keydown', event => {
     if (event.target === n && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); n.click(); }
   });
-
   if (card.status) n.title = card.status;
 
-
-
-  const stalled = stallMs(card);
-
-  const lost = !stalled && orphaned(card);
-
-  if (stalled || lost) n.classList.add('stalled');
-
-  // A card that failed to start is still queued, but you should be able to see
-
-  // it is on its second go rather than wondering why it has not moved.
-
-  const retry = state.retries?.[card.id]?.attempts || 0;
-
-  // Why the spawner passed this card over on its last tick. Only meaningful in
-
-  // Queue: everywhere else the card is not waiting to start.
-
-  const hold = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning || (card.column === 'queue' ? state.holds?.[card.id] : null);
-
-
-
-  // Only the estimate that matches where the card sits right now — Working
-
-  // shows the build estimate, Review shows the review estimate.
-
-  const estMin = card.column === 'working' ? card.estBuild : card.column === 'review' ? card.estReview : null;
-
-
-
-  const top = document.createElement('div');
-
-  top.className = 'card-top';
-
-  // Who this card is waiting on, and who is waiting on it. Both matter at a glance:
-
-  // the first says why it is not moving, the second says how much it costs.
-
-  const waitingOn = (card.blockedBy || []).filter(id => {
-
-    const c = Object.values(state?.board || {}).flat().find(x => x.id === id);
-
-    return !c || !LANDED.has(c.column);
-
-  });
-
-  const holdsUp = Object.values(state?.board || {}).flat()
-
-    .filter(c => (c.blockedBy || []).includes(card.id)).length;
-
-
-
-  top.innerHTML =
-
-    '<span class="id"></span>' +
-
-    // P0 on every card is noise: an unset priority is not a priority.
-
-    (card.priority ? '<span class="pri ' + priClass(card.priority) + '"></span>' : '') +
-
-    (waitingOn.length ? '<span class="gate-tag"></span>' : '') +
-
-    (holdsUp ? '<span class="holds-tag"></span>' : '') +
-
-    (card.surface ? '<span class="surface"></span>' : '') +
-
-    (estMin != null ? '<span class="est"></span>' : '') +
-
-    (busy ? '<span class="spawn-tag">spawning…</span>' : '') +
-
-    (retry ? '<span class="retry-tag"></span>' : '') +
-
-    (hold ? '<span class="hold-tag"></span>' : '') +
-
-    (stalled || lost ? '<span class="stall-tag"></span>' : '');
-
-  const indicator = state.stageIndicators?.[card.id];
-  if (indicator) {
-    const mark = document.createElement('span');
-    mark.className = 'stage-indicator ' + indicator.status;
-    mark.title = indicator.stage + ': ' + indicator.reason;
-    mark.setAttribute('role', 'img');
-    mark.setAttribute('aria-label', mark.title);
-    if (indicator.status === 'working') mark.innerHTML = '<i></i><i></i><i></i>';
-    else mark.textContent = indicator.status === 'passed' ? '✓' : '×';
-    top.append(mark);
-  }
-
-  top.querySelector('.id').textContent = card.id;
-
-  if (card.priority) top.querySelector('.pri').textContent = 'P' + card.priority;
-
-  if (waitingOn.length) {
-
-    const g = top.querySelector('.gate-tag');
-
-    g.textContent = 'waits ' + waitingOn.join(' ');
-
-    g.title = 'Will not start until ' + waitingOn.join(', ') + ' reaches Completed';
-
-  }
-
-  if (holdsUp) {
-
-    const h = top.querySelector('.holds-tag');
-
-    h.textContent = 'holds ' + holdsUp;
-
-    h.title = holdsUp + ' card' + (holdsUp === 1 ? '' : 's') + ' cannot start until this one lands';
-
-  }
-
-  if (card.surface) top.querySelector('.surface').textContent = card.surface;
-
-  if (estMin != null) top.querySelector('.est').textContent = estMin + 'm';
-
-  if (retry) {
-
-    const tag = top.querySelector('.retry-tag');
-
-    tag.textContent = 'retry ' + retry + '/3';
-
-    tag.title = 'Failed to start ' + retry + ' time' + (retry === 1 ? '' : 's') + '; goes to Issues after 3';
-
-  }
-
-  if (hold) {
-
-    const h = top.querySelector('.hold-tag');
-
-    h.textContent = hold;
-
-    h.title = hold;
-
-  }
-
-  if (stalled) top.querySelector('.stall-tag').textContent = 'stalled ' + Math.floor(stalled / 60000) + 'm';
-
-  else if (lost) {
-
-    const tag = top.querySelector('.stall-tag');
-
-    tag.textContent = 'no agent';
-
-    tag.title = 'In Working with nothing running on it — move it back to Queue to run it again';
-
-  }
-
-
-
   const t = document.createElement('div');
-
   t.className = 'title';
-
   t.textContent = card.title;
+  n.append(t);
+  paintStatus(n, card);
 
+  // One meta line, plain words: which card, how urgent, and what it waits on.
+  const bits = [];
+  const bit = (text, title, cls) => bits.push({ text, title, cls });
+  bit(card.id);
+  // P0 on every card is noise: an unset priority is not a priority.
+  if (card.priority) bit('P' + card.priority, null, card.priority >= 8 ? 'hot' : '');
+  if (card.surface) bit(card.surface);
+  // Only the estimate that matches where the card sits right now.
+  const estMin = card.column === 'working' ? card.estBuild : card.column === 'review' ? card.estReview : null;
+  if (estMin != null) bit('est ' + estMin + 'm');
+  const waitingOn = (card.blockedBy || []).filter(id => {
+    const c = allCards().find(x => x.id === id);
+    return !c || !LANDED.has(c.column);
+  });
+  if (waitingOn.length) bit('waits ' + waitingOn.join(' '), 'Will not start until ' + waitingOn.join(', ') + ' reaches Completed');
+  const holdsUp = allCards().filter(c => (c.blockedBy || []).includes(card.id)).length;
+  if (holdsUp) bit('holds ' + holdsUp, holdsUp + ' card' + (holdsUp === 1 ? '' : 's') + ' cannot start until this one lands');
+  // A card that failed to start is still queued, but it is on its second go.
+  const retry = state.retries?.[card.id]?.attempts || 0;
+  if (retry) bit('retry ' + retry + '/3', 'Failed to start ' + retry + ' time' + (retry === 1 ? '' : 's') + '; goes to Issues after 3');
+  const usage = state?.cardUsage?.[card.id];
+  if (usage) bit(usage.tokens ? compactNum.format(usage.tokens.total) + ' tokens' + (usage.unknown ? ' (partial)' : '') : 'usage unverified', usage.tokens ? fmtNum(usage.tokens.total) + ' tokens' : null);
+  const meta = document.createElement('div');
+  meta.className = 'card-meta';
+  bits.forEach((b, i) => {
+    if (i) meta.append(' · ');
+    const s = document.createElement('span');
+    s.textContent = b.text;
+    if (b.cls) s.className = b.cls;
+    if (b.title) s.title = b.title;
+    meta.append(s);
+  });
+  n.append(meta);
 
-
-  n.append(top, t);
-  if (state?.cardUsage?.[card.id]) {
-    const tokens = document.createElement('small');
-    const usage = state.cardUsage[card.id];
-    tokens.textContent = usage.tokens ? `${fmtNum(usage.tokens.total)} tokens${usage.unknown ? ' (partial)' : ''}` : 'Usage unverified';
-    n.append(tokens);
-  }
   // Operator buttons: Approve an Owner card, Finish a Review or Completed card.
   const op = card.column === 'owner' ? 'approve' : ['review', 'completed'].includes(card.column) ? 'finish' : null;
   if (op && !picking) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn card-op ' + (op === 'approve' ? 'queue-btn' : 'archive-btn');
+    b.className = 'btn card-op' + (op === 'approve' ? ' primary' : '');
     b.textContent = op === 'approve' ? 'Approve' : 'Finish';
     b.setAttribute('aria-label', (op === 'approve' ? 'Approve ' : 'Finish ') + card.id);
     b.title = op === 'approve' ? 'Approve and send it back to work' : 'Integrate if needed, then archive';
@@ -606,93 +520,40 @@ function cardNode(card) {
     n.append(b);
   }
 
-
-
   // Only Completed is pickable — it is the only column this button files from.
-
   const pickable = picking && card.column === 'completed';
-
   if (pickable) {
-
     n.classList.add('picking');
-
     const box = document.createElement('input');
-
     box.type = 'checkbox';
-
     box.className = 'card-pick';
-
     box.checked = picked.has(card.id);
-
     box.title = 'Tick to archive on Confirm';
-
-    // The whole card is the hit target, so the box only ever reflects state — let
-
-    // the card's own handler do the toggling rather than fighting it for the click.
-
+    // The whole card is the hit target, so the box only ever reflects state.
     box.addEventListener('click', e => e.preventDefault());
-
-    top.prepend(box);
-
+    t.prepend(box);
   }
-
   n.addEventListener('dragstart', e => {
-
     e.dataTransfer.setData('text/plain', card.id);
-
     e.dataTransfer.effectAllowed = 'move';
-
     n.classList.add('dragging');
-
   });
-
   n.addEventListener('dragend', () => n.classList.remove('dragging'));
-
-  // While picking, a click on a Completed card ticks it instead of opening the
-
-  // drawer — you are choosing what to file, not reading it.
-
+  // While picking, a click on a Completed card ticks it instead of opening the drawer.
   n.addEventListener('click', () => {
-
     if (!pickable) return openDrawer(card.id);
-
     if (picked.has(card.id)) picked.delete(card.id); else picked.add(card.id);
-
     n.querySelector('.card-pick').checked = picked.has(card.id);
-
     n.classList.toggle('picked', picked.has(card.id));
-
     renderArchiveBtn();
-
   });
-
   if (pickable && picked.has(card.id)) n.classList.add('picked');
-
   return n;
-
 }
 
 
 
-const EMPTY = {
-
-  owner: 'Nothing is waiting on you.',
-
-  planning: 'Nothing being shaped. Drop an idea here to start scoping it.',
-
-  planned: 'Backlog is clear — every planned task has moved on.',
-
-  queue: 'No work staged. Drag a planned card here to hand it to an agent.',
-
-  working: 'No agent is building right now.',
-
-  issues: 'Nothing broken or blocked. Good.',
-
-  completed: 'Nothing finished yet this run.',
-
-  review: 'Nothing waiting on you.'
-
-};
+const EMPTY_LABEL = 'Empty';
 
 
 
@@ -879,8 +740,7 @@ function renderAgentsScreen() {
 
     head.className = 'agent-head';
 
-    head.innerHTML = '<span class="dot"></span><strong class="agent-name"></strong>' +
-
+    head.innerHTML = '<strong class="agent-name"></strong>' +
       '<span class="agent-status"></span><span class="agent-pane"></span>';
 
     head.querySelector('.agent-name').textContent = b ? b.id : a.name;
@@ -1663,82 +1523,44 @@ function toggleLane(key) {
 
 
 
+const CHEVRON = '<svg class="lane-chev" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3l4 4-4 4"/></svg>';
+
 function laneNode(col, cards) {
-
   const lane = document.createElement('div');
-
   const isShut = collapsed.has(col.key) && !mobileBoard();
-
   lane.className = 'lane' + (col.key === selectedStage ? ' selected' : '') +
-
     (isShut ? ' collapsed' : '') + (cards.length ? '' : ' vacant');
-
   lane.dataset.key = col.key;
 
-
-
   const head = document.createElement('button');
-
   head.className = 'lane-head';
-
   head.type = 'button';
-
   head.setAttribute('aria-expanded', String(!isShut));
-
   // Collapsed strips hide the label, so the tooltip is the only place the stage
-
   // name survives — always name it, and say what the count is counting.
-
   head.title = (isShut ? 'Expand ' : 'Collapse ') + col.label + ' — ' +
-
     cards.length + ' card' + (cards.length === 1 ? '' : 's');
-
-  head.innerHTML =
-
-    '<span class="lane-label"><span class="lane-chev">&#9660;</span><span class="lane-name"></span></span>' +
-
-    '<span class="count"></span>';
-
+  head.innerHTML = '<span class="lane-label">' + CHEVRON + '<span class="lane-name"></span></span><span class="count"></span>';
   head.querySelector('.lane-name').textContent = col.label;
-
   head.querySelector('.count').textContent = cards.length;
-
   head.addEventListener('click', () => toggleLane(col.key));
 
-
-
   const body = document.createElement('div');
-
   body.className = 'lane-body';
-
   fillBody(body, col.key, cards);
 
-
-
   lane.append(head, body);
-
   wireDrop(lane, col.key);
-
   return lane;
-
 }
 
-
-
 function fillBody(body, key, cards) {
-
   if (!cards.length) {
-
     const e = document.createElement('div');
-
     e.className = 'empty';
-
-    e.textContent = EMPTY[key] || 'Nothing here.';
-
+    e.textContent = EMPTY_LABEL;
     body.append(e);
-
   } else cards.forEach(c => body.append(cardNode(c)));
-
 }
 
 
@@ -1791,8 +1613,10 @@ function wireDrop(node, key) {
 
 function renderSlots() {
   const cap = state.config?.maxConcurrentAgents ?? 0;
-  el.slots.textContent = `${cap - (state.slotsFree ?? cap)}/${cap} Builder slots`;
-  el.slots.title = 'Slots count live Builder assignments and startup reservations. Idle sessions do not imply token use. Missing sessions do not occupy a live slot.';
+  const count = document.createElement('b');
+  count.textContent = `${cap - (state.slotsFree ?? cap)} / ${cap}`;
+  el.slots.replaceChildren('Builders ', count);
+  el.slots.title = 'Builder slots in use. Slots count live Builder assignments and startup reservations. Idle sessions do not imply token use. Missing sessions do not occupy a live slot.';
 }
 
 
@@ -2042,35 +1866,10 @@ function boardSignature() {
 // Stall state is time-based, so it moves without the board changing.
 
 function refreshCardStates() {
-
-  document.querySelectorAll('.lane[data-key="working"] .card').forEach(node => {
-
+  el.lanes.querySelectorAll('.card').forEach(node => {
     const hit = findCard(node.dataset.id);
-
-    if (!hit) return;
-
-    const ms = stallMs(hit.card);
-
-    node.classList.toggle('stalled', !!ms);
-
-    let tag = node.querySelector('.stall-tag');
-
-    if (ms && !tag) {
-
-      tag = document.createElement('span');
-
-      tag.className = 'stall-tag';
-
-      node.querySelector('.card-top').append(tag);
-
-    }
-
-    if (ms) tag.textContent = 'stalled ' + Math.floor(ms / 60000) + 'm';
-
-    else if (tag) tag.remove();
-
+    if (hit) paintStatus(node, hit.card);
   });
-
 }
 
 
@@ -2079,15 +1878,19 @@ let laneSig = null;
 
 
 
+const PAUSE_ICON = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 3v8M9 3v8"/></svg>';
+const START_ICON = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 2.5l7 4.5-7 4.5z"/></svg>';
+
 function render() {
   dependencyHover.reset();
-  document.getElementById('project-status').textContent = projectPaused() ? 'Paused' : 'Running';
+  const status = document.getElementById('project-status');
+  status.textContent = projectPaused() ? 'Paused' : 'Running';
+  status.classList.toggle('paused', projectPaused());
   const projectAction = projectPaused() && !explicitCardRunning() ? 'Start' : 'Pause';
   const projectButton = document.getElementById('project-control');
   document.getElementById('project-control-label').textContent = projectAction;
-  document.getElementById('project-control-icon').textContent = projectAction === 'Start' ? '▶' : 'Ⅱ';
-  projectButton.classList.toggle('is-start', projectAction === 'Start');
-  projectButton.classList.toggle('is-pause', projectAction === 'Pause');
+  document.getElementById('project-control-icon').innerHTML = projectAction === 'Start' ? START_ICON : PAUSE_ICON;
+  projectButton.classList.toggle('primary', projectAction === 'Start');
   projectButton.setAttribute('aria-label', projectAction);
   projectButton.title = projectAction + ' project: ' + PROJECT;
 
@@ -2241,103 +2044,15 @@ async function openAgent(agent) {
     if (!response.ok) throw new Error(result.error);
   } catch (error) { toast(error.message); }
 }
+// The header only says when herdr itself is down; the Agents page lists agents.
 function renderAgents() {
-
-  el.agents.innerHTML = '';
-
-  if (!state.herdrUp) {
-
-    const m = document.createElement('span');
-
-    m.className = 'bar-msg';
-
-    m.textContent = 'herdr is not running — no agent status available.';
-
-    el.agents.append(m);
-
-    return;
-
-  }
-
-  const agents = visibleAgents();
-
-  if (!agents.length) {
-
-    // Not a problem — just nothing running yet. Blue, not amber.
-
-    const m = document.createElement('span');
-
-    m.className = 'bar-msg info';
-
-    m.textContent = 'No agents running on this project.';
-
-    el.agents.append(m);
-
-    return;
-
-  }
-
-  // Board agents are <role>-<card id>: b-i149, r-hk14, b-t-11 (-2 when herdr needed a suffix).
-  const BOARD_NAME = /^[pbria]-(t-\d+|[a-z]{1,3}\d+)(?:-\d+)?$/i;
-  const BOARD_ROLES = { p: 'planner', b: 'builder', r: 'reviewer', i: 'issues', a: 'auditor' };
-
-  // What you want off a chip is WHICH CARD and HOW LONG — not the pane suffix. The
-
-  // old chip led with `kb-t-21-injectbuddy-wj-pr` and truncated the card title away.
-
-  const cardFor = (a) => {
-
-    const entry = Object.entries(state.bindings || {}).find(([, b]) => b.pane_id === a.pane_id);
-
-    if (entry) return entry[0];
-
-    const m = BOARD_NAME.exec(a.name || '') || /^kb-(t-\d+)/i.exec(a.name || '');
-
-    return m ? m[1].toUpperCase() : null;
-
-  };
-
-  const roleOf = (a) => /^kb-review-/.test(a.name || '') ? 'reviewer'
-
-    : /^kb-sweep-/.test(a.name || '') ? 'manager'
-
-    : BOARD_NAME.test(a.name || '') ? BOARD_ROLES[a.name[0]]
-
-    : cardFor(a) ? 'builder' : (a.name || 'agent');
-
-
-
-  agents.forEach(a => {
-
-    const c = document.createElement('button');
-    c.type = 'button';
-    c.disabled = a.agent_status === 'missing';
-    c.addEventListener('click', () => openAgent(a));
-
-    c.className = 'chip ' + (a.agent_status || 'unknown');
-
-    const id = cardFor(a);
-
-    const held = heldMs(a);
-
-    c.title = a.name + '\n' + (a.terminal_title_stripped || '') + '\n' + (a.cwd || '');
-
-    c.innerHTML = '<span class="dot"></span><span class="who"></span><span class="what"></span>';
-
-    c.querySelector('.who').textContent = (id ? id + ' ' : '') + roleOf(a) +
-
-      (held ? ' · ' + fmtDur(held) : '');
-
-    // The card title is the useful half, so it gets the room the pane id was wasting.
-
-    const titled = id ? (findCard(id)?.card.title || '') : (a.terminal_title_stripped || '');
-
-    c.querySelector('.what').textContent = `${a.agent_status || 'unknown'} · ${titled.slice(0, 52)}`;
-
-    el.agents.append(c);
-
-  });
-
+  el.agents.replaceChildren();
+  if (state.herdrUp) return;
+  const m = document.createElement('span');
+  m.className = 'bar-msg';
+  m.textContent = 'herdr is not running — no agent status available.';
+  m.title = m.textContent;
+  el.agents.append(m);
 }
 
 
@@ -2675,94 +2390,61 @@ function gatingRows(dl, card) {
 
 
 
+// Drawer state that must survive the re-render on every agent tick.
+let usageOpen = false;
+let overrideOpen = false;
+
+const ASK_KINDS = /^(Needs you|Kicked back|Spawn failed|Review feedback)\b[\s:·—–-]*/;
+
+function drawerSection(title, cls) {
+  const s = document.createElement('section');
+  if (cls) s.className = cls;
+  const h = document.createElement('h3');
+  h.textContent = title;
+  s.append(h);
+  return s;
+}
+
 function renderDrawer() {
-
   if (!openId || !state) return;
-
   const hit = findCard(openId);
-
   if (!hit) return closeDrawer();
-
   const card = hit.card;
-
   const bind = state.bindings?.[openId] || null;
-
   const agent = agentForCard(card, state.agents);
-
   const stalled = stallMs(card);
 
-
-
   el.drawerId.textContent = card.id;
+  el.drawerTitle.textContent = card.title;
   document.getElementById('drawer-history').href = '/api/card-history?project=' + encodeURIComponent(PROJECT) + '&id=' + encodeURIComponent(card.id);
 
-
+  // Lane, then what the card is doing: "Owner · waiting on you".
+  const lane = LANE_LABEL[card.column] || card.column;
+  const status = cardStatus(card);
+  const said = status?.text || '';
+  el.drawerStatus.textContent = !status ? lane : said.startsWith(lane) ? said
+    : lane + ' · ' + (/^[A-Z][a-z]/.test(said) ? said[0].toLowerCase() + said.slice(1) : said);
+  el.drawerStatus.className = 'drawer-status' + (status ? ' tone-' + status.tone : '');
+  el.drawerStatus.title = status?.title || el.drawerStatus.textContent;
 
   // Filing a finished card is the one thing you come to this drawer to do, so it
-
   // gets the primary slot — and only appears once the card is actually finished.
-
   el.drawerArchive.hidden = card.column !== 'completed' || !!card.mission || card.cardOwned;
 
-
-
   // Owner and Issues are the two columns nothing moves out of on its own, so
-
   // they are the two that get a one-click way back into the run.
-
   // A Working card with nothing running on it is stuck; requeuing is the fix.
-
   const handedBack = card.column === 'owner' || card.column === 'issues' || orphaned(card);
-
   el.drawerQueue.hidden = !handedBack;
 
-  el.drawer.classList.toggle('wide', card.column === 'owner');
-
-
-
-  // Keep the terminal tail where the user put it. Sticking to the bottom is right
-
-  // while you are watching it stream, and wrong the moment you scroll up to read.
-
+  // Keep the terminal tail where the user put it.
   const oldPane = document.getElementById('pane');
-
   const paneScroll = oldPane ? oldPane.scrollTop : 0;
-
-  const paneAtEnd = oldPane
-
-    ? oldPane.scrollHeight - oldPane.scrollTop - oldPane.clientHeight < 24
-
-    : true;
-
-
+  const paneAtEnd = oldPane ? oldPane.scrollHeight - oldPane.scrollTop - oldPane.clientHeight < 24 : true;
 
   el.drawerBody.innerHTML = '';
 
-
-
-  const t = document.createElement('h2');
-
-  t.className = 'drawer-title';
-
-  t.textContent = card.title;
-
-  el.drawerBody.append(t);
-  const override = document.createElement('section');
-  override.className = 'card-settings';
-  const oh = document.createElement('h3'); oh.textContent = 'New assignment override'; override.append(oh);
-  const stagePick = document.createElement('select');
-  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['issues', 'Issues'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
-  const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
-  os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';
-  const refreshOverride = () => {
-    const stage = stagePick.value, current = card.agentSettings?.[stage] || state.config?.agentSettings?.[stage] || {}, catalog = state.config?.supportedAgentSettings || {};
-    oe.replaceChildren(); for (const key of Object.keys(catalog)) { const o = document.createElement('option'); o.value = key; o.textContent = key; o.selected = key === current.engine; oe.append(o); }
-    om.replaceChildren(); for (const name of catalog[oe.value]?.models || []) { const o = document.createElement('option'); o.value = name; o.textContent = name; o.selected = name === current.model; om.append(o); }
-    or.replaceChildren(); for (const name of catalog[oe.value]?.reasoning || []) { const o = document.createElement('option'); o.value = name; o.textContent = name; o.selected = name === current.reasoning; or.append(o); }
-  };
-  refreshOverride(); stagePick.addEventListener('change', refreshOverride); oe.addEventListener('change', refreshOverride);
-  os.addEventListener('click', async () => { try { const r = await fetch('/api/card-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, id: card.id, stage: stagePick.value, settings: { engine: oe.value, model: om.value, reasoning: or.value } }) }); const j = await r.json(); if (!r.ok || !j.ok) throw new Error(j.error || 'could not save override'); toast('Card override saved for new assignments'); } catch (err) { toast(err.message); } });
-  override.append(stagePick, oe, om, or, os); el.drawerBody.append(override);
+  // ---- More menu: run this card, and the legacy auto-review marker.
   const cardRun = (state.cardRuns || []).filter(r => r.cardId === card.id).at(-1);
   const runBox = document.createElement('div');
   runBox.className = 'card-run-control';
@@ -2787,7 +2469,35 @@ function renderDrawer() {
       runStatus.textContent = cancelling ? 'Cancelled; current turn may finish.' : 'Authorized; awaiting eligible stage.';
     } catch (err) { runStatus.textContent = err.message; runButton.disabled = false; }
   });
-  runBox.append(runButton, runStatus); el.drawerBody.append(runBox);
+  runBox.append(runButton, runStatus);
+  // Auto-review is a marker inside the card file, so this toggle rewrites the
+  // card — it is not board-only state.
+  const ar = document.createElement('label');
+  ar.className = 'auto-review';
+  const arBox = document.createElement('input');
+  arBox.type = 'checkbox';
+  arBox.checked = !!card.autoReview;
+  arBox.addEventListener('change', () => setAutoReview(card.id, arBox.checked));
+  ar.append(arBox, document.createTextNode(' Move legacy Completed cards to Review automatically'));
+  el.drawerMoreMenu.replaceChildren(runBox, ar);
+
+  // ---- The agent's own words on what it needs: the one thing you have to read.
+  // Handover notes only mean something where the card still waits on someone.
+  const askIsLive = card.ask && (card.column === 'owner' || card.column === 'issues' || orphaned(card));
+  if (askIsLive) {
+    // The parser can hand back "Kind: first clause" as the kind; the heading is
+    // only the kind, and everything after it is the body.
+    const m = ASK_KINDS.exec(card.ask.kind || '');
+    const kind = m ? m[1] : card.ask.kind;
+    const rest = m ? card.ask.kind.slice(m[0].length) : '';
+    const mine = kind === 'Needs you';
+    const box = drawerSection(mine ? 'What needs to be done' : kind, 'ask' + (mine ? ' mine' : ''));
+    const p = document.createElement('p');
+    p.textContent = (rest ? rest + ': ' : '') + card.ask.text;
+    box.append(p);
+    el.drawerBody.append(box);
+  }
+
   const recoveryNotice = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning;
   if (recoveryNotice) {
     const notice = document.createElement('p');
@@ -2795,152 +2505,166 @@ function renderDrawer() {
     notice.textContent = recoveryNotice;
     el.drawerBody.append(notice);
   }
-
-
-
-  // Handover notes stay in the card file as history, but they only *mean*
-
-  // something where the card is still waiting on someone. A card that failed to
-
-  // spawn twice and then ran fine is not carrying a live problem.
-
-  const askIsLive = card.ask &&
-
-    (card.column === 'owner' || card.column === 'issues' || orphaned(card));
-
-
-
-  if (askIsLive) {
-
-    const box = document.createElement('section');
-
-    box.className = 'ask' + (card.ask.kind === 'Needs you' ? ' mine' : '');
-
-    const h = document.createElement('h3');
-
-    h.textContent = card.ask.kind === 'Needs you' ? 'What needs to be done' : card.ask.kind;
-
-    const p = document.createElement('p');
-
-    p.textContent = card.ask.text;
-
-    box.append(h, p);
-
-    el.drawerBody.append(box);
-
-  }
-
-
-
   if (stalled) {
-
-    const s = document.createElement('div');
-
+    const s = document.createElement('p');
     s.className = 'drawer-stall';
-
     s.textContent = 'Stalled — agent has been ' + (agent ? agent.agent_status : 'quiet') + ' for ' + fmtDur(stalled) + '.';
-
     el.drawerBody.append(s);
-
   }
 
-
-
+  // ---- Details
+  const details = drawerSection('Details');
   const dl = document.createElement('dl');
-
   dl.className = 'drawer-dl';
-
-
-
   // Priority is editable here because this is where you have the card's detail in
-
   // front of you; it writes straight back into the markdown.
-
   const pri = document.createElement('div');
-
   pri.className = 'pri-set';
-
+  pri.setAttribute('role', 'group');
+  pri.setAttribute('aria-label', 'Priority');
   for (let n = 0; n <= 10; n++) {
-
     const b = document.createElement('button');
-
     b.type = 'button';
-
     b.className = 'pri-step' + (n === card.priority ? ' on' : '');
-
+    b.setAttribute('aria-pressed', String(n === card.priority));
     b.textContent = n;
-
     b.title = 'Set priority ' + n + '/10';
-
     b.addEventListener('click', () => setPriority(card.id, n));
-
     pri.append(b);
+  }
+  const pterm = document.createElement('dt');
+  pterm.textContent = 'Priority';
+  const pdef = document.createElement('dd');
+  pdef.append(pri);
+  dl.append(pterm, pdef);
+  if (agent) {
+    const model = bind?.model || agent.model;
+    const running = bind?.started ? fmtDur(Date.now() - Date.parse(bind.started)) : fmtDur(heldMs(agent));
+    row(dl, 'Agent', agent.name + ' · ' + agent.agent_status + (bind ? '' : ' (unbound match)') + (model ? ' · ' + model : '') + ' · running ' + running);
+  } else {
+    row(dl, 'Agent', bind ? 'bound to ' + (bind.name || bind.pane_id) + ' — pane not found' : 'none');
+  }
+  row(dl, 'Status', card.status || '—');
+  row(dl, 'Surface', card.surface || '—');
+  if (card.added) row(dl, 'Added', fmtWhen(card.added) + ' · ' + fmtDur(Date.now() - card.added) + ' ago');
+  gatingRows(dl, card);
+  const fterm = document.createElement('dt');
+  fterm.textContent = 'File';
+  const fdef = document.createElement('dd');
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'file-open';
+  open.textContent = card.file || '—';
+  open.title = 'Open in VS Code';
+  open.addEventListener('click', () => openInEditor(card.id));
+  fdef.append(open);
+  dl.append(fterm, fdef);
+  details.append(dl);
+  el.drawerBody.append(details);
 
+  if (bind) {
+    const term = drawerSection('Agent output');
+    const pre = document.createElement('pre');
+    pre.className = 'pane';
+    pre.id = 'pane';
+    pre.textContent = paneText || 'loading pane…';
+    const stop = document.createElement('button');
+    stop.className = 'btn danger';
+    stop.textContent = 'Stop agent';
+    stop.addEventListener('click', stopAgent);
+    term.append(pre, stop);
+    el.drawerBody.append(term);
+    pre.scrollTop = paneAtEnd ? pre.scrollHeight : paneScroll;
   }
 
-  const pterm = document.createElement('dt');
-
-  pterm.textContent = 'Priority';
-
-  const pdef = document.createElement('dd');
-
-  pdef.append(pri);
-
-  dl.append(pterm, pdef);
-
-
-
-  row(dl, 'Status', card.status || '—');
-
-  row(dl, 'Surface', card.surface || '—');
-
-  if (card.added) row(dl, 'Added', fmtWhen(card.added) + ' · ' + fmtDur(Date.now() - card.added) + ' ago');
-
-  gatingRows(dl, card);
-
-
-
-  const fterm = document.createElement('dt');
-
-  fterm.textContent = 'File';
-
-  const fdef = document.createElement('dd');
-
-  const open = document.createElement('button');
-
-  open.type = 'button';
-
-  open.className = 'file-open';
-
-  open.textContent = card.file || '—';
-
-  open.title = 'Open in VS Code';
-
-  open.addEventListener('click', () => openInEditor(card.id));
-
-  fdef.append(open);
-
-  dl.append(fterm, fdef);
-
-
-
-  el.drawerBody.append(dl);
+  // ---- Token usage: one row per run; shared runs fold into one muted row.
   const usage = state?.cardUsage?.[card.id];
-  const usageBox = document.createElement('section');
-  usageBox.className = 'card-usage';
-  const usageHeading = document.createElement('h3');
-  usageHeading.textContent = 'Recorded token usage';
+  const usageBox = drawerSection('Token usage', 'card-usage');
+  const sum = document.createElement('span');
+  sum.className = 'usage-sum';
+  sum.textContent = usage?.tokens ? fmtNum(usage.tokens.total) + ' recorded' + (usage.unknown ? ', partial' : '') : 'not yet verified';
+  usageBox.firstChild.append(' · ', sum);
+  const runs = usage?.agents || [];
+  const runsTable = document.createElement('table');
+  runsTable.className = 'usage-runs';
+  const runsHead = runsTable.createTHead().insertRow();
+  for (const label of ['Run', 'Model', 'Tokens']) {
+    const th = document.createElement('th'); th.scope = 'col'; th.textContent = label; runsHead.append(th);
+  }
+  const runsBody = runsTable.createTBody();
+  const cap = s => s ? s[0].toUpperCase() + s.slice(1) : 'Unknown';
+  const seen = {};
+  for (const run of runs.filter(r => !r.shared)) {
+    const k = seen[run.role] = (seen[run.role] ?? -1) + 1;
+    const tr = runsBody.insertRow();
+    tr.title = (run.name || 'Unknown agent') + ' · ' + (run.status || 'Unknown status');
+    tr.insertCell().textContent = cap(run.role) + (k ? ' (rerun' + (k > 1 ? ' ' + k : '') + ')' : '');
+    tr.insertCell().textContent = run.model || 'Unknown model';
+    tr.insertCell().textContent = run.tokens ? fmtNum(run.tokens.total) : 'unverified';
+  }
+  const sharedBy = {};
+  for (const run of runs.filter(r => r.shared)) (sharedBy[run.role || 'unknown'] ||= []).push(run);
+  for (const [role, group] of Object.entries(sharedBy)) {
+    const tr = runsBody.insertRow();
+    tr.className = 'shared';
+    tr.insertCell().textContent = group.length + ' ' + role + ' run' + (group.length === 1 ? '' : 's');
+    tr.insertCell().textContent = [...new Set(group.map(r => r.model || 'Unknown model'))].join(', ');
+    tr.insertCell().textContent = 'shared, not counted';
+  }
+  if (!runs.length) {
+    const cell = runsBody.insertRow().insertCell(); cell.colSpan = 3; cell.className = 'tone-muted';
+    cell.textContent = 'No recorded agent runs. Missing usage is not zero.';
+  }
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'link-btn';
+  more.textContent = usageOpen ? 'Hide breakdown' : 'Show breakdown';
+  more.setAttribute('aria-expanded', String(usageOpen));
+  more.addEventListener('click', () => { usageOpen = !usageOpen; renderDrawer(); });
+  usageBox.append(runsTable, more);
+  if (usageOpen) usageBox.append(usageBreakdown(card, usage));
+  el.drawerBody.append(usageBox);
+
+  // ---- Agent override for new assignments, folded away until wanted.
+  const override = document.createElement('details');
+  override.className = 'card-settings';
+  override.open = overrideOpen;
+  override.addEventListener('toggle', () => { overrideOpen = override.open; });
+  const summary = document.createElement('summary');
+  summary.textContent = 'Agent override for new assignments';
+  const grid = document.createElement('div');
+  grid.className = 'override-grid';
+  const stagePick = document.createElement('select');
+  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['issues', 'Issues'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
+  const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
+  stagePick.setAttribute('aria-label', 'Stage'); oe.setAttribute('aria-label', 'Engine'); om.setAttribute('aria-label', 'Model'); or.setAttribute('aria-label', 'Reasoning');
+  os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';
+  const refreshOverride = () => {
+    const stage = stagePick.value, current = card.agentSettings?.[stage] || state.config?.agentSettings?.[stage] || {}, catalog = state.config?.supportedAgentSettings || {};
+    oe.replaceChildren(); for (const key of Object.keys(catalog)) { const o = document.createElement('option'); o.value = key; o.textContent = key; o.selected = key === current.engine; oe.append(o); }
+    om.replaceChildren(); for (const name of catalog[oe.value]?.models || []) { const o = document.createElement('option'); o.value = name; o.textContent = name; o.selected = name === current.model; om.append(o); }
+    or.replaceChildren(); for (const name of catalog[oe.value]?.reasoning || []) { const o = document.createElement('option'); o.value = name; o.textContent = name; o.selected = name === current.reasoning; or.append(o); }
+  };
+  refreshOverride(); stagePick.addEventListener('change', refreshOverride); oe.addEventListener('change', refreshOverride);
+  os.addEventListener('click', async () => { try { const r = await fetch('/api/card-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, id: card.id, stage: stagePick.value, settings: { engine: oe.value, model: om.value, reasoning: or.value } }) }); const j = await r.json(); if (!r.ok || !j.ok) throw new Error(j.error || 'could not save override'); toast('Card override saved for new assignments'); } catch (err) { toast(err.message); } });
+  grid.append(stagePick, oe, om, or, os);
+  override.append(summary, grid);
+  el.drawerBody.append(override);
+}
+
+// The full fresh / cached / output table, behind "Show breakdown".
+function usageBreakdown(card, usage) {
+  const wrap = document.createElement('div');
+  wrap.className = 'usage-breakdown';
   const created = document.createElement('p');
   created.textContent = `Created: ${new Date(card.createdAt || card.added).toLocaleString()}`;
-  usageBox.append(created);
-  usageBox.append(usageHeading);
   const total = document.createElement('p');
   total.textContent = usage?.tokens ? `${fmtNum(usage.tokens.total)} processed tokens${usage.unknown ? ' — partial; unverified runs excluded' : ''}` : 'Usage not yet verified';
-  usageBox.append(total);
+  wrap.append(created, total);
   if (!(usage?.agents || []).some(run => run.role === 'orchestrator')) {
     const intake = document.createElement('p');
     intake.textContent = 'Orchestrator intake usage is unmeasured and is not included in this agent total.';
-    usageBox.append(intake);
+    wrap.append(intake);
   }
   const scroll = document.createElement('div');
   scroll.className = 'usage-table-scroll'; scroll.tabIndex = 0;
@@ -2979,80 +2703,9 @@ function renderDrawer() {
   // Display the existing authoritative summary; never sum shared/unknown rows here.
   appendTokenCells(footer, usage?.tokens);
   footer.insertCell().textContent = usage?.tokens ? (usage.unknown ? 'Partial — shared / unverified runs excluded' : 'Recorded attributable runs only') : 'Unverified — not zero';
-  scroll.append(table); usageBox.append(scroll);
-  el.drawerBody.append(usageBox);
-
-
-
-
-  // Auto-review is a marker inside the card file, so this toggle rewrites the
-
-  // card — it is not board-only state.
-
-  const ar = document.createElement('label');
-
-  ar.className = 'auto-review';
-
-  const box = document.createElement('input');
-
-  box.type = 'checkbox';
-
-  box.checked = !!card.autoReview;
-
-  box.addEventListener('change', () => setAutoReview(card.id, box.checked));
-
-  ar.append(box, document.createTextNode(' Move legacy Completed cards to Review automatically'));
-
-  el.drawerBody.append(ar);
-
-
-
-  const ag = document.createElement('dl');
-
-  ag.className = 'drawer-dl';
-
-  if (agent) {
-
-    row(ag, 'Agent', agent.name + ' · ' + agent.agent_status + (bind ? '' : ' (unbound match)'));
-
-    row(ag, 'Model', bind?.model || agent.model || '—');
-
-    row(ag, 'Running', bind?.started ? fmtDur(Date.now() - Date.parse(bind.started)) : fmtDur(heldMs(agent)));
-
-  } else {
-
-    row(ag, 'Agent', bind ? 'bound to ' + (bind.name || bind.pane_id) + ' — pane not found' : 'none');
-
-  }
-
-  el.drawerBody.append(ag);
-
-
-
-  if (bind) {
-
-    const pre = document.createElement('pre');
-
-    pre.className = 'pane';
-
-    pre.id = 'pane';
-
-    pre.textContent = paneText || 'loading pane…';
-
-    const stop = document.createElement('button');
-
-    stop.className = 'btn danger';
-
-    stop.textContent = 'Stop agent';
-
-    stop.addEventListener('click', stopAgent);
-
-    el.drawerBody.append(pre, stop);
-
-    pre.scrollTop = paneAtEnd ? pre.scrollHeight : paneScroll;
-
-  }
-
+  scroll.append(table);
+  wrap.append(scroll);
+  return wrap;
 }
 
 
@@ -3393,36 +3046,30 @@ async function runSweep() {
 
 
 
-function openDrawer(id) {
-
-  openId = id;
-
-  paneText = '';
-
-  el.drawer.hidden = false;
-
-  renderDrawer();
-
-  clearInterval(paneTimer);
-
-  pollPane();
-
-  paneTimer = setInterval(pollPane, 3000);
-
+function setMore(open) {
+  el.drawerMoreMenu.hidden = !open;
+  el.drawerMore.setAttribute('aria-expanded', String(open));
 }
 
-
+function openDrawer(id) {
+  openId = id;
+  paneText = '';
+  setMore(false);
+  el.drawer.hidden = false;
+  el.drawerBackdrop.hidden = false;
+  renderDrawer();
+  clearInterval(paneTimer);
+  pollPane();
+  paneTimer = setInterval(pollPane, 3000);
+}
 
 function closeDrawer() {
-
   openId = null;
-
+  setMore(false);
   el.drawer.hidden = true;
-
+  el.drawerBackdrop.hidden = true;
   clearInterval(paneTimer);
-
   paneTimer = null;
-
 }
 
 
@@ -3478,17 +3125,17 @@ el.archiveBtn.addEventListener('click', async () => {
 el.archiveCancel.addEventListener('click', () => { stopPicking(); render(); });
 
 el.drawerClose.addEventListener('click', closeDrawer);
-
+el.drawerBackdrop.addEventListener('click', closeDrawer);
+el.drawerMore.addEventListener('click', () => setMore(el.drawerMoreMenu.hidden));
+document.addEventListener('click', e => {
+  if (!el.drawerMoreMenu.hidden && !e.target.closest('.more')) setMore(false);
+});
 document.addEventListener('keydown', e => {
-
   if (e.key !== 'Escape' || el.dlg.open) return;
-
-  if (openId) closeDrawer();
-
+  if (!el.drawerMoreMenu.hidden) { setMore(false); el.drawerMore.focus(); }
+  else if (openId) closeDrawer();
   else if (!el.menu.hidden) closeMenu();
-
   else if (view !== 'board') setView('board');
-
 });
 
 document.getElementById('spawn-run').addEventListener('click', () => el.dlg.close('run'));
