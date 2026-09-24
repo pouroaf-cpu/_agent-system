@@ -435,6 +435,10 @@ async function pollProject(project) {
         }
         const pendingRecovery = readWorkflow(tasksDir)[id]?.builderRecovery
         if (['claimed', 'uncertain'].includes(pendingRecovery?.status)) continue
+        // A nudged Builder still working must not be moved under it (Tradeflow T-42:
+        // the card was routed to Issues mid-work and its handoff hit two copies).
+        const nudgedAgent = pendingRecovery?.status === 'nudged' && liveByPane.get(pendingRecovery.paneId)
+        if (nudgedAgent && !['idle', 'done'].includes(nudgedAgent.agent_status)) continue
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
