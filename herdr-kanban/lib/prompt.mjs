@@ -82,7 +82,7 @@ export function reviewerPrompt({ cards, projectPath, boardRoot, tasksDir, review
     capabilityBrief(cards),
     `Read only ${AUDITOR}, those card files, and the exact targets they list. Use only the required tools/MCPs named on each card.`,
     `Do not edit implementation files, create remediation cards, push, deploy, or claim CLEAR without every evidence gate.`,
-    `For each card replace its Evidence, Findings, and Audit conclusion comments. Record CLEAR, FINDINGS, or INCOMPLETE; missing tooling or evidence is INCOMPLETE, never CLEAR.`,
+    `For each card replace its Evidence, Findings, and Audit conclusion comments. Record CLEAR, FINDINGS, or INCOMPLETE; missing tooling or evidence is INCOMPLETE, never CLEAR. When a card has ## Card-ready findings, FINDINGS also needs its valid json block matching the numbered findings, or the handoff is held as INCOMPLETE.`,
     `Then run ${cmd} audit <ID> "<status>". FINDINGS goes to the responsible Planner for validation/deduplicated linked fixes; CLEAR with evidence closes; INCOMPLETE goes to technical recovery. Explicit Audit disposition: report-only-await-owner opts completed findings into Owner.`,
     `After the final handoff succeeds, stop immediately.`
   )

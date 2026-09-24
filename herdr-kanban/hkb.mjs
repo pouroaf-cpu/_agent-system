@@ -22,7 +22,7 @@ import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
-import { auditDestination, auditStatus } from './lib/audit-routing.mjs'
+import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection } from './lib/card-planner.mjs'
 import { assertReviewHandoff, assertReviewInputs } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
@@ -105,6 +105,7 @@ let card
 let previousColumn
 let approvalWait = false
 let prerequisiteWait = false
+let auditNotReady = ''
 try {
   const current = findCard(tasksDir, cardId)
   // Review runs on integrated code, so every Builder handoff goes to Completed first.
@@ -132,12 +133,13 @@ try {
   if (verb === 'audit' || (current.audit && verb === 'owner' && /audit report ready/i.test(note))) {
     if (!current.audit) fail('audit handoff requires an audit card')
     const text = readFileSync(current.path, 'utf8')
-    const status = auditStatus(text)
-    if (note.match(/\b(CLEAR|FINDINGS|INCOMPLETE)\b/)?.[1] !== status) fail('handoff must match current Audit conclusion')
+    if (note.match(/\b(CLEAR|FINDINGS|INCOMPLETE)\b/)?.[1] !== auditStatus(text)) fail('handoff must match current Audit conclusion')
+    const { status, reason } = auditOutcome(text, current.audit)
     target = auditDestination(text, status)
     if (status === 'INCOMPLETE') {
       target = current.column
-      recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
+      if (reason) auditNotReady = `INCOMPLETE: FINDINGS not card-ready: ${reason}. Fix ## Findings and the ## Card-ready findings JSON block, then hand off again.`
+      recordOperationalFailure(tasksDir, current, auditNotReady || note, dirname(tasksDir))
     }
     auditIntake = target === 'planning'
   }
@@ -210,6 +212,7 @@ try {
 }
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
+else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {
   const tail = capped
     ? `\n\nRepeated review failure: Planner must diagnose the root cause and record a changed approach before requeueing. Preserve all evidence and acceptance criteria.\n`

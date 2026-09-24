@@ -15,6 +15,7 @@ const AUDIT_TEMPLATES = {
   seo: new URL('../AUDIT-TEMPLATES/SEO.md', import.meta.url),
   contrast: new URL('../AUDIT-TEMPLATES/CONTRAST.md', import.meta.url),
   design: new URL('../AUDIT-TEMPLATES/DESIGN.md', import.meta.url),
+  general: new URL('../AUDIT-TEMPLATES/GENERAL.md', import.meta.url),
 }
 export const AUDITS = Object.keys(AUDIT_TEMPLATES)
 
@@ -648,6 +649,7 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace)) throw new Error('Workspace must be a project-relative path')
   audit = String(audit).toLowerCase()
   if (audit && !AUDITS.includes(audit)) throw new Error(`Audit must be one of: ${AUDITS.join(', ')}`)
+  if (audit === 'general' && !String(tools ?? '').trim()) tools = '- chrome-devtools (headless isolated browser: screenshots, DOM measurements, console and network)'
   if (audit && (typeof tools !== 'string' || !tools.trim())) throw new Error('Audit cards require exact tools/MCPs')
   const id = nextCardId(prefix, Object.values(readBoard(tasksDir)).flat().map(c => c.id))
   const dir = join(tasksDir, audit ? 'review' : 'planning')

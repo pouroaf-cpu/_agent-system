@@ -31,6 +31,7 @@ const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjec
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
+const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes } = await import('./lib/stall-watchdog.mjs')
@@ -882,6 +883,30 @@ const handleRequest = async (req, res) => {
       const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, prefix: config.cardPrefixes?.[p] })
       broadcastBoard(p)
       return json(res, 201, { ok: true, card })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  // Card-ready audit findings: GET to read them, POST to turn them into cards.
+  if (url.pathname === '/api/audit-cards' && ['GET', 'POST'].includes(req.method)) {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const input = req.method === 'GET' ? { project: url.searchParams.get('project'), id: url.searchParams.get('id') } : JSON.parse(body || '{}')
+      const p = input.project
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      if (req.method === 'GET') {
+        const { audit, findings, links } = auditFindings(tasksDirOf(p), input.id)
+        return json(res, 200, { ok: true, audit: { id: audit.id, title: audit.title, column: audit.column }, findings, links })
+      }
+      const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''
+      const result = cardsFromAudit(tasksDirOf(p), { ...input, mission, prefix: config.cardPrefixes?.[p] })
+      for (const { n, id } of result.created) activity(p, id, 'create', `from ${result.audit} finding ${n}`)
+      if (result.archivedNow) {
+        operatorArchiveRelease(p, result.audit)
+        activity(p, result.audit, 'move', '-> archive (every finding carded or declined)')
+      }
+      broadcastBoard(p)
+      return json(res, 200, { ok: true, ...result })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 
