@@ -32,7 +32,7 @@ const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { readReviewClaims } = await import('./lib/review-claims.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -336,6 +336,12 @@ async function pollProject(project) {
     for (const id of recoverIds) {
       recordUsageFinish({ tasksDir, paneId: beforeReap[id]?.pane_id, binding: beforeReap[id], status: 'ambiguous' }).catch(() => {})
       try {
+        if (await recoverBuilderNoHandoff({ tasksDir, cardId: id, agents, session: sessionOf(project), workspace: integrationPathOf(project), gitSettings, graceMs: FINISHED_BINDING_GRACE_MS })) {
+          dirty = true
+          continue
+        }
+        const pendingRecovery = readWorkflow(tasksDir)[id]?.builderRecovery
+        if (['claimed', 'uncertain'].includes(pendingRecovery?.status)) continue
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
@@ -349,6 +355,16 @@ async function pollProject(project) {
         })
       } catch (err) {
         activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
+      }
+    }
+
+    if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
+      for (const card of readBoard(tasksDir).issues) {
+        try {
+          if (await recoverBuilderNoHandoff({ tasksDir, cardId: card.id, agents, session: sessionOf(project), workspace: integrationPathOf(project), gitSettings })) dirty = true
+        } catch (err) {
+          activity(project, card.id, 'recovery-held', `Builder recovery needs attention: ${err.message}`, 'error')
+        }
       }
     }
 

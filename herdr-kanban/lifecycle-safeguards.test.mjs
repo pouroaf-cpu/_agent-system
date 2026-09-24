@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { routeBuilderNoHandoff } from './lib/autospawn.mjs'
+import { routeBuilderNoHandoff, recoverBuilderNoHandoff } from './lib/autospawn.mjs'
 import { workerPrompt, issuesSweeperPrompt } from './lib/prompt.mjs'
-import { findCard } from './lib/cards.mjs'
+import { findCard, moveCard } from './lib/cards.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 import { runCardPlanner } from './lib/card-planner.mjs'
 
@@ -57,4 +57,63 @@ test('Planner fallback routes a stopped session to Issues with saved pane eviden
   assert.equal(findCard(tasks, 'T-3').column, 'issues')
   assert.match(readFileSync(findCard(tasks, 'T-3').path, 'utf8'), /Planner fallback[\s\S]*route \/missing/)
   assert.match(readFileSync(join(tasks, '.history', 'T-3.jsonl'), 'utf8'), /route \/missing/)
+})
+
+test('held Builder gets one nudge, returns to Working, then recovers to Planner if idle', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-recovery-nudge-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-4.md'), '# T-4 — saved work\n**Workflow:** card-owned\n## Files\n- `app.mjs`\n## Implementation\nStage: builder\n## Evidence\nCheck: node check.mjs\n')
+  writeFileSync(join(root, 'app.mjs'), 'saved')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-4': { builder: { pane_id: 'pane-4', name: 'builder' } } }))
+  writeFileSync(join(tasks, '.board.json'), JSON.stringify({ 'T-4': { pane_id: 'pane-4' } }))
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-4': { state: 'building', worktreePath: join(root, 'worktree') } }))
+  const held = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-4', reason: 'Session pane-4 is missing without a valid Builder handoff from Working', workspace: root })
+  const sent = []
+  const io = { paneRead: async () => 'asked a question before stopping', deliver: async (_pane, prompt) => sent.push(prompt) }
+  const agents = [{ pane_id: 'pane-4', agent_status: 'idle' }]
+  assert.equal(await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-4', agents, io, workspace: root, now: 1000 }), true)
+  assert.equal(findCard(tasks, 'T-4').column, 'working')
+  assert.match(sent[0], /do not ask questions.*hkb done.*hkb issue.*hkb owner/i)
+  assert.equal(await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-4', agents, io, workspace: root, graceMs: 10000, now: 2000 }), true)
+  assert.equal(sent.length, 1)
+  assert.equal(await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-4', agents, io, workspace: root, graceMs: 1000, now: 3000 }), true)
+  assert.equal(findCard(tasks, 'T-4').column, 'planning')
+  assert.match(readFileSync(join(tasks, '.history', 'T-4.jsonl'), 'utf8'), /asked a question before stopping/)
+  assert.equal(JSON.parse(readFileSync(join(tasks, '.board-worktrees.json')))['T-4'].state, 'building')
+  assert.equal(held.column, 'issues')
+})
+
+test('missing Builder pane returns to Planner with hold and prior output retained', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-recovery-missing-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-5.md'), '# T-5 — saved work\n**Workflow:** card-owned\n## Files\n- `app.mjs`\n## Implementation\nStage: builder\n## Evidence\nCheck: node check.mjs\n')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-5': { builder: { pane_id: 'gone', name: 'builder' } } }))
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-5', reason: 'Session gone is missing without a valid Builder handoff from Working', evidence: 'saved output', workspace: root })
+  assert.equal(await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-5', agents: [], workspace: root, now: 2000 }), true)
+  assert.equal(findCard(tasks, 'T-5').column, 'planning')
+  assert.match(readFileSync(findCard(tasks, 'T-5').path, 'utf8'), /Builder recovery failed \(missing-pane\)/)
+  assert.match(readFileSync(join(tasks, '.history', 'T-5.jsonl'), 'utf8'), /saved output/)
+  assert.equal(moved.column, 'issues')
+})
+
+test('two Builder recovery failures for the same cause ask the Owner', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-recovery-owner-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-6.md'), '# T-6 — saved work\n**Workflow:** card-owned\n## Files\n- `app.mjs`\n## Implementation\nStage: builder\n## Evidence\nCheck: node check.mjs\n')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-6': { builder: { pane_id: 'gone', name: 'builder' } } }))
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-6': { state: 'building', worktreePath: join(root, 'worktree') } }))
+  routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', reason: 'Session gone is missing without a valid Builder handoff from Working', workspace: root })
+  await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', agents: [], workspace: root, now: 1000 })
+  moveCard(tasks, 'T-6', 'working')
+  routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', reason: 'Session gone is missing without a valid Builder handoff from Working', workspace: root })
+  await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', agents: [], workspace: root, now: 2000 })
+  assert.equal(findCard(tasks, 'T-6').column, 'owner')
+  assert.match(readFileSync(findCard(tasks, 'T-6').path, 'utf8'), /Should the Planner change the recovery plan/)
+  assert.equal(JSON.parse(readFileSync(join(tasks, '.board-worktrees.json')))['T-6'].state, 'building')
 })

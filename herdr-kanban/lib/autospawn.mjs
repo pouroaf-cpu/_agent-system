@@ -26,6 +26,7 @@ import { overlapHoldReason, readWorktrees, integrationStartHoldReason } from './
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
 import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs } from './review-claims.mjs'
+import { recoveryState } from './recovery.mjs'
 
 // A Builder that disappears or ends without hkb done/issue leaves Working
 // stuck. Route it to Issues while retaining the binding, workflow assignment,
@@ -39,6 +40,61 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   recordOperationalFailure(tasksDir, moved, detail, workspace, gitSettings)
   return moved
+}
+
+export async function recoverBuilderNoHandoff({ tasksDir, cardId, agents, io = { paneRead, deliver }, session, workspace, gitSettings, graceMs = 120000, now = Date.now() }) {
+  const card = findCard(tasksDir, cardId)
+  const workflow = readWorkflow(tasksDir)[card.id] || {}
+  const marker = workflow.builderRecovery
+  const attempt = recoveryState(readFileSync(card.path, 'utf8')).attempt
+  const binding = readBindings(tasksDir)[card.id]
+  const paneId = binding?.pane_id || workflow.builder?.pane_id
+  const agent = agents.find(item => item.pane_id === paneId)
+  const operational = workflow.operational
+  const hold = operationalHold(tasksDir, card, workspace, gitSettings)
+
+  const routeToPlanner = async (cause, output) => {
+    const prior = readWorkflow(tasksDir)[card.id]?.builderRecovery || {}
+    const failures = prior.cause === cause ? (prior.failures || 0) + 1 : 1
+    const detail = `Builder recovery failed (${cause}); original hold: ${operational?.reason || 'Builder stopped without a handoff'}. Pane output: ${String(output || '(unavailable)').slice(-4000)}`
+    unbind(tasksDir, card.id)
+    const to = failures >= 2 ? 'owner' : 'planning'
+    const moved = moveCard(tasksDir, card.id, to)
+    if (to === 'planning') {
+      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${detail}. Worktree, commits, and dirty files remain preserved.\n`)
+      requestPlannerCorrection(tasksDir, card.id)
+    } else {
+      appendFileSync(moved.path, `\n\n**Needs you**\nThe Builder recovery failed twice for the same reason (${cause}). Should the Planner change the recovery plan before this card is requeued?\n\n${detail}\n`)
+    }
+    appendHistory(tasksDir, card.id, { event: 'builder-recovery-failed', cause, failures, paneId, output: String(output || '').slice(-4000), operationalReason: operational?.reason || null })
+    updateWorkflow(tasksDir, card.id, { operational: null, builderRecovery: { attempt, cause, failures, status: to, paneId, at: new Date(now).toISOString() } })
+    return true
+  }
+
+  if (card.column === 'working' && marker?.status === 'nudged' && marker.attempt === attempt) {
+    if (now - Date.parse(marker.at) < graceMs) return true
+    if (agent && !['idle', 'done'].includes(agent.agent_status)) return false
+    const output = agent ? await io.paneRead(paneId, session).catch(() => '') : ''
+    return routeToPlanner(marker.cause || 'idle-no-handoff', output)
+  }
+  if (card.column !== 'issues' || !hold || !/Builder fallback|without a valid Builder handoff from Working/i.test(hold)) return false
+  const cause = !agent ? 'missing-pane' : 'idle-no-handoff'
+  if (!agent) return routeToPlanner(cause, '')
+  if (!['idle', 'done'].includes(agent.agent_status)) return false
+  if (marker?.attempt === attempt && marker.status) return false
+  const output = await io.paneRead(paneId, session)
+  updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'claimed', at: new Date(now).toISOString() } })
+  const moved = moveCard(tasksDir, card.id, 'working')
+  const nudge = `Finish ${card.id} within the approved card scope, do not ask questions, then report with exactly one of hkb done, hkb issue, or hkb owner.`
+  appendHistory(tasksDir, card.id, { event: 'builder-recovery-nudge', cause, paneId, output: String(output).slice(-4000), attempt })
+  try {
+    await io.deliver(paneId, nudge, session)
+  } catch (err) {
+    updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'uncertain', at: new Date(now).toISOString(), error: err.message } })
+    throw err
+  }
+  updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'nudged', at: new Date(now).toISOString() } })
+  return !!moved
 }
 
 // A spawn blocks for ~55s. Without this, every 2s agent poll would start another.
