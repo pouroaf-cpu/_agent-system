@@ -63,6 +63,17 @@ test('no-review done waits for integration, yes still reviews, and verified unch
   }
 })
 
+test('Builder done from Issues records the Builder stage so the card can integrate (Tradeflow T-42)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-issues-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  putCard(tasksDir, 'issues', 'T-1')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { state: 'building' } }))
+  const result = runHkb(tasksDir, 'done', 'T-1')
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1'].completedStage, 'working')
+})
+
 test('archive requires Builder PASS and integration while Review PASS and audit gates remain', t => {
   const root = mkdtempSync(join(tmpdir(), 'archive-gate-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))

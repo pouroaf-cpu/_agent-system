@@ -226,7 +226,8 @@ appendHistory(tasksDir, card.id, { event: 'handoff', stage: previousColumn, outc
 if (binding) updateWorkflow(tasksDir, card.id, { builder: binding })
 if (['done', 'unchanged', 'pass'].includes(verb)) updateWorkflow(tasksDir, card.id, {
   operational: null,
-  completedStage: previousColumn,
+  // A Builder routed to Issues mid-work still completes the Builder stage (Tradeflow T-42).
+  completedStage: previousColumn === 'issues' && ['done', 'unchanged'].includes(verb) && !plannerAssignment ? 'working' : previousColumn,
   ...(target === 'completed' ? { completedAt: new Date().toISOString() } : {}),
 })
 unbind(tasksDir, card.id)
