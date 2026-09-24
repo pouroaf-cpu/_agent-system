@@ -1,3 +1,8 @@
+import { CARD_ID } from './ids.mjs'
+
+// ponytail: any capitalised prefix counts, so prose like "AC1" on a link line reads
+// as an (unknown) card and fails closed; pass the project prefix if that bites.
+const CARD_REF = new RegExp(String.raw`\b${CARD_ID}\b`, 'g')
 export const section = (text, name) => text.match(new RegExp(`^## ${name}[^\\S\\r\\n]*\\r?\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))?.[1]?.trim() || ''
 const meaningful = text => text.replace(/<!--[\s\S]*?-->/g, '').trim()
 export function auditStatus(text) {
@@ -20,7 +25,7 @@ export function auditArchiveError(text, exists) {
   const links = section(text, 'Remediation links')
   for (const id of findings) {
     const line = links.match(new RegExp(`^- F${id}: (.+)$`, 'm'))?.[1] || ''
-    const cards = line.match(/\bT-\d+\b/g) || []
+    const cards = line.match(CARD_REF) || []
     if (!cards.length || cards.some(card => !exists(card))) return `Finding F${id} needs an existing linked remediation card`
   }
   return null

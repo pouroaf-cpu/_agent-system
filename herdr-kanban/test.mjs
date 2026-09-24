@@ -348,34 +348,19 @@ test('prompts are single-line, because a newline is the submit key', () => {
 })
 
 test('board-spawned agents are recognisable so only they get auto-closed', () => {
-  assert.ok(agentName({ id: 'T-04' }, 'Injectbuddy').startsWith('kb-'))
-  assert.ok(isBoardAgent({ name: 'kb-t-04-injectbuddy' }))
+  assert.equal(agentName('builder', 'T-04'), 'b-t-04')
+  assert.ok(isBoardAgent({ name: 'b-i149' }))
+  assert.ok(isBoardAgent({ name: 'kb-t-04-injectbuddy' }), 'agents started before role names are still ours')
   assert.ok(!isBoardAgent({ name: 'planner-injectbuddy' }), 'a hand-started agent is never ours to close')
-})
-
-test('retrying a card asks for a different agent name than the attempt that failed', () => {
-  // herdr binds a name to a terminal; reusing one whose pane has closed fails
-  // with agent_name_not_found, which is what stalled the reviewer.
-  const first = agentName({ id: 'T-04' }, 'Injectbuddy', 'wA:p7')
-  const second = agentName({ id: 'T-04' }, 'Injectbuddy', 'wA:p9')
-  assert.notEqual(first, second)
-  assert.ok(first.startsWith('kb-') && second.startsWith('kb-'))
-  assert.ok(!/[^a-z0-9-]/.test(second), 'pane ids contain a colon, which must be scrubbed')
-
-  const reviewer = agentName({ id: 'review' }, 'Injectbuddy', 'wC:p7')
-  assert.ok(reviewer.startsWith('kb-review-'), 'reviewerRunning matches on this prefix')
 })
 
 test('agent names satisfy the rules herdr actually enforces', () => {
   // lowercase letters, digits, - or _, starting with a letter, 1-32 chars
   const ok = (n) => /^[a-z][a-z0-9_-]{0,31}$/.test(n)
-
-  const long = agentName({ id: 'T-100' }, 'injectbuddy-webapp-very-long-name', 'wA:p10')
-  assert.ok(ok(long), `long project name must still yield a legal name, got "${long}" (${long.length})`)
-  assert.ok(long.endsWith('-wa-p10'), 'the pane suffix survives truncation, since it is what keeps names unique')
-
-  assert.ok(ok(agentName({ id: 'T-04' }, 'Injectbuddy', 'wA:p7')))
-  assert.ok(ok(agentName({ id: 'review' }, 'Injectbuddy', 'wC:p1B')), 'pane ids can contain capitals')
+  for (const role of ['planner', 'builder', 'reviewer', 'issues', 'auditor']) {
+    assert.ok(ok(agentName(role, 'T-100')) && ok(agentName(role, 'LTS100')), role)
+  }
+  assert.ok(agentName('reviewer', 'HK14').startsWith('r-'), 'reviewerRunning matches on this role letter')
 })
 
 test('closeFinished never reaps an idle reviewer/sweeper mid-run, only a genuinely done one', async () => {
@@ -760,10 +745,10 @@ test('trivial cards use the lightweight builder model and engine', async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-test('Lead Planner agent names use the kb-plan- prefix', () => {
-  const name = agentName({ id: 'plan' }, 'Injectbuddy', 'wC:p7')
-  assert.ok(name.startsWith('kb-plan-'), 'sweeperRunning matches on this prefix')
-  assert.ok(isBoardAgent({ name }), 'the generic kb- close/board-agent check must also recognise it')
+test('Lead Planner (Issues sweeper) agent names use the i- role prefix', () => {
+  const name = agentName('issues', 'T-7')
+  assert.ok(name.startsWith('i-'), 'sweeperRunning matches on this prefix')
+  assert.ok(isBoardAgent({ name }), 'the generic close/board-agent check must also recognise it')
 })
 
 test('only one sweeper can be in flight, however many callers ask at once', async () => {
@@ -1743,12 +1728,12 @@ test('running manager poll promotes Planned to Builder and Completed to independ
     const starts = await waitUntil(() => {
       const state = JSON.parse(readFileSync(run.herdrState, 'utf8'))
       const names = state.events.filter((e) => e[0] === 'agent start').map((e) => e[1])
-      return names.some((name) => name.startsWith('kb-review-')) && names.some((name) => name.startsWith('kb-t-41-'))
+      return names.some((name) => name.startsWith('r-')) && names.some((name) => name === 'b-t-41')
         ? names
         : false
     }, 'manager automatic agent starts')
-    assert.equal(starts.filter((name) => name.startsWith('kb-review-')).length, 1)
-    assert.equal(starts.filter((name) => name.startsWith('kb-t-41-')).length, 1)
+    assert.equal(starts.filter((name) => name.startsWith('r-')).length, 1)
+    assert.equal(starts.filter((name) => name === 'b-t-41').length, 1)
   } finally {
     await run.stop()
     rmSync(run.root, { recursive: true, force: true })
@@ -1865,9 +1850,9 @@ test('running server poll auto-starts one Lead Planner for Issues, then hkb retu
     const starts = await waitUntil(() => {
       const state = JSON.parse(readFileSync(run.herdrState, 'utf8'))
       const names = state.events.filter((e) => e[0] === 'agent start').map((e) => e[1])
-      return names.filter((name) => name.startsWith('kb-plan-')).length === 1 ? names : false
+      return names.filter((name) => name.startsWith('i-')).length === 1 ? names : false
     }, 'Lead Planner start')
-    assert.equal(starts.filter((name) => name.startsWith('kb-plan-')).length, 1)
+    assert.equal(starts.filter((name) => name.startsWith('i-')).length, 1)
     assert.match(readFileSync(findCard(run.tasks, 'T-50').path, 'utf8'), /Lead Planner accepted ownership/)
 
     await run.stop()
@@ -1875,7 +1860,7 @@ test('running server poll auto-starts one Lead Planner for Issues, then hkb retu
     await delay(150)
     await stopRestart()
     const restartedStarts = JSON.parse(readFileSync(run.herdrState, 'utf8')).events
-      .filter((e) => e[0] === 'agent start' && e[1].startsWith('kb-plan-'))
+      .filter((e) => e[0] === 'agent start' && e[1].startsWith('i-'))
     assert.equal(restartedStarts.length, 1, 'restart does not spawn a duplicate for a Planning card')
 
     const result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), 'move', 'T-50', 'planned'], {

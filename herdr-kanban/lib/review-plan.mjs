@@ -9,6 +9,7 @@ import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { readBoard, cardFiles } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
+import { isCardId } from './ids.mjs'
 export { cardFiles } from './cards.mjs'
 
 // Single tunable knobs, not scattered magic numbers.
@@ -25,7 +26,7 @@ export function readReviewGroups(tasksDir) {
   for (const group of groups) {
     if (!group.name || !Array.isArray(group.cards) || !group.cards.length) throw new Error('Invalid review group')
     for (const id of group.cards) {
-      if (!/^T-\d+$/.test(id) || seen.has(id)) throw new Error(`Duplicate/invalid grouped review card: ${id}`)
+      if (!isCardId(id) || seen.has(id)) throw new Error(`Duplicate/invalid grouped review card: ${id}`)
       seen.add(id)
     }
   }

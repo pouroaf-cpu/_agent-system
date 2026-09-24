@@ -29,6 +29,7 @@ const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPri
 const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
+const { isCardId } = await import('./lib/ids.mjs')
 const { readReviewClaims } = await import('./lib/review-claims.mjs')
 const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
@@ -81,7 +82,8 @@ function activity(project, cardId, event, message, level = 'info') {
 }
 
 function schedulerActivity(project, message) {
-  const cardId = String(message).match(/\bT-\d+\b/i)?.[0]?.toUpperCase() ?? '-'
+  const prefixes = ['T-', config.cardPrefixes?.[project]].filter(Boolean).join('|')
+  const cardId = String(message).match(new RegExp(String.raw`\b(?:${prefixes})\d+\b`, 'i'))?.[0]?.toUpperCase() ?? '-'
   const event = /retry|spawn failed/i.test(message) ? 'retry' : /held|busy|not ready/i.test(message) ? 'hold' : 'scheduler'
   console.log(message)
   activity(project, cardId, event, message, event === 'retry' ? 'error' : 'info')
@@ -125,8 +127,9 @@ async function pollAgents(project) {
         updateWorkflow(tasksDirOf(project), id, { outputSavedAt: saved.completedAt })
       } catch { /* Retain the session and retry output capture next poll. */ }
     }
-    // Each project has its own HERDR session. Builder cwd now points at its
-    // isolated worktree, so exact-cwd filtering would make live panes vanish.
+    // The project's agents: its workspace in the shared HERDR session plus any still
+    // running in its old per-project session. Builder cwd points at its isolated
+    // worktree, so exact-cwd filtering would make live panes vanish.
     const agents = allAgents
     if (herdrFailed) { console.log('herdr: back up'); herdrFailed = false }
     const state = { agents, herdrUp: true }
@@ -780,7 +783,7 @@ const handleRequest = async (req, res) => {
       const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '' } = JSON.parse(body)
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const mission = !audit && missionAllowsProject(p) ? config.mission?.id || '' : ''
-      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission })
+      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, prefix: config.cardPrefixes?.[p] })
       broadcastBoard(p)
       return json(res, 201, { ok: true, card })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
@@ -924,7 +927,7 @@ const handleRequest = async (req, res) => {
     try {
       const { project: p = config.projects[0], id, reportId } = JSON.parse(body || '{}')
       if (!config.projects.includes(p)) throw new Error('Unknown project')
-      if (!reportId && !/^T-\d+$/i.test(id || '')) throw new Error('Invalid card identity')
+      if (!reportId && !isCardId(id)) throw new Error('Invalid card identity')
       const path = reportId ? resolveAuditReport(config, p, reportId) : findCard(tasksDirOf(p), id).path
       // The configured editor is trusted; the browser supplies only an identity.
       // Validate shell characters before quoting the resolved server-owned path.

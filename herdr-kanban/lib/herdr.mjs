@@ -6,26 +6,57 @@ import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
+import { agentRole } from './ids.mjs'
 
 const run = promisify(execFile)
 
 const HERDR = process.env.HERDR_BIN_PATH || 'herdr'
 
-// Board agents get their own workspace, so the operator's window is not buried
-// under kb-* tabs. herdr prefixes every agent in its sidebar with the workspace
-// label, which makes that label the only way to tell board work from yours.
-const AGENT_WORKSPACE = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL('../board.config.json', import.meta.url), 'utf8')).agentWorkspace
-  } catch { return null }
-})() || 'agents'
+const CONFIG = (() => {
+  try { return JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8')) } catch { return {} }
+})()
+// Fallback label when a caller has no project.
+const AGENT_WORKSPACE = CONFIG.agentWorkspace || 'agents'
 
-// Each project runs in its own named herdr session (`herdr --session tradeflow`),
-// with its own socket under AppData/Roaming/herdr/sessions/<name>. A CLI call with
-// no --session hits the default session, which is how board agents for one project
-// ended up spawning inside another project's window. Every call is session-scoped;
-// omitting it stays the old default-session behaviour for callers that are global.
+// Every new board agent lives in ONE herdr session — the default one, so plain
+// `herdr` shows them all — with one workspace per project, labelled with the
+// project name. Callers still pass sessionOf(project): that key names the project,
+// and it is also the project's old per-project session, where agents started before
+// the switch keep running. herdr ids are only unique within a session, so an id
+// from the shared session travels as `w1:p5@default`; a bare id is a legacy agent
+// in sessionOf(project) and keeps resolving there until it finishes.
+export const SHARED_SESSION = 'default'
 export const sessionOf = (project) => (project || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || null
+const projectLabel = (session) => CONFIG.projects?.find((p) => sessionOf(p) === session) ?? session
+const shared = (id) => (id ? `${id}@${SHARED_SESSION}` : id)
+export function splitRef(ref, session) {
+  const at = String(ref ?? '').lastIndexOf('@')
+  return at > 0 ? { id: ref.slice(0, at), session: ref.slice(at + 1) } : { id: ref, session }
+}
+// Which argument names a pane/agent/tab, per command; -1 when none does.
+function refIndex([group, verb, ...rest]) {
+  if (group === 'agent' && verb === 'start') return rest.includes('--pane') ? rest.indexOf('--pane') + 3 : -1
+  const targeted = (group === 'agent' && verb === 'prompt') || (group === 'pane' && ['read', 'close', 'send-keys'].includes(verb)) || (group === 'tab' && verb === 'focus')
+  return targeted ? 2 : -1
+}
+// The argv for one call: a pane-targeted call goes to the session that owns the
+// pane (qualified id) or else to the caller's project session; the shared default
+// session takes no --session flag.
+export function herdrArgv(args, session) {
+  const at = refIndex(args)
+  const target = at < 0 ? { session } : splitRef(args[at], session)
+  const argv = at < 0 ? args : args.with(at, target.id)
+  return target.session && target.session !== SHARED_SESSION ? ['--session', target.session, ...argv] : argv
+}
+// One project's view: legacy-session agents as they are, plus the shared-session
+// agents in the workspace labelled with the project, with their ids qualified.
+export function projectAgents(session, legacy, all, labels) {
+  return [
+    ...legacy.map((a) => ({ ...a, session })),
+    ...all.filter((a) => sessionOf(labels.get(a.workspace_id)) === session)
+      .map((a) => ({ ...a, session: SHARED_SESSION, pane_id: shared(a.pane_id), tab_id: shared(a.tab_id) })),
+  ]
+}
 
 export const sessionServerArgs = (session) => ['--session', session, 'server']
 
@@ -87,13 +118,15 @@ async function ensureSessionReady(session) {
 }
 
 async function herdr(args, { timeout = 15000, session, ensureSession = true } = {}) {
-  if (ensureSession) await ensureSessionReady(session)
+  // A pane never survives its server, so a stopped session is not restarted for a
+  // pane-targeted call.
+  if (ensureSession && refIndex(args) < 0) await ensureSessionReady(session === SHARED_SESSION ? null : session)
   if (args[0] === 'agent' && ['start', 'prompt'].includes(args[1])) assertPlannerPaneAllowed(session, args[1] === 'start' ? args[args.indexOf('--pane') + 1] : args[2])
   if (args[0] === 'pane' && args[1] === 'send-keys') assertPlannerPaneAllowed(session, args[2])
   // Last boundary, after asynchronous readiness: Pause/cancel cannot leave a queued launch authorized.
   if (args[0] === 'agent' && ['start', 'prompt'].includes(args[1])) assertPromptAllowed(session, { paneId: args[1] === 'start' ? args[args.indexOf('--pane') + 1] : args[2], action: args[1] })
   if (args[0] === 'pane' && args[1] === 'send-keys') assertPromptAllowed(session, { paneId: args[2], action: 'enter' })
-  const argv = session ? ['--session', session, ...args] : args
+  const argv = herdrArgv(args, session)
   const { stdout } = await run(HERDR, argv, { timeout, windowsHide: true })
   const text = stdout.trim()
   if (!text) return null
@@ -129,8 +162,28 @@ export function parseAgentList(result) {
 }
 
 // Live agents. agent_status is one of idle | working | blocked | done | unknown.
+// For a project: its legacy session's agents (bare ids) plus the agents in its
+// workspace of the shared session (qualified ids), each tagged with `session`.
+// A legacy session that is no longer running simply has no agents; the shared
+// session failing is still a failure, so callers keep failing closed.
 export async function agentList(session, options = {}) {
-  return parseAgentList(await herdr(['agent', 'list'], { ...options, session }))
+  const list = async (session, options) => parseAgentList(await herdr(['agent', 'list'], { ...options, session }))
+  if (!session || session === SHARED_SESSION) return list(session, options)
+  const [legacy, all] = await Promise.all([
+    list(session, { ...options, ensureSession: false }).catch((err) => { if (/server_not_running/.test(err.message)) return []; throw err }),
+    list(SHARED_SESSION, options),
+  ])
+  return projectAgents(session, legacy, all, await sharedLabels(all))
+}
+
+// workspace_id -> label in the shared session, refreshed when an unknown id shows up.
+const labelCache = { at: 0, labels: new Map() }
+async function sharedLabels(agents) {
+  if (Date.now() - labelCache.at > 30000 || agents.some((a) => !labelCache.labels.has(a.workspace_id))) {
+    labelCache.labels = new Map((await workspaceList(SHARED_SESSION)).map((w) => [w.workspace_id, w.label]))
+    labelCache.at = Date.now()
+  }
+  return labelCache.labels
 }
 
 // Agents whose cwd is this project.
@@ -152,21 +205,6 @@ export async function openProjects(projectsRoot, session) {
     if (parts.length) names.add(parts[0])
   }
   return [...names]
-}
-
-// Which workspace this project's panes already live in. Now only the fallback for
-// agentWorkspaceOr: `tab create` otherwise follows whatever is focused, so a board
-// tab could land in an unrelated window.
-export async function projectWorkspace(projectPath, session) {
-  const result = await herdr(['pane', 'list'], { session })
-  const panes = (result?.panes ?? []).filter((p) => sameDir(p.cwd, projectPath))
-  if (!panes.length) return null
-
-  // Most-populated workspace wins, so one stray pane elsewhere cannot drag new
-  // agents away from where the rest of the work is.
-  const counts = new Map()
-  for (const p of panes) counts.set(p.workspace_id, (counts.get(p.workspace_id) ?? 0) + 1)
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
 }
 
 // Labels are what the operator sees and types, so match them the way they read.
@@ -191,20 +229,18 @@ export async function agentWorkspace(label = AGENT_WORKSPACE, { list = workspace
   const made = create
     ? await create(label)
     : await herdr(['workspace', 'create', '--label', label, '--no-focus'], { timeout: 30000, session })
-  return { id: made?.workspace?.workspace_id ?? made?.workspace_id ?? null, created: true }
+  const id = made?.workspace?.workspace_id ?? made?.workspace_id ?? null
+  if (id && !session) labelCache.labels.set(id, label)
+  return { id, created: true }
 }
 
-// Where board-spawned tabs go. Falls back to the project's own workspace so a
-// herdr without `workspace create` degrades instead of failing the spawn.
+// Where board-spawned tabs go: the project's workspace in the shared session. No
+// fallback — a tab in some other workspace would be invisible to this project's
+// agent list, so failing the spawn is the safe outcome.
 export async function agentWorkspaceOr(projectPath, session) {
-  try {
-    const { id } = await agentWorkspace(AGENT_WORKSPACE, { session })
-    if (id) return id
-    throw new Error('workspace create returned no id')
-  } catch (err) {
-    console.warn(`agent workspace unavailable (${err.message}); falling back to the project's workspace`)
-    return projectWorkspace(projectPath, session).catch(() => null)
-  }
+  const { id } = await agentWorkspace(projectLabel(session) || AGENT_WORKSPACE)
+  if (!id) throw new Error('workspace create returned no id')
+  return id
 }
 
 // herdr has no unclosable workspace, so the board keeps its own alive instead:
@@ -212,18 +248,18 @@ export async function agentWorkspaceOr(projectPath, session) {
 // The `workspace list` call is skipped whenever a live agent is already sitting
 // in the one we last resolved — that is the common case, and the agent poll has
 // already paid for the information.
-// Keyed by session: every project's herdr session has its own agents workspace, and
+// Keyed by project: each project has its own workspace in the shared session, and
 // one id remembered globally would send another project's tabs to a stranger's window.
-const knownWorkspace = new Map() // session -> workspace_id
-const workspaceBackoffUntil = new Map() // session -> epoch ms
+const knownWorkspace = new Map() // project session key -> workspace_id
+const workspaceBackoffUntil = new Map() // project session key -> epoch ms
 
 export async function ensureAgentWorkspace(agents = [], log, session) {
   const known = knownWorkspace.get(session ?? '')
-  if (known && agents.some((a) => a.workspace_id === known)) return known
+  if (known && agents.some((a) => a.workspace_id === known && (a.session ?? SHARED_SESSION) === SHARED_SESSION)) return known
   // An older herdr with no `workspace create` would otherwise fail every 2s forever.
   if (Date.now() < (workspaceBackoffUntil.get(session ?? '') ?? 0)) return null
   try {
-    const { id, created } = await agentWorkspace(AGENT_WORKSPACE, { session })
+    const { id, created } = await agentWorkspace(projectLabel(session) || AGENT_WORKSPACE)
     if (created) log?.(`agent workspace recreated: ${id}`)
     knownWorkspace.set(session ?? '', id)
     return id
@@ -234,12 +270,17 @@ export async function ensureAgentWorkspace(agents = [], log, session) {
   }
 }
 
+// New tabs always open in the shared session. Their ids come back qualified unless
+// the caller has no project session of its own (then the shared one is its session).
 export async function tabCreate({ cwd, label, focus = false, workspace, session }) {
   const args = ['tab', 'create', '--cwd', cwd]
   if (workspace) args.push('--workspace', workspace)
   if (label) args.push('--label', label)
   args.push(focus ? '--focus' : '--no-focus')
-  return herdr(args, { timeout: 30000, session })
+  const created = await herdr(args, { timeout: 30000, session: SHARED_SESSION })
+  if (!session || session === SHARED_SESSION || !created?.root_pane) return created
+  const tab = created.tab && { ...created.tab, tab_id: shared(created.tab.tab_id) }
+  return { ...created, root_pane: { ...created.root_pane, pane_id: shared(created.root_pane.pane_id), tab_id: shared(created.root_pane.tab_id) }, ...(tab ? { tab } : {}) }
 }
 
 // Panes whose agent is mid-spawn. herdr registers a newly started agent as
@@ -277,15 +318,17 @@ async function hold(paneId, fn) {
   }
 }
 
-const BOARD_MODELS = [
-  [/^kb-review-/, ['gpt-5.6-luna', 'gpt-6-luna']],
-  [/^kb-plan-/, 'gpt-5.6-luna'],
-  [/^kb-planner-/, ['gpt-5.6-luna', 'gpt-6-sol', 'claude-opus-5-5']],
-  [/^kb-t-/, ['gpt-5.6-luna', 'gpt-6-luna']],
-]
+// By role letter (see ids.mjs), so old kb-* and new b-/p-/r-/i-/a- names match alike.
+const BOARD_MODELS = {
+  r: ['gpt-5.6-luna', 'gpt-6-luna'],
+  a: ['gpt-5.6-luna', 'gpt-6-luna'],
+  i: 'gpt-5.6-luna',
+  p: ['gpt-5.6-luna', 'gpt-6-sol', 'claude-opus-5-5'],
+  b: ['gpt-5.6-luna', 'gpt-6-luna'],
+}
 
 export function approvedManagedModel(name) {
-  return BOARD_MODELS.find(([rx]) => rx.test(name || ''))?.[1] ?? null
+  return BOARD_MODELS[agentRole(name)] ?? null
 }
 
 export function assertManagedModel({ name, model }) {
@@ -330,15 +373,32 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
   return args
 }
 
+// herdr names must be unique among a session's live agents, and the shared session
+// holds every project (each has a T-11). A taken name gets -2, -3 appended; names
+// mid-start are held here so two concurrent spawns cannot pick the same one.
+const startingNames = new Set()
+async function freeName(base, paneId, session) {
+  const live = await herdr(['agent', 'list'], { session: splitRef(paneId, session).session, ensureSession: false }).then(parseAgentList).catch(() => [])
+  const taken = new Set([...startingNames, ...live.map((a) => a.name)])
+  let name = base
+  for (let n = 2; taken.has(name); n++) name = `${base}-${n}`
+  startingNames.add(name)
+  return name
+}
+
+// Resolves to { name } — the name herdr actually registered.
 export async function agentStart({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs = 90000, session }) {
   assertPromptAllowed(session)
-  const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs })
+  name = await freeName(name, paneId, session)
   try {
-    return await hold(paneId, () => herdr(args, { timeout: timeoutMs + 15000, session }))
+    const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs })
+    return { ...(await hold(paneId, () => herdr(args, { timeout: timeoutMs + 15000, session }))), name }
   } catch (err) {
     if (!/agent_not_ready/.test(err.message)) throw err
     const screen = String(await paneRead(paneId, session).catch(() => '')).slice(-4000)
     throw Object.assign(new Error(`${err.message}; startup pane retained (${session}/${paneId}). Resolve the displayed startup prompt before continuing.\n${screen}`), { preservePane: true })
+  } finally {
+    startingNames.delete(name)
   }
 }
 
@@ -376,7 +436,7 @@ export async function focusAgent(paneId, session) {
   const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
   if (!agent?.tab_id) throw new Error('Existing agent session/tab is unavailable')
   await herdr(['tab', 'focus', agent.tab_id], { session, ensureSession: false })
-  const child = spawn(HERDR, ['session', 'attach', session], { detached: true, stdio: 'ignore', windowsHide: false })
+  const child = spawn(HERDR, ['session', 'attach', splitRef(paneId, session).session || SHARED_SESSION], { detached: true, stdio: 'ignore', windowsHide: false })
   child.on('error', () => {})
   child.unref()
   return agent

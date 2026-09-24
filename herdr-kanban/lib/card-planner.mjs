@@ -57,7 +57,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         revokedPaneIds: previous?.revokedPaneIds || [],
         reconciliationHistoryId: previous?.reconciliationHistoryId,
         paneId,
-        name: agentName({ id: `planner-${card.id}` }, project, paneId),
+        name: agentName('planner', card.id),
         createdAt: new Date().toISOString(),
         submitted: false,
         replacementAttempts: (previous?.replacementAttempts || 0) + (previous && !previous.recoveryReady ? 1 : 0),
@@ -72,7 +72,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
       save(tasksDir, owners)
-      await agentStart({ name: owner.name, paneId, model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session })
+      owner.name = (await agentStart({ name: owner.name, paneId, model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? owner.name
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
     const submit = async (card, owner, agent) => {

@@ -1,9 +1,10 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { isCardId } from './ids.mjs'
 
 export function historyPath(tasksDir, id) {
-  if (!/^T-\d+$/i.test(id)) throw new Error('Invalid history card ID')
+  if (!isCardId(id)) throw new Error('Invalid history card ID')
   return join(tasksDir, '.history', `${id.toUpperCase()}.jsonl`)
 }
 export function appendHistory(tasksDir, id, event) {

@@ -686,7 +686,7 @@ const dependencyHover = createDependencyHover({
   getBlockers: id => {
     const matches = Object.entries(state?.board || {}).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards).filter(card => card.id === id);
     if (matches.length !== 1) return [];
-    return [...new Set((state?.blockerIds?.[id] || matches[0].blockedBy || []).filter(other => other !== id && /^T-\d+$/i.test(other)))];
+    return [...new Set((state?.blockerIds?.[id] || matches[0].blockedBy || []).filter(other => other !== id && /^(?:T-\d+|[A-Z]{1,3}\d+)$/i.test(other)))];
   },
 });
 let audits = { loading: true, error: '', items: [] };
@@ -2074,7 +2074,7 @@ function render() {
 
   // herdr's list payload, so use them only to recover state after a reload.
 
-  const reviewerLive = (state.agents || []).some(a => (a.name || '').startsWith('kb-review-'));
+  const reviewerLive = (state.agents || []).some(a => /^(?:kb-review-|[ra]-(?:t-\d+|[a-z]{1,3}\d+)(?:-\d+)?$)/.test(a.name || ''));
 
   if (reviewerLive && !reviewing.length) {
 
@@ -2252,6 +2252,10 @@ function renderAgents() {
 
   }
 
+  // Board agents are <role>-<card id>: b-i149, r-hk14, b-t-11 (-2 when herdr needed a suffix).
+  const BOARD_NAME = /^[pbria]-(t-\d+|[a-z]{1,3}\d+)(?:-\d+)?$/i;
+  const BOARD_ROLES = { p: 'planner', b: 'builder', r: 'reviewer', i: 'issues', a: 'auditor' };
+
   // What you want off a chip is WHICH CARD and HOW LONG — not the pane suffix. The
 
   // old chip led with `kb-t-21-injectbuddy-wj-pr` and truncated the card title away.
@@ -2262,7 +2266,7 @@ function renderAgents() {
 
     if (entry) return entry[0];
 
-    const m = /^kb-(t-\d+)/i.exec(a.name || '');
+    const m = BOARD_NAME.exec(a.name || '') || /^kb-(t-\d+)/i.exec(a.name || '');
 
     return m ? m[1].toUpperCase() : null;
 
@@ -2271,6 +2275,8 @@ function renderAgents() {
   const roleOf = (a) => /^kb-review-/.test(a.name || '') ? 'reviewer'
 
     : /^kb-sweep-/.test(a.name || '') ? 'manager'
+
+    : BOARD_NAME.test(a.name || '') ? BOARD_ROLES[a.name[0]]
 
     : cardFor(a) ? 'builder' : (a.name || 'agent');
 

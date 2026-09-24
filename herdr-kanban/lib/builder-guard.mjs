@@ -5,6 +5,7 @@ import { resolve, dirname, isAbsolute, basename, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { isCardId } from './ids.mjs'
 
 export const guardScript = fileURLToPath(new URL('../scripts/builder-guard.mjs', import.meta.url))
 export const digest = value => createHash('sha256').update(value).digest('hex')
@@ -32,7 +33,7 @@ export function loadPolicy(path, expectedHash) {
   if (!expectedHash || digest(bytes) !== expectedHash) fail('policy changed or is unverified')
   const policy = JSON.parse(bytes)
   policy.policyPath = resolve(path)
-  if (policy.version !== 1 || !policy.approvedBy || !policy.project || !/^T-\d+$/.test(policy.cardId) || !policy.authorizationId) fail('operator-approved policy identity is missing')
+  if (policy.version !== 1 || !policy.approvedBy || !policy.project || !isCardId(policy.cardId) || !policy.authorizationId) fail('operator-approved policy identity is missing')
   for (const field of ['read', 'write']) {
     if (!Array.isArray(policy[field])) fail(`${field} paths are missing`)
     policy[field] = policy[field].map(exactPath)

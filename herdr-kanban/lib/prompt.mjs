@@ -124,7 +124,7 @@ export function issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, m
     `Read ${PLANNER}, ${overlays.join(', ')}, the focused briefings, mandatory project/safety instructions and source needed to plan. Load only applicable required skills. Verify every named prerequisite file, route, selector, dependency and check exists in the stated workspace before calling the plan build-ready; record the exact path/route and observed result, or mark the plan investigation/blocked when it cannot be verified. Map each agreed outcome under Outcome checks to its exact change and an acceptance check which would fail if the behaviour were absent. State exact workspace prerequisites and commands. Update only the authoritative card's current sections; full investigation logs belong in linked evidence, not the briefing.`,
     `Planning owns missing/incorrect scope and executable plan details. Builder owns execution, quoting and implementation mistakes; operational recovery owns environment/transport/worktree failures without restarting product planning. Do not accept an unrelated finding as an automatic planning return. Reuse relevant prior evidence and a changed diagnosis, never identical retry. The fifth distinct failed return stops in Owner automatically; do not reset recovery metadata. Immediate Owner requires verified missing permission/access after approved methods are exhausted, with exact evidence and human ask.`,
     `For verified missing permission/access only, run ${cmd} owner <ID> "Only the operator can grant <permission/access>; verified <failure>; approved methods exhausted; Evidence: <exact check/result>; <specific ask>" and stop.`,
-    `For FINDINGS audits, validate current findings and deduplicate existing cards; create/update only missing approved remediation cards with scoped independent review. Number findings and map every one under ## Remediation links as - F1: T-123 (existing fix ID), preserving evidence. Archive the report once all findings are linked; linked fixes are not thereby complete. Respect explicit report-only-await-owner and do not expand business/data/deployment scope. For INCOMPLETE audits repair the evidence plan and prerequisite before returning to Review; never queue an audit itself for implementation. Otherwise run exactly one ${cmd} move <ID> planned command for this card, even when planning fails use one ${cmd} issue <ID> "[planning] precise unmet prerequisite and evidence" command. Do not leave the card in Planning without a handoff, retry a stopped Planner into ambiguity, or issue multiple handoffs. After the handoff succeeds, stop that card immediately.`
+    `For FINDINGS audits, validate current findings and deduplicate existing cards; create/update only missing approved remediation cards with scoped independent review. Number findings and map every one under ## Remediation links as - F1: <existing fix card ID>, preserving evidence. Archive the report once all findings are linked; linked fixes are not thereby complete. Respect explicit report-only-await-owner and do not expand business/data/deployment scope. For INCOMPLETE audits repair the evidence plan and prerequisite before returning to Review; never queue an audit itself for implementation. Otherwise run exactly one ${cmd} move <ID> planned command for this card, even when planning fails use one ${cmd} issue <ID> "[planning] precise unmet prerequisite and evidence" command. Do not leave the card in Planning without a handoff, retry a stopped Planner into ambiguity, or issue multiple handoffs. After the handoff succeeds, stop that card immediately.`
   )
 }
 
@@ -144,22 +144,6 @@ export const reviewLabel = (count) => `reviewer ${count} card${count === 1 ? '' 
 
 export const sweepLabel = (count) => `Lead Planner ${count} card${count === 1 ? '' : 's'}`
 
-// The `kb-` prefix is load-bearing: it is how the board recognises a pane it
+// Role-prefixed names (b-i149, r-hk14) are how the board recognises a pane it
 // spawned, so it only ever closes its own and never one you opened by hand.
-//
-// The pane id is part of the name because herdr keeps a name→terminal binding:
-// reusing a name whose old pane has closed fails with agent_name_not_found, so a
-// card that is retried must not ask for the same name twice.
-// herdr enforces: lowercase letters, digits, - or _, starting with a letter,
-// 1-32 characters. The pane suffix is the part that must survive truncation, so
-// the project name is trimmed rather than the tail.
-export function agentName(card, project, paneId = '') {
-  const clean = (s) => String(s).toLowerCase().replace(/[^a-z0-9-]/g, '-')
-  const head = `kb-${clean(card.id)}`
-  const tail = paneId ? `-${clean(paneId)}` : ''
-  const room = 32 - head.length - tail.length - 1
-  const proj = room > 0 ? `-${clean(project).slice(0, room)}` : ''
-  return `${head}${proj}${tail}`.replace(/-+$/, '').slice(0, 32)
-}
-
-export const isBoardAgent = (agent) => (agent?.name || '').startsWith('kb-')
+export { agentName, isBoardAgent } from './ids.mjs'

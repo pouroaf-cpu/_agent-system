@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { withBoardLock } from './bindings.mjs'
 import { findCard } from './cards.mjs'
 import { readCardPlanners } from './planner-state.mjs'
+import { isCardId } from './ids.mjs'
 
 const context = new AsyncLocalStorage()
 const instance = randomUUID()
@@ -31,7 +32,7 @@ export function pausedRunEnvironment() {
 }
 export function authorizeCardRun({ project, cardId, autoReview, requestId }) {
   const config = JSON.parse(readFileSync(configPath(), 'utf8'))
-  if (!config.projects.includes(project) || !/^T-\d+$/.test(cardId) || !/^[a-f0-9-]{36}$/i.test(requestId || '') || typeof autoReview !== 'boolean') throw new Error('Known project/card, Auto-review and unique request identity required')
+  if (!config.projects.includes(project) || !isCardId(cardId) || !/^[a-f0-9-]{36}$/i.test(requestId || '') || typeof autoReview !== 'boolean') throw new Error('Known project/card, Auto-review and unique request identity required')
   if (!pausedRunEnvironment()) throw new Error('Pause all projects and set global capacity to zero before a single-card run')
   return change(runs => {
     const duplicate = runs.find(r => r.requestId === requestId)

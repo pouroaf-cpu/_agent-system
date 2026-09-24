@@ -103,9 +103,8 @@ export async function spawnForCard({
   project, projectPath, tasksDir, boardRoot, card, model, engine,
   startTimeoutMs = START_TIMEOUT_MS, onPane, gitSettings, restrictedBuilder = false,
 }) {
-  // Every herdr call for this card goes to the project's own session, so a Tradeflow
-  // builder opens inside the Tradeflow window and not whichever session happens to be
-  // the default one.
+  // The project's session key: new tabs open in the project's workspace of the
+  // shared session, and a resumed legacy pane still resolves in its old session.
   const session = sessionOf(project)
   assertCardRunSelection(project, [card.id], 'builder')
   assertPromptAllowed(project)
@@ -144,7 +143,7 @@ export async function spawnForCard({
   // Claim the pane before the agent boots. Booting can take minutes, and without
   // a binding the card would sit in Working looking identical to one whose agent
   // died — which is the state the board exists to make obvious.
-  const name = agentName(card, project, paneId)
+  let name = resume ? resume.name : agentName('builder', card.id)
   const worktree = prepared.entry ? {
     worktree_path: prepared.entry.worktreePath,
     workspace_path: prepared.entry.workspacePath,
@@ -164,7 +163,7 @@ export async function spawnForCard({
   }
 
   try {
-    if (!resume) await agentStart({ name, paneId, model, engine, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session })
+    if (!resume) name = (await agentStart({ name, paneId, model, engine, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session }))?.name ?? name
     const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
     if (agent) onPane?.({ pane_id: paneId, tab_id: tabId, model, name, spawning: true, agent_session: agent.agent_session, ...worktree })
   } catch (err) {

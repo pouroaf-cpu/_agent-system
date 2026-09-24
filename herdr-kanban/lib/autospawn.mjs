@@ -17,6 +17,7 @@ import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentRev
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
+import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
@@ -176,10 +177,11 @@ const holds = new Map() // project -> { cardId: reason }
 
 export const holdsFor = (project) => holds.get(project) ?? {}
 
+const HELD_BY = new RegExp(String.raw`held by (${CARD_ID})`)
 export function routeMutualHolds(tasksDir, held, log) {
   const routed = []
   for (const [id, reason] of Object.entries(held)) {
-    const other = reason.match(/held by (T-\d+)/i)?.[1]
+    const other = reason.match(HELD_BY)?.[1]
     if (!other || !held[other]?.includes(`held by ${id}`) || routed.includes(id)) continue
     // Preserved edits need attribution; never resolve a lock cycle by deleting
     // a worktree or allowing overlapping Builders to start.
@@ -301,8 +303,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
 
 // Close panes the board spawned that have finished and reported back.
 //
-// Two conditions, both required. `kb-` means we spawned it, so a window you
-// opened by hand is never touched. Unbound means hkb already ran — an agent that
+// Two conditions, both required. A board name (b-i149, or an older kb-*) means
+// we spawned it, so a window you opened by hand is never touched. Unbound means hkb already ran — an agent that
 // exited WITHOUT reporting keeps its pane open, because that is exactly the case
 // you need to look at.
 //
@@ -312,8 +314,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
 // column, not one card's slot), so an ordinary idle blip between tool calls reads
 // identically to "finished" and got reaped mid-review — a real incident, not a
 // hypothetical: a reviewer vanished twice, review count unchanged, before this
-// fix. For kb-review-*/kb-sweep-* specifically, only a genuine `done` status
-// counts as finished; idle does not.
+// fix. For reviewers/auditors/sweepers (r-, a-, i-; older kb-review-/kb-plan-)
+// only a genuine `done` status counts as finished; idle does not.
 // ...and `done` alone is still not enough for them either. `done` is what herdr
 // reports for ANY pause: before the agent's first thought, and again every time it
 // finishes a turn and waits. A multi-card reviewer pauses between cards by nature,
@@ -324,7 +326,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
 // So `done` has to be SUSTAINED to count. A pause between cards lasts seconds; a
 // genuinely finished agent stays done forever. Two minutes tells them apart, and
 // costs only a slightly later pane close in the ordinary case.
-const REVIEW_OR_SWEEP = /^kb-(review|plan)-/
+const reviewOrSweep = (agent) => ['r', 'a', 'i'].includes(agentRole(agent.name))
 const DONE_GRACE_MS = 2 * 60 * 1000
 const doneSince = new Map() // pane_id -> timestamp it most recently went done
 const inactiveSince = new Map() // pane_id -> timestamp a builder first looked finished
@@ -362,7 +364,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
     if (!isBoardAgent(a) || bound.has(a.pane_id) || isSpawning(a.pane_id)) return false
     // Must run on EVERY poll, not only the done ones — a non-done poll is what
     // clears the timer, and && would short-circuit past it.
-    if (REVIEW_OR_SWEEP.test(a.name || '')) return doneLongEnough(a, now)
+    if (reviewOrSweep(a)) return doneLongEnough(a, now)
     return inactiveLongEnough(a, now)
   })
   if (!retire) {
@@ -478,16 +480,15 @@ export function promotePlanned(tasksDir, { mission, project } = {}) {
   return promoted
 }
 
-const REVIEWER_PREFIX = 'kb-review-'
 export const reviewerRunning = (agents, now = Date.now()) =>
-  agents.some((a) => (a.name || '').startsWith(REVIEWER_PREFIX) && !doneLongEnough(a, now))
+  agents.some((a) => isReviewerAgent(a) && !doneLongEnough(a, now))
 
 // herdr does not register an agent until it has booted, so reviewerRunning() is
 // false for the whole ~55s spawn. Held here so two explicit Review requests
 // cannot start concurrently and archive or rework the same card.
 const reviewing = new Set()
 export const reviewerBusy = (project, agents) =>
-  reviewing.has(project) || agents.some((a) => (a.name || '').startsWith(REVIEWER_PREFIX) && a.agent_status !== 'done')
+  reviewing.has(project) || agents.some((a) => isReviewerAgent(a) && a.agent_status !== 'done')
 const busyError = () => Object.assign(new Error('a reviewer is already running'), { busy: true })
 
 export async function autoReview({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, agents, log, inventory, assignmentForCard, plan = computeReviewPlan, spawn = spawnReviewer }) {
@@ -569,11 +570,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     updateReviewClaim(reviewRoot, claim.id, { paneId })
     bindCardRunAssignment(project, cards.map(c => c.id), 'reviewer', paneId)
 
-    // Named so closeFinished and reviewerRunning can both recognise it, and so it
-    // is never mistaken for a card's builder. Pane id included so a retry after a
-    // failed start does not collide with the previous attempt's registration.
+    // r-<first card> (a- for an audit) so closeFinished and reviewerRunning can
+    // both recognise it; agentStart suffixes it if that name is still live.
     await waitForPrompt(paneId, { session })
-    const name = agentName({ id: 'review' }, project, paneId)
+    let name = agentName(cards.every((c) => c.audit) ? 'auditor' : 'reviewer', cards[0].id)
     // Held across agentStart AND deliver: the reviewer is never bound to a card
     // (see below), so isSpawning() is its ONLY protection from the board's
     // reaper closing an idle-but-not-yet-prompted pane. agentStart alone isn't
@@ -581,7 +581,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     beginSpawn(paneId)
     try {
       // Same generous startup budget as a builder — Opus is no faster to boot.
-      await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session })
+      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({
@@ -609,8 +609,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
   }
 }
 
-const SWEEPER_PREFIX = 'kb-plan-'
-export const sweeperRunning = (agents) => agents.some((a) => (a.name || '').startsWith(SWEEPER_PREFIX))
+export const sweeperRunning = (agents) => agents.some(isSweeperAgent)
 
 // Same one-in-flight guard as spawnReviewer, held here for the same reason:
 // herdr does not register an agent until it has booted.
@@ -656,14 +655,14 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
     if (!paneId) throw new Error(`tab create returned no pane id: ${JSON.stringify(created)}`)
 
     await waitForPrompt(paneId, { session })
-    const name = agentName({ id: 'plan' }, project, paneId)
+    let name = agentName('issues', cards[0].id)
     // Same reasoning as spawnReviewer: unbound, so isSpawning() must stay true
     // through deliver(), not just agentStart().
     beginSpawn(paneId)
     try {
       const selected = assignmentForCard?.(cards[0], 'issues')
       const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
-      await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session })
+      name = (await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({

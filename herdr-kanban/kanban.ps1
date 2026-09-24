@@ -112,21 +112,23 @@ if ($Silent) { return }
 Start-Process "http://127.0.0.1:$port/?project=$Project"
 
 if (-not $NoHerdr) {
-    # herdr attaches to the running session if there is one, otherwise starts it.
-    Start-Process herdr -ArgumentList '--session', $Project.ToLower()
-    Write-Host "herdr: session $($Project.ToLower())"
+    # Every board agent lives in herdr's default session, one workspace per project,
+    # so plain `herdr` shows them all. It attaches if the session is running.
+    Start-Process herdr
+    Write-Host 'herdr: default session (one workspace per project)'
     Write-Host 'agents: prefix+a -> role (Codex, full bypass); orchestrator brief: C:\Users\PFrew\Projects\ORCHESTRATOR.md'
 
-    # Board agents live in their own workspace, so the operator's window is not
-    # buried under kb-* tabs. Open it up front rather than on the first spawn.
-    # Silently skipped if herdr is not answering yet — the board's poll makes it.
-    $wsLabel = if ($config.agentWorkspace) { $config.agentWorkspace } else { 'agents' }
+    # One workspace per project, labelled with the project name. Open them up front
+    # rather than on the first spawn. Silently skipped if herdr is not answering
+    # yet — the board's poll makes each one before it spawns there.
     foreach ($i in 1..6) {
         try {
             $ws = (herdr workspace list 2>$null | ConvertFrom-Json).result.workspaces
-            if (-not ($ws | Where-Object { $_.label -eq $wsLabel })) {
-                herdr workspace create --label $wsLabel --no-focus 2>$null | Out-Null
-                Write-Host "herdr: workspace '$wsLabel' created"
+            foreach ($wsLabel in $config.projects) {
+                if (-not ($ws | Where-Object { $_.label -eq $wsLabel })) {
+                    herdr workspace create --label $wsLabel --no-focus 2>$null | Out-Null
+                    Write-Host "herdr: workspace '$wsLabel' created"
+                }
             }
             break
         } catch { Start-Sleep -Milliseconds 500 }

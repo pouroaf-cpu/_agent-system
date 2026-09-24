@@ -7,6 +7,7 @@ import { readBoard, moveCard, currentReviewDecision, setAutoReview, findCard } f
 import { requestPlannerCorrection } from './card-planner.mjs'
 import { recordOperationalFailure, evidenceFingerprint } from './workflow-state.mjs'
 import { projectEnvironment } from './project-control.mjs'
+import { isCardId, isReviewerAgent } from './ids.mjs'
 
 export const MAX_REVIEWERS = 4
 const file = root => join(root, '.review-claims.json')
@@ -14,7 +15,7 @@ export function readReviewClaims(root) {
   if (!existsSync(file(root))) return []
   const data = JSON.parse(readFileSync(file(root), 'utf8'))
   if (data.version !== 1 || !Array.isArray(data.claims)) throw new Error('Invalid reviewer claims; refusing dispatch')
-  for (const c of data.claims) if (typeof c.id !== 'string' || !c.id || typeof c.project !== 'string' || typeof c.tasksDir !== 'string' || !c.tasksDir || !Array.isArray(c.cards) || c.cards.some(id => !/^T-\d+$/.test(id)) || new Set(c.cards).size !== c.cards.length || !Number.isFinite(c.createdAt) || (c.paneId != null && typeof c.paneId !== 'string') || (c.phase && !['starting', 'running', 'uncertain'].includes(c.phase)) || ['closedAt', 'doneSince', 'lastSeen'].some(k => c[k] != null && !Number.isFinite(c[k]))) throw new Error('Invalid reviewer claim shape; refusing dispatch')
+  for (const c of data.claims) if (typeof c.id !== 'string' || !c.id || typeof c.project !== 'string' || typeof c.tasksDir !== 'string' || !c.tasksDir || !Array.isArray(c.cards) || c.cards.some(id => !isCardId(id)) || new Set(c.cards).size !== c.cards.length || !Number.isFinite(c.createdAt) || (c.paneId != null && typeof c.paneId !== 'string') || (c.phase && !['starting', 'running', 'uncertain'].includes(c.phase)) || ['closedAt', 'doneSince', 'lastSeen'].some(k => c[k] != null && !Number.isFinite(c[k]))) throw new Error('Invalid reviewer claim shape; refusing dispatch')
   if (new Set(data.claims.map(c => c.id)).size !== data.claims.length) throw new Error('Duplicate reviewer claim ids')
   return data.claims
 }
@@ -50,7 +51,7 @@ function retire(claim, now, reason) {
 function reconcile(claims, inventory, now) {
   if (!inventory?.length || inventory.some(p => !p.known)) throw new Error('Global reviewer inventory unavailable; refusing dispatch')
   for (const project of inventory) {
-    for (const agent of project.agents.filter(a => /^kb-review-/.test(a.name || ''))) {
+    for (const agent of project.agents.filter(isReviewerAgent)) {
       let claim = claims.find(c => active(c) && c.project === project.project && c.paneId === agent.pane_id)
       if (!claim) {
         // Usage supplies legacy ownership, never liveness. Only actual HERDR agents count.
@@ -79,7 +80,7 @@ export function syncReviewClaims(root, inventory, now = Date.now()) {
 export function reserveReview(root, { project, tasksDir, cards, inventory, now = Date.now() }) {
   return transaction(root, claims => {
     reconcile(claims, inventory, now)
-    if (!inventory.some(p => p.project === project && resolve(p.tasksDir) === resolve(tasksDir)) || !Array.isArray(cards) || !cards.length || cards.some(id => !/^T-\d+$/.test(id)) || new Set(cards).size !== cards.length) throw new Error('Invalid reviewer reservation')
+    if (!inventory.some(p => p.project === project && resolve(p.tasksDir) === resolve(tasksDir)) || !Array.isArray(cards) || !cards.length || cards.some(id => !isCardId(id)) || new Set(cards).size !== cards.length) throw new Error('Invalid reviewer reservation')
     const live = claims.filter(active)
     if (live.length >= MAX_REVIEWERS) throw Object.assign(new Error('board-wide reviewer limit is four'), { busy: true })
     if (live.some(c => c.project === project && (!c.cards.length || c.cards.some(id => cards.includes(id))))) throw Object.assign(new Error('review cards already claimed or legacy ownership unknown'), { busy: true })
@@ -121,7 +122,7 @@ export function assertReviewInputs(root, tasksDir, cardId) {
 
 export function busyReviewCards(root, tasksDir, agents) {
   const claims = readReviewClaims(root).filter(c => active(c) && resolve(c.tasksDir) === resolve(tasksDir))
-  const live = agents.filter(a => /^kb-review-/.test(a.name || '') && a.agent_status !== 'done')
+  const live = agents.filter(a => isReviewerAgent(a) && a.agent_status !== 'done')
   if (live.some(a => !claims.some(c => c.paneId === a.pane_id && c.cards.length))) return null
   return claims.filter(c => c.phase === 'starting' || !agents.some(a => a.pane_id === c.paneId && a.agent_status === 'done')).flatMap(c => c.cards)
 }

@@ -9,9 +9,10 @@ import { readWorktrees } from './lib/worktrees.mjs'
 import { withBoardLock } from './lib/bindings.mjs'
 import { appendHistory } from './lib/card-history.mjs'
 import { activeCardRun, pausedRunEnvironment } from './lib/card-run.mjs'
+import { isCardId } from './lib/ids.mjs'
 const [project, cardId, report, ...words] = process.argv.slice(2)
 const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || fileURLToPath(new URL('./board.config.json', import.meta.url)), 'utf8'))
-if (!config.projects.includes(project) || !/^T-\d+$/.test(cardId || '') || !report || !words.length) throw new Error('Usage: node operator-complete.mjs PROJECT T-ID absolute-report.json "explicit user authorization"')
+if (!config.projects.includes(project) || !isCardId(cardId || '') || !report || !words.length) throw new Error('Usage: node operator-complete.mjs PROJECT T-ID absolute-report.json "explicit user authorization"')
 if (!pausedRunEnvironment() || activeCardRun()) throw new Error('Paused zero-capacity maintenance with no active run required')
 const tasksDir = join(config.projectsRoot, project, 'TASKS'), evidencePath = resolve(report)
 if (!evidencePath.startsWith(resolve(tasksDir, 'reports') + sep)) throw new Error('Evidence must be in this project TASKS/reports')

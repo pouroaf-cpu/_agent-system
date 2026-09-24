@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
 import { appendHistory } from './card-history.mjs'
+import { CARD_ID, nextCardId } from './ids.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
 const AUDIT_TEMPLATES = {
@@ -94,7 +95,10 @@ export const columnByKey = (key) => ALL.find((c) => c.key === key)
 // Files that live in TASKS/ but are not cards.
 const NOT_A_CARD = /^(README|TASK-TEMPLATE|PROJECT-CONSTRAINTS|PROJECT-WORKSPACES|TASKLOG|BRIEF)\.md$/i
 
-const HEADING = /^#\s+(?:(T-\d+)\s*[—–-]\s*)?(.+)$/m
+const HEADING = new RegExp(String.raw`^#\s+(?:(${CARD_ID})\s*[—–-]\s*)?(.+)$`, 'm')
+// Legacy T- ids were matched case-insensitively in file names; prefixed ids are
+// capitals only, so an ordinary file such as v2-notes.md is never read as an id.
+const ID_FROM_NAME = /^([Tt]-\d+|[A-Z]{1,3}\d+(?![A-Za-z0-9]))/
 const PRIORITY = /\*\*Priority\*\*\s*(\d+)\s*\/\s*10/i
 const STATUS = /\*\*Status:\*\*\s*([^·\n]+)/i
 const SURFACE = /\*\*Surface:\*\*\s*([^·\n]+)/i
@@ -239,7 +243,7 @@ export function parseCard(path, columnKey) {
   const head = readHead(path)
   const text = readFileSync(path, 'utf8')
   const heading = head.match(HEADING)
-  const idFromName = file.match(/^(T-\d+)/i)
+  const idFromName = file.match(ID_FROM_NAME)
 
   const agentSettings = {}
   for (const match of text.matchAll(AGENT_SETTING)) {
@@ -524,7 +528,9 @@ function constraintsFor(tasksDir, category) {
     || '<!-- No project-specific constraints for this category. -->'
 }
 
-export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', now = new Date() }) {
+// `prefix` is the project's card prefix (board.config.json cardPrefixes); without
+// one the project keeps issuing legacy T- ids.
+export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', now = new Date() }) {
   if (typeof title !== 'string' || !title.trim() || title.length > 200 || /[\r\n]/.test(title)) throw new Error('A single-line title of at most 200 characters is required')
   if (typeof brief !== 'string' || !brief.trim() || brief.length > 50000) throw new Error('An approved brief of at most 50000 characters is required')
   if (typeof mission !== 'string' || /[\r\n]/.test(mission)) throw new Error('Invalid mission')
@@ -535,8 +541,7 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   audit = String(audit).toLowerCase()
   if (audit && !AUDITS.includes(audit)) throw new Error(`Audit must be one of: ${AUDITS.join(', ')}`)
   if (audit && (typeof tools !== 'string' || !tools.trim())) throw new Error('Audit cards require exact tools/MCPs')
-  const highest = Math.max(0, ...Object.values(readBoard(tasksDir)).flat().map(c => Number(c.id.match(/^T-(\d+)$/)?.[1]) || 0))
-  const id = `T-${highest + 1}`
+  const id = nextCardId(prefix, Object.values(readBoard(tasksDir)).flat().map(c => c.id))
   const dir = join(tasksDir, audit ? 'review' : 'planning')
   mkdirSync(dir, { recursive: true })
   const path = join(dir, audit ? `${id}-audit-${audit}.md` : `${id}-approved-job.md`)

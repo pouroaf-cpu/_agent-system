@@ -25,18 +25,19 @@ try {
         Update-BoardOutage -Healthy $true -StatePath $state -Send { }
     }
     $herdr = (Get-Command herdr -ErrorAction Stop).Source
-    $session = $config.projects[0].ToLowerInvariant()
-    & $herdr --session $session agent list *> $null
+    # Board agents all live in herdr's default session.
+    $session = 'default'
+    & $herdr agent list *> $null
     if ($LASTEXITCODE -ne 0) {
         $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-            CommandLine = "`"$herdr`" --session $session server"
+            CommandLine = "`"$herdr`" server"
             CurrentDirectory = $root
         }
         if ($started.ReturnValue -ne 0) { throw "Herdr process create failed ($($started.ReturnValue))" }
         $ready = $false
         foreach ($i in 1..40) {
             Start-Sleep -Milliseconds 250
-            & $herdr --session $session agent list *> $null
+            & $herdr agent list *> $null
             if ($LASTEXITCODE -eq 0) { $ready = $true; break }
         }
         if (-not $ready) { throw "Herdr session $session did not answer within 10s" }
