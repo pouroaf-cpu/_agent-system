@@ -229,9 +229,12 @@ const plain = (s) => (s ?? '').replace(/\*\*|`/g, '').trim()
 
 // First backtick token on each `## Files` bullet line — the file path itself,
 // not the descriptive prose (which often has its own backtick-quoted names).
+// A line the plan marks unchanged or read-only is context, not a file the card edits,
+// so it takes no lock (Tradeflow TF54 waited 7 hours on files it only references).
+const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|-|:|\()\s*(?:unchanged|read-only|reference only)\b/i
 export function cardFiles(path) {
   const section = readFileSync(path, 'utf8').match(FILES_SECTION)?.[1] ?? ''
-  return [...section.matchAll(FILE_LINE)].map((m) => m[1].trim())
+  return [...section.matchAll(FILE_LINE)].filter((m) => !REFERENCE_ONLY.test(m[0] + section.slice(m.index + m[0].length).split('\n')[0])).map((m) => m[1].trim())
 }
 
 function cardWorkspace(projectPath, card) {

@@ -944,6 +944,14 @@ function reviewCard(id, { files = [], estBuild, estReview } = {}) {
   return `# ${id} — Title\n\n${meta.join(' · ')}\n\n## Files\n\n${fileLines}\n\n## Acceptance criteria\n\n1. x\n`
 }
 
+test('cardFiles skips Files lines the plan marks unchanged or read-only, so they take no lock (Tradeflow TF54)', () => {
+  const { root, tasks } = planFixture()
+  const path = join(tasks, 'review', 'T-01.md')
+  writeFileSync(path, `# T-01 — card\n\n## Files\n- \`components/site/PartnerCTA.tsx\` — change the sidebar branch only.\n- \`app/globals.css\` — unchanged global \`.btn-cta\` rules.\n- \`app/page.tsx\` (read-only) caller.\n- \`lib/new.ts\` (new) — helper.\n\n## Implementation plan\n`)
+  assert.deepEqual(cardFiles(path), ['components/site/PartnerCTA.tsx', 'lib/new.ts'])
+  rmSync(root, { recursive: true, force: true })
+})
+
 test('cardFiles takes only the first backtick token per Files bullet, not inline prose', () => {
   const { root, tasks } = planFixture()
   const path = join(tasks, 'review', 'T-01.md')
