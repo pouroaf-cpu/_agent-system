@@ -530,3 +530,17 @@ test('a build-regenerated tracked file outside the card holds nothing; a dirty c
     }
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('two queued cards with saved work on a shared file: the older worktree goes first', () => {
+  const f = fixture()
+  try {
+    const older = f.addCard('T-1'), younger = f.addCard('T-2')
+    for (const card of [older, younger]) {
+      const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
+      writeFileSync(join(wt, 'app.js'), `${card.id}\n`); git(wt, 'commit', '-am', `${card.id} work`)
+    }
+    // Tradeflow T-38 and TF56 each held the other forever.
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: older, projectPath: f.integration }), null)
+    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: younger, projectPath: f.integration }), /held by T-1/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})

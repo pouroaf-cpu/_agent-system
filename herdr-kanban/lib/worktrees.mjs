@@ -367,7 +367,8 @@ function holdsNoWork(entry) {
 export function overlapHoldReason({ tasksDir, card, projectPath }) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   if (!candidate.size) return 'card not ready — no exact files listed'
-  for (const [id, entry] of Object.entries(readWorktrees(tasksDir))) {
+  const registry = readWorktrees(tasksDir)
+  for (const [id, entry] of Object.entries(registry)) {
     if (id === card.id.toUpperCase()) {
       if (entry.state === 'integrated' && !entry.cleaned) return 'card is already integrated — cleanup pending'
       continue
@@ -380,6 +381,10 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     // Back before Working with a clean checkout at its base, a card has no work to
     // protect (Tradeflow T-36's empty worktree held 14 queued cards).
     if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && holdsNoWork(entry)) continue
+    // Two cards off the build lanes, each with saved work on a shared file, would wait
+    // on each other forever (Tradeflow T-38 and TF56): the older worktree goes first.
+    const mine = registry[card.id.toUpperCase()]
+    if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && mine?.createdAt && entry.createdAt && mine.createdAt < entry.createdAt) continue
     // Preserve locks on existing changes even if a correction narrows the card.
     const files = [...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })
