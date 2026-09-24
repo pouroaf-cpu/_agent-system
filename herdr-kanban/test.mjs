@@ -699,7 +699,7 @@ test('autoSpawn routes malformed preflight cards to Planning once and never star
   assert.equal(spawns, 0)
   assert.deepEqual(readBoard(tasks).planning.map(c => c.id), ['T-04'])
   assert.equal(logged.length, 1, 'the unchanged error is routed and logged only once')
-  assert.match(logged[0], /returned to original Planner.*exact malformed reason/)
+  assert.match(logged[0], /routed to planning.*exact malformed reason/)
   assert.match(readFileSync(readBoard(tasks).planning[0].path, 'utf8'), /Kicked back[\s\S]*exact malformed reason/)
   rmSync(root, { recursive: true, force: true })
 })

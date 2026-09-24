@@ -261,9 +261,10 @@ const holderOf = (board) => [...board.working, ...board.review].map((c) => c.id)
 export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, stallSeconds = 300, now = Date.now(), spawn = spawnForCard }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'builder')
   if (spawn === spawnForCard && controlState(project).paused && !cardRunContext()) return []
-  if (busy.has(project)) return []
+  // Zero capacity (breaker tripped, builders switched off) is an operator pause, not a card hold.
+  if (max <= 0 || busy.has(project)) return []
 
-  let slots = max > 0 ? slotsFree({ tasksDir, agents, max }) : 0
+  let slots = slotsFree({ tasksDir, agents, max })
 
   const board = readBoard(tasksDir)
   const only = onlyIds?.length ? new Set(onlyIds.map((id) => id.toUpperCase())) : null
@@ -285,7 +286,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
         || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
-        || (max <= 0 ? 'workflow limit reached: builder capacity is zero' : slots <= 0 ? 'slots full' : null)
+        || (slots <= 0 ? 'slots full' : null)
       if (hold) {
         const dupId = duplicateLiveId(freshCard, fresh)
         const dupKey = duplicateIssueKey(freshCard, fresh)

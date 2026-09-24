@@ -117,11 +117,15 @@ test('operational failure preserves pending stage and blocks unchanged redispatc
   const original = readWorkflow(f.tasks)['T-1'].operational.historyId
   recordOperationalFailure(f.tasks, card, 'dependency missing', join(f.root, 'Proof'))
   assert.equal(readWorkflow(f.tasks)['T-1'].operational.historyId, original)
+  assert.equal(operationalHold(f.tasks, card, join(f.root, 'Proof')), 'dependency missing')
   let calls = 0
   await autoSpawn({ project: 'Proof', projectPath: join(f.root, 'Proof'), tasksDir: f.tasks, max: 1, agents: [], spawn: async () => { calls++; return { pane_id: 'p' } } })
-  assert.equal(calls, 0); assert.equal(findCard(f.tasks, 'T-1').column, 'queue')
+  // T-9: an environment hold leaves Queue for Owner with the reason; it never starts a Builder.
+  assert.equal(calls, 0); assert.equal(findCard(f.tasks, 'T-1').column, 'owner')
+  assert.match(readFileSync(findCard(f.tasks, 'T-1').path, 'utf8'), /Needs you[\s\S]*Operational recovery held: [\s\S]*dependency missing/)
+  const held = findCard(f.tasks, 'T-1')
   writeFileSync(join(f.root, 'Proof', 'package.json'), '{}')
-  assert.equal(operationalHold(f.tasks, card, join(f.root, 'Proof')), null)
+  assert.equal(operationalHold(f.tasks, held, join(f.root, 'Proof')), null)
 })
 
 test('normal task flow requires independent verdict; duplicate transitions do not duplicate history', t => {

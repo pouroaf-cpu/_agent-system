@@ -50,8 +50,8 @@ test('POST route validates projects and returns a stopped-session error', async 
   })
   const configPath = join(root, 'config.json')
   await writeFile(configPath, JSON.stringify({ port, projectsRoot: root, projects: ['herdr-kanban'], maxConcurrentAgents: 0, agentPollMs: 60000, agentWorkspace: 'agents' }))
-  const workspace = process.cwd()
-  const child = spawn(process.execPath, [join(workspace, 'herdr-kanban/server.mjs')], {
+  const workspace = import.meta.dirname
+  const child = spawn(process.execPath, [join(workspace, 'server.mjs')], {
     cwd: workspace,
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: join(root, 'missing-herdr.exe') },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -78,8 +78,8 @@ test('POST route validates projects and returns a stopped-session error', async 
   assert.equal(stopped.status, 400)
   assert.match((await stopped.json()).error, /session herdr-kanban is unavailable/)
 
-  const html = await readFile(join(workspace, 'herdr-kanban/public/index.html'), 'utf8')
-  const board = await readFile(join(workspace, 'herdr-kanban/public/board.js'), 'utf8')
+  const html = await readFile(join(workspace, 'public/index.html'), 'utf8')
+  const board = await readFile(join(workspace, 'public/board.js'), 'utf8')
   assert.match(html, /id="herdr-open"[^>]*type="button"[^>]*>Open herdr/)
   assert.match(board, /getElementById\('herdr-open'\)\.addEventListener\('click'/)
   assert.match(board, /fetch\('\/api\/herdr-open'/)
