@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +18,14 @@ export function saveDelivery(session, paneId, data) {
   writeFileSync(p + '.tmp', JSON.stringify({ ...data, session, paneId, at: new Date().toISOString() }) + '\n')
   renameSync(p + '.tmp', p)
 }
+// Every poll asks this for every project, and .deliveries holds hundreds of finished
+// records: re-parsing them all was 1/3 of the board's CPU (2026-09-25). Records are
+// written by rename, which changes the folder's mtime, so the parse is cached on it.
+let scan = { key: '', items: [] }
 export function pendingDeliveries(session) {
-  return existsSync(root()) ? readdirSync(root()).filter(p => p.endsWith('.json')).map(p => JSON.parse(readFileSync(join(root(), p), 'utf8'))).filter(item => item.session === session && item.status === 'paused' && !item.runId) : []
+  const dir = root()
+  if (!existsSync(dir)) return []
+  const key = `${dir}:${fs.statSync(dir).mtimeMs}`
+  if (scan.key !== key) scan = { key, items: readdirSync(dir).filter(p => p.endsWith('.json')).map(p => JSON.parse(fs.readFileSync(join(dir, p), 'utf8'))) }
+  return scan.items.filter(item => item.session === session && item.status === 'paused' && !item.runId)
 }
