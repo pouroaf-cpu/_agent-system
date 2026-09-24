@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
+import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
@@ -81,6 +82,20 @@ export async function recoverBuilderNoHandoff({ tasksDir, cardId, agents, io = {
   const cause = !agent ? 'missing-pane' : 'idle-no-handoff'
   if (!agent) return routeToPlanner(cause, '')
   if (!['idle', 'done'].includes(agent.agent_status)) return false
+  // The Builder's prompt never landed (uncertain delivery, pane idle): nothing ran, so
+  // this is a failed start for a fresh Builder, never a nudge that delivery refuses
+  // forever (Tradeflow T-36 sat 2.5h and held the files every queued card needed).
+  const delivery = (io.readDelivery ?? readDelivery)(session, paneId)
+  if (delivery?.status === 'uncertain') {
+    ;(io.saveDelivery ?? saveDelivery)(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain delivery resolved as failed; a fresh Builder takes over' })
+    unbind(tasksDir, card.id)
+    await (io.paneClose ?? paneClose)(paneId, session).catch(() => {})
+    const moved = moveCard(tasksDir, card.id, 'queue')
+    updateWorkflow(tasksDir, card.id, { operational: null, builderRecovery: null })
+    appendHistory(tasksDir, card.id, { event: 'builder-delivery-failed', paneId, deliveryAt: delivery.at || null })
+    recordStartFailure(tasksDir, card.id, 'builder', 'Builder prompt was never submitted')
+    return !!moved
+  }
   if (marker?.attempt === attempt && marker.status) return false
   const output = await io.paneRead(paneId, session)
   updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'claimed', at: new Date(now).toISOString() } })

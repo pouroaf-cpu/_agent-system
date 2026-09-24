@@ -154,3 +154,24 @@ test('two Builder recovery failures for the same cause ask the Owner', async t =
   assert.match(readFileSync(findCard(tasks, 'T-6').path, 'utf8'), /Should the Planner change the recovery plan/)
   assert.equal(JSON.parse(readFileSync(join(tasks, '.board-worktrees.json')))['T-6'].state, 'building')
 })
+
+test('a Builder whose prompt never landed gets a fresh start, not a nudge', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-undelivered-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-6.md'), '# T-6 — never started\n')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-6': { builder: { pane_id: 'pane-6', name: 'builder' } } }))
+  routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', reason: 'Session pane-6 finished with status=done without a valid Builder handoff from Working', workspace: root })
+  const saved = [], closed = [], sent = []
+  const io = {
+    paneRead: async () => '', deliver: async (_p, prompt) => sent.push(prompt), paneClose: async pane => closed.push(pane),
+    readDelivery: () => ({ status: 'uncertain', at: '2026-09-24T07:45:00Z' }), saveDelivery: (_s, _p, data) => saved.push(data),
+  }
+  assert.equal(await recoverBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-6', agents: [{ pane_id: 'pane-6', agent_status: 'idle' }], io, workspace: root }), true)
+  assert.equal(findCard(tasks, 'T-6').column, 'queue')
+  assert.deepEqual(sent, [], 'no nudge into a pane whose prompt never ran')
+  assert.deepEqual(closed, ['pane-6'])
+  assert.equal(saved[0].status, 'failed')
+  assert.equal(readWorkflow(tasks)['T-6'].startFailure.count, 1)
+})
