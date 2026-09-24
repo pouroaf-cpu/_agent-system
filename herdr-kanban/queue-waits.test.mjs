@@ -85,9 +85,10 @@ test('a spawn that finds drift keeps the card in Queue installing, never Owner',
   assert.equal(readWorkflow(f.tasks)['T-34']?.operational ?? null, null, 'no operational hold for Owner')
 })
 
-test('cards waiting on files held by a card in Owner stay in Queue; the stall watchdog agrees', async t => {
+test('cards waiting on files held by another live card stay in Queue; the stall watchdog agrees', async t => {
   const f = repo(t)
-  f.add('T-34', ['site/app.js', 'site/b.js'], 'owner')
+  // In Working: a card waiting in Owner holds no files since 2026-09-25 (Injectbuddy I164/I169).
+  f.add('T-34', ['site/app.js', 'site/b.js'], 'working')
   const site = join(f.integration, 'site')
   // Registry as Tradeflow wrote it before the fix: doubled prefix alongside nothing else.
   writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify({ 'T-34': { cardId: 'T-34', state: 'building', integrationWorkspace: site, files: [norm(join(site, 'site', 'app.js'))] } }))
@@ -102,13 +103,13 @@ test('cards waiting on files held by a card in Owner stay in Queue; the stall wa
     assert.equal(findCard(f.tasks, id).column, 'queue')
     assert.equal(readWorkflow(f.tasks)[id]?.queueHoldSince ?? null, null, 'no expiry clock on an allowed wait')
   }
-  assert.equal(findCard(f.tasks, 'T-34').column, 'owner', 'only the holder is escalated')
+  assert.equal(findCard(f.tasks, 'T-34').column, 'working')
   assert.ok(readWorktrees(f.tasks)['T-34'].files.includes(norm(join(site, 'app.js'))))
 
   const T = Date.now() + 3600000
   for (const id of ['T-35', 'T-37']) utimesSync(findCard(f.tasks, id).path, new Date(T), new Date(T))
   checkStalls({ tasksDir: f.tasks, holds, now: T })
-  assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 30 * 60000 }), [], 'holder in Owner is still an allowed wait')
+  assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 30 * 60000 }).map(s => s.id).filter(id => id !== 'T-34'), [], 'a live holder is an allowed wait')
   rmSync(findCard(f.tasks, 'T-34').path)
   assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 60 * 60000 }).map(s => s.id).sort(), ['T-35', 'T-37'], 'a holder that is no longer live is not')
 })

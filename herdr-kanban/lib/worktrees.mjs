@@ -397,6 +397,10 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
     // An archived card is closed: its preserved worktree must never block live cards.
     if (live?.column === 'archive') continue
+    // A card in Owner waits on the operator, often for hours: its saved work stays on its
+    // branch and is rebased when it resumes, but it must not starve every card behind it
+    // (Injectbuddy I164/I169 held next.config.ts and package.json for 7 queued cards overnight).
+    if (live?.column === 'owner') continue
     // Back before Working with a clean checkout at its base, a card has no work to
     // protect (Tradeflow T-36's empty worktree held 14 queued cards).
     if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && holdsNoWork(entry)) continue

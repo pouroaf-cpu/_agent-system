@@ -574,3 +574,18 @@ test('agent tool output in the integration checkout never blocks integration', (
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('a card waiting in Owner does not hold its files against queued cards', () => {
+  const f = fixture()
+  try {
+    const holder = f.addCard('T-1')
+    const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: holder, gitSettings: f.settings }).entry.worktreePath
+    writeFileSync(join(wt, 'app.js'), 'saved work\n'); git(wt, 'commit', '-am', 'T-1 work')
+    moveCard(f.tasks, 'T-1', 'working')
+    const queued = f.addCard('T-2')
+    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: queued, projectPath: f.integration }), /held by T-1/)
+    // Injectbuddy I164/I169 sat in Owner overnight holding files for 7 queued cards.
+    moveCard(f.tasks, 'T-1', 'owner')
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: queued, projectPath: f.integration }), null)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
