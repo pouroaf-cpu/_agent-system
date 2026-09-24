@@ -294,7 +294,20 @@ export function currentDirtyMatchesSnapshot(card, projectPath) {
   return JSON.stringify(current) === JSON.stringify(recorded)
 }
 
+// A card parse reads the file five times, and readBoard/findCard re-parse every card,
+// archive included, many times per poll: 82% of the server's time went to file reads
+// and board requests took up to 20s (2026-09-24). Reuse a parse until the file changes.
+const parsed = new Map()
 export function parseCard(path, columnKey) {
+  const stat = statSync(path)
+  const hit = parsed.get(path)
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { ...structuredClone(hit.card), column: columnKey }
+  const card = parseCardFile(path, columnKey)
+  parsed.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, card })
+  return structuredClone(card)
+}
+
+function parseCardFile(path, columnKey) {
   const file = basename(path)
   const head = readHead(path)
   const text = readFileSync(path, 'utf8')

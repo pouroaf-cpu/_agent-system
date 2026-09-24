@@ -2360,3 +2360,16 @@ test('managed Codex launches do not inject broad shared context policy', () => {
   const args = agentStartArgs({ name: 'kb-t-01', paneId: 'test:p1', model: 'gpt-5.6-luna', engine: { kind: 'codex' } })
   assert.ok(!args.some(x => x.includes('AGENT-CONTEXT.md')))
 })
+
+test('parseCard reuses a parse only while the file is unchanged', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parse-cache-'))
+  try {
+    const card = createCard(dir, { title: 'Cache', brief: 'x' })
+    const first = parseCard(card.path, 'planning')
+    first.blockedBy.push('T-99')
+    assert.deepEqual(parseCard(card.path, 'planning').blockedBy, [], 'callers get their own copy')
+    assert.equal(parseCard(card.path, 'queue').column, 'queue')
+    appendFileSync(card.path, '\n**Build attempt** 2026-09-24T00:00:00Z\n')
+    assert.equal(parseCard(card.path, 'planning').buildAttempts, 1, 'a changed file is parsed again')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
