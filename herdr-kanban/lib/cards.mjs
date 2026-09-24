@@ -1,7 +1,8 @@
 // Card model. A card is a markdown file; its column is the folder it sits in.
 // Nothing is duplicated into a database — the filesystem is the source of truth.
 
-import { readdirSync, readFileSync, writeFileSync, appendFileSync, statSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, appendFileSync, statSync, existsSync, mkdirSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join, basename, resolve, dirname, extname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'

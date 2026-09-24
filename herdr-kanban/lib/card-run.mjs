@@ -1,6 +1,7 @@
 // One explicit card at a time; the ordinary scheduler remains paused.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'

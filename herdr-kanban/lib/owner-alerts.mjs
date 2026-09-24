@@ -2,7 +2,8 @@
 // one-attempt rule as watchdog-alert.ps1: the alerted set is persisted before the
 // send, so an ambiguous timeout never repeats a push. A card that leaves Owner and
 // comes back alerts again.
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 import { readBoard } from './cards.mjs'
 

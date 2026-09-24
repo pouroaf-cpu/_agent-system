@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { appendHistory, focusedText } from './card-history.mjs'

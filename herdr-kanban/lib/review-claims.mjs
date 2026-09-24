@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, unlinkSync, mkdirSync, statSync, appendFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync, statSync, appendFileSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'

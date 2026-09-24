@@ -1,7 +1,8 @@
 // Which herdr pane is running which card. Lives in <project>/TASKS/.board.json,
 // gitignored, so cards themselves stay clean markdown that any agent can read.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, renameSync, unlinkSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 
 const file = (tasksDir) => join(tasksDir, '.board.json')

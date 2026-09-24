@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { allowCardRunPrompt, stopCardRun } from './card-run.mjs'
 

@@ -5,7 +5,8 @@
 // together (context reuse); unrelated cards don't get crammed into the same
 // batch just because they landed in Review around the same time.
 
-import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 import { readBoard, cardFiles } from './cards.mjs'
 import { readBindings } from './bindings.mjs'

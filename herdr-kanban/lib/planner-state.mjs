@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { renameSync } from './fs-retry.mjs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
