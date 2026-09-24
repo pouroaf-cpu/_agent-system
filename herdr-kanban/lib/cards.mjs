@@ -496,7 +496,7 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
     // silently is more surprising than refusing.
     throw new Error(`${card.id} only exists in archive (${card.file}) — move it by hand if you meant that`)
   }
-  if (toKey === 'archive' && !canArchive(card)) {
+  if (toKey === 'archive' && !options.operatorArchive && !canArchive(card)) {
     throw new Error(`${card.id} is a mission card and needs Reviewer evidence plus Review verdict: PASS before archive`)
   }
 
@@ -513,7 +513,7 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
   const target = join(dest, card.file)
   if (existsSync(target)) throw new Error(`already exists in ${toKey}: ${card.file}`)
 
-  appendHistory(tasksDir, card.id, { event: 'transition', from: card.column, to: toKey, text })
+  appendHistory(tasksDir, card.id, { event: 'transition', from: card.column, to: toKey, text, ...(options.operatorArchive && toKey === 'archive' ? { note: 'Archived by operator from board without independent review' } : {}) })
   if (transition.text !== text) writeFileSync(card.path, transition.text)
   renameSync(card.path, target)
   return { ...card, column: toKey, path: target }

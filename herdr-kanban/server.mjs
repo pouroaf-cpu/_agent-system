@@ -811,7 +811,11 @@ const handleRequest = async (req, res) => {
     try {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
       const before = findCard(tasksDirOf(p), id)
-      const card = moveCard(tasksDirOf(p), id, to)
+      const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
+      if (to === 'archive') {
+        unbind(tasksDirOf(p), id)
+        stopCardRun(p, id, 'Archived by operator from board')
+      }
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)
       json(res, 200, { ok: true, card })

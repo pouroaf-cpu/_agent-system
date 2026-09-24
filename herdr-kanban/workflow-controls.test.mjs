@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -14,6 +14,10 @@ import { checkWorkflowLimits } from './lib/workflow-limits.mjs'
 import { createCard, findCard, moveCard, validatePlan } from './lib/cards.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { autoSpawn, routeReviewVerdicts } from './lib/autospawn.mjs'
+import { bind, readBindings } from './lib/bindings.mjs'
+import { readCardRuns } from './lib/card-run.mjs'
+import { runCardPlanner } from './lib/card-planner.mjs'
+import { readCardPlanners, saveCardPlanners } from './lib/planner-state.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 function fixture(t) {
@@ -128,7 +132,7 @@ test('normal task flow requires independent verdict; duplicate transitions do no
   const before = readFileSync(historyPath(f.tasks, card.id), 'utf8')
   moveCard(f.tasks, card.id, 'review')
   assert.equal(readFileSync(historyPath(f.tasks, card.id), 'utf8'), before)
-  assert.throws(() => moveCard(f.tasks, card.id, 'completed'), /Reviewer PASS/)
+  assert.throws(() => moveCard(f.tasks, card.id, 'completed'), /Builder PASS/)
   assert.throws(() => moveCard(f.tasks, card.id, 'archive'), /Reviewer evidence/)
   appendFileSync(findCard(f.tasks, card.id).path, '\n## Reviewer evidence\nAC1 independent positive and negative checks passed.\n**Review verdict:** PASS\n')
   assert.equal(routeReviewVerdicts(f.tasks).length, 1)
@@ -191,4 +195,68 @@ test('project control API survives a real server restart with no agent dispatch'
   assert.equal((await post(false)).control.paused, false)
   assert.equal(controlState('Other').paused, true)
   await stop()
+})
+
+test('board operator can archive each lane while agent archive remains gated', async t => {
+  const f = fixture(t)
+  const archiveUrl = 'http://127.0.0.1:18779/api/move'
+  let child
+  child = spawn(process.execPath, [join(here, 'server.mjs')], { cwd: here, env: { ...process.env, KANBAN_CONFIG: f.config, HERDR_BIN_PATH: 'nonexistent-workflow-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  t.after(() => { if (child && child.exitCode === null) child.kill() })
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 10000)
+    child.stdout.on('data', bytes => { if (String(bytes).includes('http://')) { clearTimeout(timer); resolve() } })
+    child.on('exit', code => { clearTimeout(timer); reject(new Error(`test server exited ${code}`)) })
+  })
+
+  const postArchive = id => fetch(archiveUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id, to: 'archive' }) })
+  for (const lane of ['review', 'completed', 'issues', 'owner']) {
+    const card = createCard(f.tasks, { title: `operator archive from ${lane}`, brief: 'board archive' })
+    if (lane === 'completed') writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Trivial:** no', '**Trivial:** yes'))
+    moveCard(f.tasks, card.id, lane)
+    const response = await postArchive(card.id)
+    assert.equal(response.status, 200, `${lane} archive response`)
+    assert.equal((await response.json()).card.column, 'archive')
+    const transitions = readFileSync(historyPath(f.tasks, card.id), 'utf8').trim().split('\n').map(JSON.parse).filter(entry => entry.event === 'transition' && entry.to === 'archive')
+    assert.equal(transitions.length, 1)
+    assert.equal(transitions[0].note, 'Archived by operator from board without independent review')
+    assert.equal((await postArchive(card.id)).status, 200)
+    assert.equal(readFileSync(historyPath(f.tasks, card.id), 'utf8').trim().split('\n').map(JSON.parse).filter(entry => entry.event === 'transition' && entry.to === 'archive').length, 1)
+  }
+
+  const guarded = createCard(f.tasks, { title: 'agent archive stays gated', brief: 'review required' })
+  writeFileSync(guarded.path, readFileSync(guarded.path, 'utf8').replace('**Auto-review:** no', '**Auto-review:** yes'))
+  assert.throws(() => moveCard(f.tasks, guarded.id, 'archive'), /Reviewer evidence/)
+  const cliMove = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'move', guarded.id, 'archive'], { encoding: 'utf8' })
+  assert.notEqual(cliMove.status, 0)
+  assert.match(cliMove.stderr + cliMove.stdout, /Reviewer evidence/)
+  moveCard(f.tasks, guarded.id, 'review')
+  const cliPass = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'pass', guarded.id], { encoding: 'utf8' })
+  assert.notEqual(cliPass.status, 0)
+  assert.equal(findCard(f.tasks, guarded.id).column, 'review')
+
+  const active = createCard(f.tasks, { title: 'archive cleanup', brief: 'release assignments' })
+  moveCard(f.tasks, active.id, 'review')
+  bind(f.tasks, active.id, { pane_id: 'planner-pane' })
+  const runsFile = join(f.root, '.card-runs', 'runs.json')
+  mkdirSync(join(f.root, '.card-runs'), { recursive: true })
+  writeFileSync(runsFile, JSON.stringify([{ project: 'Proof', cardId: active.id, runId: 'run-1', status: 'running' }]))
+  const planners = readCardPlanners(f.tasks)
+  planners[active.id] = { paneId: 'planner-pane', lifecycle: 'active' }
+  saveCardPlanners(f.tasks, planners)
+  const worktrees = join(f.tasks, '.board-worktrees.json')
+  writeFileSync(worktrees, JSON.stringify({ [active.id]: { state: 'building', commit: 'kept-commit' } }))
+  const response = await postArchive(active.id)
+  assert.equal(response.status, 200)
+  assert.equal(readBindings(f.tasks)[active.id], undefined)
+  assert.equal(readCardRuns().find(run => run.runId === 'run-1').status, 'stopped')
+  const calls = []
+  await runCardPlanner({ project: 'Proof', projectPath: f.root, tasksDir: f.tasks, boardRoot: here, io: {
+    agentList: async () => [{ pane_id: 'planner-pane', agent_status: 'idle' }],
+    recordUsageFinish: async () => calls.push('finish'), paneClose: async () => calls.push('close'),
+  } })
+  assert.deepEqual(calls, ['finish', 'close'])
+  assert.ok(readCardPlanners(f.tasks)[active.id].closedAt)
+  assert.deepEqual(JSON.parse(readFileSync(worktrees, 'utf8'))[active.id], { state: 'building', commit: 'kept-commit' })
+  assert.equal(existsSync(join(f.tasks, 'archive', `${active.id}-approved-job.md`)), true)
 })
