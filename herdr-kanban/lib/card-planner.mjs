@@ -40,7 +40,7 @@ export function requestPlannerCorrection(dir, cardId) {
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
 // restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
-  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null })
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
 // Board Approve button on an Owner card: record the decision, add the operator-only

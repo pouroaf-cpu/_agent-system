@@ -41,7 +41,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if (!section('Prerequisites')) throw new Error('Plan incomplete: state workspace prerequisites (or explicitly none)')
   }
   const files = [...section('Files').matchAll(/^-\s+`([^`]+)`/gm)].map(m => m[1])
-  if (!files.length || files.some(p => /[\\:*?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|css|json|md|html?)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')))) {
+  if (!files.length || files.some(p => /[\\:*?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|cjs|css|json|md|html?|txt|xml|svg|ya?ml|sql)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')))) {
     throw new Error('Plan incomplete: ## Files needs exact relative file paths as - `path/to/file.css` bullets (no placeholders or globs)')
   }
   if (/^\*\*Trivial:\*\*\s*yes\s*$/im.test(text) && files.length > 2) {

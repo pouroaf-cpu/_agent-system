@@ -83,3 +83,29 @@ test('a Planner blocked on an interactive question goes to Owner with it after t
     assert.match(moved.ask?.text || '', /which CTA label/)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('the third Planner blocker in a row goes to Owner as the question', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planner-cap-'))
+  try {
+    const card = createCard(dir, { title: 'Hard plan', brief: 'x' })
+    const hkb = (n) => {
+      const owners = readCardPlanners(dir)
+      owners[card.id] = { ...(owners[card.id] || {}), assignmentId: `a${n}`, lifecycle: 'active', paneId: `p${n}`, submitted: true, revokedPaneIds: [] }
+      saveCardPlanners(dir, owners)
+      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, 'issue', card.id, `[planning] blocker remains, attempt ${n}`], { encoding: 'utf8' })
+    }
+    for (const n of [1, 2]) { assert.equal(hkb(n).status, 0); assert.equal(findCard(dir, card.id).column, 'planning') }
+    assert.equal(hkb(3).status, 0)
+    // Injectbuddy I152/I168/I184 each ran 25 Planners overnight on reworded blockers.
+    const moved = findCard(dir, card.id)
+    assert.equal(moved.column, 'owner')
+    assert.match(moved.ask?.text || '', /Three Planners in a row[\s\S]*attempt 3/)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('the plan check accepts text files such as public/llms.txt', async () => {
+  const { validatePlan } = await import('./lib/cards.mjs')
+  const plan = '## Approved brief\nx\n## Files\n- `public/llms.txt` — site summary\n## Implementation plan\nx\n## Acceptance criteria\n1. x\n'
+  // Injectbuddy I168: 25 Planners could never hand off a card that edits llms.txt.
+  assert.doesNotThrow(() => validatePlan(plan))
+})

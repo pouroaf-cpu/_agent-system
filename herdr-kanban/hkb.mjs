@@ -27,7 +27,7 @@ import { requestPlannerCorrection } from './lib/card-planner.mjs'
 import { assertReviewHandoff, assertReviewInputs } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
-import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
+import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
 
@@ -105,6 +105,7 @@ let card
 let previousColumn
 let approvalWait = false
 let prerequisiteWait = false
+let plannerIssues = 0
 let auditNotReady = ''
 try {
   const current = findCard(tasksDir, cardId)
@@ -179,7 +180,16 @@ try {
     appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note } })
+    // Planners that keep reporting a blocker loop through fresh sessions: I152/I168/I184
+    // each ran 25 overnight, worded differently every time. The third in a row is the
+    // operator's question.
+    if (current.column === 'planning' && target === 'planning') {
+      plannerIssues = (readWorkflow(tasksDir)[current.id]?.plannerIssues || 0) + 1
+      updateWorkflow(tasksDir, current.id, { plannerIssues })
+      if (plannerIssues >= 3) target = 'owner'
+    }
   }
+  if (verb === 'move' && current.column === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null })
   if (verb === 'done' && current.cardOwned && ['working', 'issues'].includes(current.column)) {
     const commitError = handoffCommitError(tasksDir, current)
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
@@ -220,6 +230,7 @@ try {
 }
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
+else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
 else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {
   const tail = capped
