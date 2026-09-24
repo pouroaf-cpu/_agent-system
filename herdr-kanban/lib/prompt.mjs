@@ -1,8 +1,8 @@
 // What a spawned agent is actually told.
 //
-// Prompts reach the agent as keystrokes, not as an API payload, so they stay
-// short. The card file is the brief — the prompt only points at it and states
-// the one thing the agent must do at the end.
+// Prompts reach the agent as keystrokes, not as an API payload. deliver() types
+// only a short pointer to a file holding this text. The card file is the brief —
+// the prompt points at it and states the one thing the agent must do at the end.
 
 import { resolve } from 'node:path'
 import { capabilityBrief } from './review-capabilities.mjs'

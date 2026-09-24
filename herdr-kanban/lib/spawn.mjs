@@ -11,8 +11,9 @@ import { cleanupPreparedWorktree, prepareCardWorktree } from './worktrees.mjs'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertCardRunSelection, cardRunContext, bindCardRunAssignment } from './card-run.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
-import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries } from './delivery-state.mjs'
-import { readFileSync } from 'node:fs'
+import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries, promptPath } from './delivery-state.mjs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { assertGuardActive, assertRestrictedRuntimeVerified } from './builder-guard.mjs'
 import { activityLog } from './activity.mjs'
@@ -86,12 +87,23 @@ export async function submitStaged(paneId, text, session, { read, sendKeys, list
   return 'staged'
 }
 
-export async function deliver(paneId, text, session, builderGuard = null) {
+// Codex takes a long prompt as a paste and intermittently swallows its Enter
+// (Injectbuddy I149, Tradeflow TF56/T-36): the full task goes in a file and only a
+// short one-line pointer is typed. Its revision lets resumeDeliveries see a change.
+export const MAX_TYPED = 500
+export function typedPrompt(text, file) {
+  if (text.length < MAX_TYPED) return { text }
+  return { text: `Read ${file} (revision ${createHash('sha256').update(text).digest('hex')}) and follow it exactly; it is your complete task.`, file, full: text }
+}
+
+export async function deliver(paneId, fullText, session, builderGuard = null) {
   const runId = cardRunContext()?.runId
+  const { text, file, full } = typedPrompt(fullText, promptPath(session, paneId))
   const key = deliveryKey(text)
   const prior = readDelivery(session, paneId)
   if (prior?.key === key && prior.status === 'confirmed') return
   if (prior?.status === 'uncertain') throw preservePane('Previous delivery is uncertain; verify the existing session before redispatch')
+  if (full) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, full) }
   try {
     assertPromptAllowed(session)
     if (builderGuard) {
@@ -110,7 +122,9 @@ export async function deliver(paneId, text, session, builderGuard = null) {
 export async function resumeDeliveries(session) {
   for (const pending of pendingDeliveries(session)) {
     assertPromptAllowed(session)
-    const briefs = [...pending.text.matchAll(/((?:[A-Za-z]:[\\/]|\/)[^()\r\n]*?\.md) \(revision ([a-f0-9]{64})\)/g)]
+    const pairs = text => [...String(text).matchAll(/((?:[A-Za-z]:[\\/]|\/)[^()\r\n]*?\.md) \(revision ([a-f0-9]{64})\)/g)]
+    // One level down too: the typed pointer names the prompt file, which names the briefs.
+    const briefs = pairs(pending.text).flatMap(pair => { try { return [pair, ...pairs(readFileSync(pair[1], 'utf8'))] } catch { return [pair] } })
     if (briefs.some(([, path, revision]) => { try { return createHash('sha256').update(readFileSync(path)).digest('hex') !== revision } catch { return true } })) {
       saveDelivery(session, pending.paneId, { ...pending, status: 'uncertain', reason: 'Brief changed while paused; inspect assignment before dispatch' })
       continue

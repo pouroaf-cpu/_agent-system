@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto'
 const root = () => join(dirname(process.env.KANBAN_CONFIG || fileURLToPath(new URL('../board.config.json', import.meta.url))), '.deliveries')
 const path = (session, paneId) => join(root(), createHash('sha256').update(`${session}:${paneId}`).digest('hex') + '.json')
 export const deliveryKey = text => createHash('sha256').update(text).digest('hex')
+// The full task behind a short typed pointer, one per pane beside its record.
+export const promptPath = (session, paneId) => path(session, paneId).replace(/\.json$/, '.md').replaceAll('\\', '/')
 export function readDelivery(session, paneId) {
   const p = path(session, paneId)
   return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null

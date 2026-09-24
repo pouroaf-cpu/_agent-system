@@ -6,8 +6,9 @@ import { join, dirname } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { controlState, setProjectPaused, assertPromptAllowed } from './lib/project-control.mjs'
-import { deliverWith, deliver } from './lib/spawn.mjs'
-import { pendingDeliveries, saveDelivery, deliveryKey } from './lib/delivery-state.mjs'
+import { deliverWith, deliver, typedPrompt, resumeDeliveries, MAX_TYPED } from './lib/spawn.mjs'
+import { pendingDeliveries, saveDelivery, readDelivery, deliveryKey, promptPath } from './lib/delivery-state.mjs'
+import { workerPrompt, reviewerPrompt, issuesSweeperPrompt } from './lib/prompt.mjs'
 import { focusedText, appendHistory, historyPath, writeBrief, writeCurrentFeedback } from './lib/card-history.mjs'
 import { failureDestination, operationalHold, recordOperationalFailure, readWorkflow, evidenceFingerprint } from './lib/workflow-state.mjs'
 import { checkWorkflowLimits } from './lib/workflow-limits.mjs'
@@ -264,4 +265,33 @@ test('board operator can archive each lane while agent archive remains gated', a
   assert.ok(readCardPlanners(f.tasks)[active.id].closedAt)
   assert.deepEqual(JSON.parse(readFileSync(worktrees, 'utf8'))[active.id], { state: 'building', commit: 'kept-commit' })
   assert.equal(existsSync(join(f.tasks, 'archive', `${active.id}-approved-job.md`)), true)
+})
+
+test('every role is typed as a short one-line pointer; the file holds the task and resume sees a brief changed behind it', async t => {
+  const f = fixture(t); setProjectPaused('Proof', false)
+  const card = createCard(f.tasks, { title: 'typed', brief: 'all requirements' })
+  writeFileSync(card.path, `# ${card.id} — typed\n${plan}`)
+  const args = { projectPath: f.root, boardRoot: here, tasksDir: f.tasks }
+  const prompts = {
+    builder: workerPrompt({ ...args, card }) + ' Implementation correction: continue from the existing commits.',
+    reviewer: reviewerPrompt({ ...args, cards: [card, { ...card, id: 'T-98' }, { ...card, id: 'T-99' }], reviewClaim: 'claim', envFile: join(f.root, '.env') }),
+    planner: issuesSweeperPrompt({ ...args, cards: [{ ...card, column: 'planning' }], plannerAssignment: 'assignment' }) + ' Plan only this card; do not delegate.',
+  }
+  const file = promptPath('proof', 'w12:p34@default')
+  for (const [role, full] of Object.entries(prompts)) {
+    const typed = typedPrompt(full, file)
+    assert.ok(full.length > 1000, role)
+    assert.ok(typed.text.length < MAX_TYPED, `${role} typed ${typed.text.length} chars`)
+    assert.doesNotMatch(typed.text, /\n/, role)
+    assert.equal(typed.text, `Read ${file} (revision ${deliveryKey(full)}) and follow it exactly; it is your complete task.`)
+    assert.equal(typed.full, full)
+  }
+  assert.deepEqual(typedPrompt('Finish T-1 then report.', file), { text: 'Finish T-1 then report.' })
+  // A paused delivery whose brief changed behind the prompt file is not resent blind.
+  const { text } = typedPrompt(prompts.builder, file)
+  mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, prompts.builder)
+  saveDelivery('proof', 'w12:p34@default', { text, key: deliveryKey(text), status: 'paused' })
+  appendFileSync(join(f.tasks, '.briefs', `${card.id}-builder.md`), 'changed\n')
+  await resumeDeliveries('proof')
+  assert.match(readDelivery('proof', 'w12:p34@default').reason, /Brief changed/)
 })

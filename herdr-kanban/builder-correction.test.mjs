@@ -1,6 +1,6 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -38,7 +38,9 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
   } }), updateWorkflow: () => {} } })
   mock.module('./lib/delivery-state.mjs', { namedExports: {
     deliveryKey: t => t, readDelivery: (s, p) => deliveries.get(p), saveDelivery: (s, p, v) => deliveries.set(p, v), pendingDeliveries: () => [],
+    promptPath: (s, p) => join(root, `${p.replace(/\W/g, '_')}.md`),
   } })
+  const task = typed => readFileSync(typed.match(/^Read (.+?\.md) \(revision [a-f0-9]{64}\)/)[1], 'utf8')
   const { spawnForCard } = await import('./lib/spawn.mjs')
   const options = { project: 'Fixture', projectPath: root, tasksDir: tasks, boardRoot: root, card, engine: 'claude' }
 
@@ -47,7 +49,9 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
   assert.equal(result.pane_id, fresh.pane_id)
   assert.deepEqual(calls.find(c => c[0] === 'tab'), ['tab', join(root, 'wt')])
   assert.ok(calls.some(c => c[0] === 'start'))
-  const prompt = calls.find(c => c[0] === 'prompt')[2]
+  const typed = calls.find(c => c[0] === 'prompt')[2]
+  assert.ok(typed.length < 500)
+  const prompt = task(typed)
   assert.match(prompt, /previous Builder session \(wJ:pFE\) is unavailable/)
   assert.match(prompt, /AC4: move the guard to process-wide state\./)
   assert.doesNotMatch(prompt, /\n/)
@@ -60,7 +64,7 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
   await spawnForCard(options)
   assert.ok(!calls.some(c => c[0] === 'tab' || c[0] === 'start'))
   assert.equal(calls.find(c => c[0] === 'prompt')[1], 'wJ:pFE')
-  assert.doesNotMatch(calls.find(c => c[0] === 'prompt')[2], /unavailable/)
+  assert.doesNotMatch(task(calls.find(c => c[0] === 'prompt')[2]), /unavailable/)
   assert.equal(logs.length, 0)
   mock.restoreAll()
 })

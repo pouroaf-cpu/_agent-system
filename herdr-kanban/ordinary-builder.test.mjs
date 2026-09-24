@@ -1,6 +1,6 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -33,13 +33,16 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
   mock.module('./lib/delivery-state.mjs', { namedExports: {
     deliveryKey: text => text, readDelivery: (s, p) => deliveries.get(p),
     saveDelivery: (s, p, value) => deliveries.set(p, value), pendingDeliveries: () => [],
+    promptPath: (s, p) => join(root, `${p}.md`),
   } })
   const { spawnForCard } = await import('./lib/spawn.mjs')
   const options = { project: 'Fixture', projectPath: root, tasksDir: tasks, boardRoot: root, card, engine: 'codex' }
   await spawnForCard(options)
   assert.equal(calls.filter(c => c[0] === 'start').length, 1)
   assert.equal(calls.find(c => c[0] === 'start')[1].guardArgs, undefined)
-  const prompt = calls.find(c => c[0] === 'prompt')[1]
+  const typed = calls.find(c => c[0] === 'prompt')[1]
+  assert.equal(typed.match(/^Read (.+?\.md) \(revision/)?.[1], join(root, 'fixture-pane.md'))
+  const prompt = readFileSync(join(root, 'fixture-pane.md'), 'utf8')
   assert.match(prompt, /login:false/)
   assert.match(prompt, /done T-1/)
   assert.doesNotMatch(prompt, /Restricted Builder|builder-guard|base64url|Approved command IDs/)
