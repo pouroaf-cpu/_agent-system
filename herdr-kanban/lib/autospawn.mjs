@@ -504,6 +504,15 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
     }
     await paneClose(a.pane_id, sessionOf(project)).catch(() => {})
     herdrLog(`${a.name || a.pane_id} finished, pane closed`)
+    // No Builder is left on these cards: stop any server it left running in their worktrees.
+    for (const id of ids) {
+      const worktree = readWorktrees(tasksDir)[id]?.worktreePath
+      let column = ''
+      try { column = findCard(tasksDir, id).column } catch {}
+      if (!worktree || readBindings(tasksDir)[id] || column === 'working') continue
+      const pids = stopServersIn(worktree)
+      if (pids.length) herdrLog(`${id}: stopped server(s) ${pids.join(', ')} left running in ${worktree}`)
+    }
   }
   return spent.map((a) => a.pane_id)
 }
@@ -556,6 +565,7 @@ export function archiveNoReviewCards(tasksDir) {
 }
 
 import { explicitOwnerReason } from './owner-reason.mjs'
+import { stopServersIn } from './orphan-servers.mjs'
 
 export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCardIds = [], includeCompleted = false, reviewRoot, onlyIds } = {}) {
   if (reviewBusy) return []
