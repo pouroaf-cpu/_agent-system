@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, wat
 import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove } from './lib/card-planner.mjs'
+import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners } from './lib/card-planner.mjs'
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
@@ -396,7 +396,7 @@ async function pollProject(project) {
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
         const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt,
-          builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
+          builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)
       } catch (err) {
@@ -539,6 +539,7 @@ async function pollProject(project) {
         boardRoot: HERE,
         model: config.models.planning ?? config.models.issues,
         engine: engineFor('planning'),
+        maxPlanners: config.maxPlanners ?? 4,
         assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
         mission: config.mission,
         onHold: (err) => ambiguousHold(project, err),

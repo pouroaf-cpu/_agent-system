@@ -8,6 +8,7 @@ import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, stagedInput, submitStaged } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
+import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
 import { controlState, assertPromptAllowed } from './project-control.mjs'
@@ -70,9 +71,10 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
   operatorRetry(tasksDir, card.id, moved.column)
   return { card: moved, investigation }
 }
+export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
-export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
+export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
   const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, paneSendKeys: sendKeys = paneSendKeys, deliver, recordUsageStart, recordUsageFinish } = io
@@ -81,6 +83,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
   try {
     const session = sessionOf(project)
     const agents = await agentList(session, { ensureSession: false })
+    let launched = 0 // Planners started in this pass are not in `agents` yet
     const owners = readCardPlanners(tasksDir)
     const board = readBoard(tasksDir)
     // Save the old Planner's output, revoke its pane and close it. The card, its
@@ -373,6 +376,9 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         agent = null
         fresh = true
       }
+      // Concurrent Planners per project are capped: 28 audit cards started 11 Codex Planners
+      // at once and pinned the CPU (Injectbuddy, 2026-09-25). The rest wait for a later poll.
+      if ((!owner || !agent) && !cardRunContext() && busyPlanners(agents) + launched >= maxPlanners) continue
       if (!owner || !agent) {
         const previous = owner
         // A Planner the board closed after its handoff is not a missing replacement.
@@ -384,6 +390,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         try {
           ;({ owner, agent } = await launch(card, previous, { fresh }))
           spawnedNewAgent = true
+          launched++
         } catch (error) {
           if (error.paused || error.startFailed) throw error
           recordOperationalFailure(tasksDir, card, error.message, projectPath)

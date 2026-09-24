@@ -53,7 +53,7 @@ export function laneTimes({ tasksDir, board, agents = [], claims = [], planners 
 // (usage runs, bindings), the last recovery, and the last time this watchdog saw an
 // agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
 // `resumedAt` (the project's last Pause/Start) restarts every clock: paused time is not a stall.
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, reviewerSlotsFree = 1, paused = false, resumedAt, now = Date.now() }) {
+export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, resumedAt, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = openClaims(claims, tasksDir)
@@ -89,6 +89,8 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     }
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
+    // Waiting for one of the capped Planner slots (card-planner maxPlanners).
+    if (card.column === 'planning' && plannerSlotsFree <= 0 && !agents.some(a => a.pane_id === planners[card.id]?.paneId)) return true
     // Legacy Completed cards with no board worktree wait for the operator's disposition by design.
     if (card.column === 'completed' && !registry[card.id]) return true
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational
