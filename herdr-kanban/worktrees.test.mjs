@@ -516,8 +516,13 @@ test('a build-regenerated tracked file outside the card holds nothing; a dirty c
       writeFileSync(join(wt, dirty), 'regenerated\n')
       f.complete(id)
       const result = reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === id)
-      if (status) assert.equal(result.status, status)
-      else assert.notEqual(result?.status, 'integrated')
+      if (status) {
+        assert.equal(result.status, status)
+        // Integrated: leftovers are kept under TASKS/.leftovers and the checkout is removed.
+        assert.equal(readWorktrees(f.tasks)[id].cleaned, true)
+        assert.equal(existsSync(wt), false)
+        assert.equal(readFileSync(join(f.tasks, '.leftovers', id, dirty), 'utf8'), 'regenerated\n')
+      } else assert.notEqual(result?.status, 'integrated')
     }
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })

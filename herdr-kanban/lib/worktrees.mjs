@@ -1,7 +1,7 @@
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, rmdirSync, statfsSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, rmdirSync, statfsSync, copyFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard } from './cards.mjs'
@@ -426,15 +426,29 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
     finish()
     return
   }
-  if (!clean(entry.worktreePath)) throw new Error(`refusing to remove dirty worktree: ${entry.worktreePath}`)
+  const leftovers = operationInProgress(entry.worktreePath) ? null : semanticDirtyFiles(entry.worktreePath)
+  if (!leftovers || (leftovers.length && !integrated)) throw new Error(`refusing to remove dirty worktree: ${entry.worktreePath}`)
   if (!integrated && git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== entry.baseCommit) {
     throw new Error(`refusing to remove unintegrated commit in ${entry.worktreePath}`)
+  }
+  // Integrated: the card commit is safe, so copy leftovers (evidence, build-regenerated
+  // files) to TASKS/.leftovers/<card>/ and remove the checkout, which otherwise piles
+  // up with its dependencies until the disk fills (Tradeflow T-34, T-35).
+  for (const file of leftovers) {
+    const source = join(entry.worktreePath, file)
+    if (!existsSync(source) || !lstatSync(source).isFile()) continue
+    const target = join(tasksDir, '.leftovers', entry.cardId, file)
+    mkdirSync(dirname(target), { recursive: true })
+    copyFileSync(source, target)
   }
   const dependencies = join(entry.workspacePath, 'node_modules')
   // Remove only our junction, never its shared target, before Git removes the checkout.
   if (existsSync(dependencies) && lstatSync(dependencies).isSymbolicLink()) unlinkSync(dependencies)
-  refreshClean(entry.worktreePath)
-  git(entry.repoRoot, ['worktree', 'remove', entry.worktreePath])
+  if (leftovers.length) git(entry.repoRoot, ['worktree', 'remove', '--force', entry.worktreePath])
+  else {
+    refreshClean(entry.worktreePath)
+    git(entry.repoRoot, ['worktree', 'remove', entry.worktreePath])
+  }
   git(entry.repoRoot, ['branch', '-D', entry.branch])
   finish()
 }
