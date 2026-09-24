@@ -103,5 +103,33 @@ try {
     for (const path of [`working/${twin.file}`, `issues/${twin.file}`]) assert.ok(holds[0].includes(path), holds[0])
     assert.ok(existsSync(join(dupDir, 'working', twin.file)) && existsSync(twin.path), 'both copies are kept')
   } finally { rmSync(dupDir, { recursive: true, force: true }) }
-  console.log('Planner pickup, idle retention, fresh-Planner correction, no-handoff retry then Owner, and archive retirement passed; a duplicated card id holds only that card')
+  // Injectbuddy I149: an idle Planner whose prompt is still on the `›` input line was
+  // never prompted. Press Enter; it is not a no-handoff and never goes to Owner.
+  const stagedDir = mkdtempSync(join(tmpdir(), 'card-planner-staged-'))
+  try {
+    const staged = createCard(stagedDir, { title: 'Staged', brief: 'Prompt left in the input box' })
+    let stagedAgents = [], enters = 0, inputLine = '› Improve documentation in @filename'
+    const stagedIo = {
+      agentList: async () => stagedAgents, agentWorkspaceOr: async () => 'workspace',
+      tabCreate: async () => ({ root_pane: { pane_id: 'staged-1' } }), waitForPrompt: async () => {},
+      agentStart: async ({ name, paneId }) => { stagedAgents = [{ name, pane_id: paneId, agent_status: 'idle' }] },
+      deliver: async () => { inputLine = '› [Pasted Content 2668 chars][Pasted Content\n  1572 chars]' },
+      recordUsageStart: () => {}, recordUsageFinish: async () => {}, paneClose: async () => {},
+      paneRead: async () => `› [Pasted Content 900 chars]\nearlier work\n${inputLine}\n\n  GPT-6-Sol high · ~\\KanbanProjec…`,
+      paneSendKeys: async () => { enters++; inputLine = '› Improve documentation in @filename'; stagedAgents[0].agent_status = 'working' },
+    }
+    const stagedArgs = { project: 'Staged', projectPath: stagedDir, tasksDir: stagedDir, boardRoot: stagedDir, model: 'test', io: stagedIo, handoffGraceMs: 10 }
+    await runCardPlanner({ ...stagedArgs, now: 1000000 })
+    await runCardPlanner({ ...stagedArgs, now: 1000000 })
+    await runCardPlanner({ ...stagedArgs, now: 1000020 })
+    assert.equal(enters, 1, 'the staged prompt is submitted with Enter')
+    assert.equal(findCard(stagedDir, staged.id).column, 'planning')
+    assert.equal(readCardPlanners(stagedDir)[staged.id].noHandoffCount, undefined, 'not a no-handoff')
+    assert.equal(readCardPlanners(stagedDir)[staged.id].submitted, true)
+    stagedAgents[0].agent_status = 'done'
+    await runCardPlanner({ ...stagedArgs, now: 1000040 }); await runCardPlanner({ ...stagedArgs, now: 1000060 })
+    assert.equal(enters, 1, 'a submitted paste left in the scrollback is not staged')
+    assert.equal(readCardPlanners(stagedDir)[staged.id].noHandoffCount, 1, 'a real stop is still a no-handoff')
+  } finally { rmSync(stagedDir, { recursive: true, force: true }) }
+  console.log('Planner pickup, idle retention, fresh-Planner correction, no-handoff retry then Owner, and archive retirement passed; a duplicated card id holds only that card; a staged prompt is submitted, not a no-handoff')
 } finally { rmSync(dir, { recursive: true, force: true }) }

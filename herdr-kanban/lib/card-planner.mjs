@@ -5,8 +5,8 @@ import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } f
 export { readCardPlanners } from './planner-state.mjs'
 import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
-import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, sessionOf } from './herdr.mjs'
-import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
+import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
+import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, stagedInput, submitStaged } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
@@ -71,11 +71,11 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
   return { card: moved, investigation }
 }
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
-const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, deliver, recordUsageStart, recordUsageFinish }
+const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
-  const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, deliver, recordUsageStart, recordUsageFinish } = io
+  const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, paneSendKeys: sendKeys = paneSendKeys, deliver, recordUsageStart, recordUsageFinish } = io
   if (busy.has(project)) return null
   busy.add(project)
   try {
@@ -312,11 +312,21 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         owner.inactiveSince ??= new Date(now).toISOString()
         save(tasksDir, owners)
         if (now - Date.parse(owner.inactiveSince) < handoffGraceMs) continue
+        const evidence = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).trim().slice(-4000) : ''
+        // The prompt still on the input line was never submitted: finish the delivery,
+        // never count a no-handoff (Injectbuddy I149 went to Owner this way).
+        const prompt = readDelivery(session, owner.paneId)?.text
+        if (agent && stagedInput(evidence, prompt)) {
+          const result = await submitStaged(owner.paneId, prompt, session, { read: readPane, sendKeys, list: agentList, confirmMs: 10000 })
+          if (result === 'staged') await failStart(card, owner, startFailed(new Error(`Planner prompt stayed unsubmitted in ${owner.paneId} after 3 Enter presses`)))
+          delete owner.inactiveSince
+          save(tasksDir, owners)
+          continue
+        }
         if (cardRunContext()) throw new Error('Planner ended without handoff; explicit run stopped')
         // A prompt ending is not a handoff. Save the evidence, then retry once with
         // a fresh Planner; a second no-handoff asks the operator (Owner).
         const reason = `Planner session ${owner.paneId} ended without a valid handoff after ${handoffGraceMs}ms; observed status=${agent?.agent_status || 'missing'}, state_change_seq=${agent?.state_change_seq ?? 'unknown'}`
-        const evidence = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).trim().slice(-4000) : ''
         const detail = evidence ? `${reason}; pane evidence: ${evidence}` : `${reason}; pane evidence unavailable`
         appendHistory(tasksDir, card.id, { event: 'planner-no-handoff', stage: 'planning', reason: detail, assignment: owner, pane: agent || null, evidence })
         owner.submitted = false

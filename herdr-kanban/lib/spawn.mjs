@@ -39,9 +39,12 @@ export async function deliverWith({
   try {
     await prompt(paneId, text, { wait: true, timeoutMs: 20000, session })
     if (!(await list(session)).some(a => a.pane_id === paneId && a.agent_status === 'working')) throw new Error('Transport succeeded without confirmed working state')
+    // Codex can flash `working` while it takes the paste and then sit idle with the
+    // prompt still on the input line (Injectbuddy I149): that is not a delivery.
+    if (stagedInput(await read(paneId, session).catch(() => ''), text)) throw Object.assign(new Error('prompt still on the input line after a brief working state'), { stillStaged: true })
   } catch (first) {
     if (first.paused) throw first
-    if ((await list(session).catch(() => [])).some(a => a.pane_id === paneId && a.agent_status === 'working')) return
+    if (!first.stillStaged && (await list(session).catch(() => [])).some(a => a.pane_id === paneId && a.agent_status === 'working')) return
     if (stagedPrompt(await read(paneId, session).catch(() => ''), text)) {
       const result = await submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs })
       if (result === 'working') return
@@ -63,9 +66,15 @@ export function stagedPrompt(pane, text = '') {
   const input = tail.findLast(line => /^[\s│|]*›/.test(line))?.replace(/^[\s│|]*›\s*/, '').replace(/[\s│|]+$/, '')
   return !!input && input.length >= 8 && text.replace(/\s+/g, ' ').includes(input.slice(0, 60))
 }
+// Stricter: only the current (last) `›` input line counts, so a prompt that was
+// submitted and still shows in the scrollback is never read as staged.
+export function stagedInput(pane, text = '') {
+  const input = String(pane).split(/\r?\n/).findLast(line => /^[\s│|]*›/.test(line))
+  return !!input && stagedPrompt(input, text)
+}
 // Press Enter up to three times, rechecking after each. 'working', 'staged' (never
 // submitted) or 'unknown' (no longer staged, not working either).
-async function submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs }) {
+export async function submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs }) {
   for (let i = 0; i < 3; i++) {
     await sendKeys(paneId, ['enter'], session).catch(err => { if (err.paused) throw Object.assign(err, { staged: true }) })
     if (await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return 'working'

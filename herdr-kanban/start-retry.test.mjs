@@ -61,6 +61,14 @@ test('the prompt text still on the input line counts as staged; placeholders and
   assert.equal(enters, 2)
 })
 
+test('a brief working flash with the paste still on the input line is not a delivery (Injectbuddy I149)', async () => {
+  let enters = 0
+  await deliverWith({ paneId: 'p', text: 'task', confirmMs: 10, prompt: async () => {}, sendKeys: async () => { enters++ },
+    list: async () => [{ pane_id: 'p', agent_status: 'working' }],
+    read: async () => enters ? '› Improve documentation in @filename' : '› [Pasted Content 2668 chars][Pasted Content\n  1572 chars]\n\n  GPT-6-Sol high' })
+  assert.equal(enters, 1)
+})
+
 test('a paste still unsubmitted after three Enters is a failed start, not a preserved pane', async () => {
   let enters = 0
   const err = await deliverWith({ paneId: 'p', text: 'task', confirmMs: 1, prompt: async () => {}, sendKeys: async () => { enters++ },
