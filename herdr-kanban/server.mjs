@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove } from './lib/card-planner.mjs'
+import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
@@ -1319,6 +1320,10 @@ async function startPollers() {
   for (const project of config.projects) {
     setInterval(() => pollProject(project), config.agentPollMs)
   }
+  setInterval(() => {
+    const pids = stopRunawayTsservers(config.projectsRoot)
+    if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
+  }, 10 * 60000)
 }
 
 function startLan() {

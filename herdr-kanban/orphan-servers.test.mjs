@@ -1,6 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stopServersIn } from './lib/orphan-servers.mjs'
+import { stopServersIn, stopRunawayTsservers } from './lib/orphan-servers.mjs'
+
+test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', () => {
+  const list = () => [
+    { pid: 1, cpuSeconds: 36222, cmd: 'node c:\\Users\\me\\KanbanProjects\\Injectbuddy\\node_modules\\typescript\\lib\\tsserver.js --useNodeIpc' },
+    { pid: 2, cpuSeconds: 60, cmd: 'node c:\\Users\\me\\KanbanProjects\\Tradeflow\\node_modules\\typescript\\lib\\tsserver.js' },
+    { pid: 3, cpuSeconds: 36222, cmd: 'node c:\\Users\\me\\Projects\\Injectbuddy\\node_modules\\typescript\\lib\\tsserver.js' },
+    { pid: 4, cpuSeconds: 36222, cmd: 'node C:\\Users\\me\\KanbanProjects\\Injectbuddy\\node_modules\\next\\dist\\bin\\next dev' },
+  ]
+  assert.deepEqual(stopRunawayTsservers('C:\\Users\\me\\KanbanProjects', { list, kill: () => {} }), [1])
+})
 
 test('servers left running in a card worktree are stopped; others are not (Tradeflow TF66 port 3100)', () => {
   const list = () => [
