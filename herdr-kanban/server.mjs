@@ -898,7 +898,9 @@ const handleRequest = async (req, res) => {
     try {
       const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '' } = JSON.parse(body)
       if (!config.projects.includes(p)) throw new Error('Unknown project')
-      const mission = !audit && missionAllowsProject(p) ? config.mission?.id || '' : ''
+      // Audits run off the board (Tradeflow TF49 was created here by mistake).
+      if (audit) throw new Error('Audits do not go on the board: follow C:/Users/PFrew/Projects/_roles/AUDIT-REQUESTS.md (auditor agent, report in Projects/_audits)')
+      const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''
       const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, prefix: config.cardPrefixes?.[p] })
       broadcastBoard(p)
       return json(res, 201, { ok: true, card })
