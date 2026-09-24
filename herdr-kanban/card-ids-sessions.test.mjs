@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { isCardId, cardNumber, nextCardId, agentName, agentRole, isBoardAgent, isReviewerAgent, isSweeperAgent } from './lib/ids.mjs'
 import { createCard, parseCard, findCard } from './lib/cards.mjs'
 import { herdrArgv, projectAgents, splitRef, approvedManagedModel, SHARED_SESSION } from './lib/herdr.mjs'
@@ -98,4 +99,19 @@ test('old bindings keep resolving in their project session; new ones go to the s
   assert.deepEqual(agents.map(a => [a.pane_id, a.session]), [['w1:p5', 'injectbuddy'], ['w1:p5@default', 'default']])
   assert.equal(agents[1].tab_id, 'w1:t4@default')
   assert.deepEqual(projectAgents('tradeflow', [], all, labels).map(a => a.name), ['b-t-7'], 'other projects\' workspaces are not ours')
+})
+
+test('an empty herdr workspace list fails instead of reading as "no workspaces"', () => {
+  // Reading it as empty made the board create a duplicate project workspace.
+  const root = mkdtempSync(join(tmpdir(), 'hkb-ws-'))
+  try {
+    writeFileSync(join(root, 'workspace'), '')
+    const moduleUrl = new URL('./lib/herdr.mjs', import.meta.url).href
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { workspaceList } from ${JSON.stringify(moduleUrl)};
+      await assert.rejects(() => workspaceList(), /malformed/);
+    `], { cwd: root, env: { ...process.env, HERDR_BIN_PATH: process.execPath }, encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

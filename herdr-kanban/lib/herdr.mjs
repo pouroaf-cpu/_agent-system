@@ -213,7 +213,11 @@ export const findWorkspace = (workspaces, label) =>
   (workspaces ?? []).find((w) => sameLabel(w.label, label))?.workspace_id ?? null
 
 export async function workspaceList(session) {
-  return (await herdr(['workspace', 'list'], { session }))?.workspaces ?? []
+  const workspaces = (await herdr(['workspace', 'list'], { session }))?.workspaces
+  // herdr sometimes answers with nothing under load. That is not "no workspaces":
+  // reading it as one made the board create a duplicate project workspace.
+  if (!Array.isArray(workspaces)) throw new Error('workspace list: malformed response')
+  return workspaces
 }
 
 // Deliberately re-listed on every call rather than cached: the operator can close
@@ -254,12 +258,15 @@ const knownWorkspace = new Map() // project session key -> workspace_id
 const workspaceBackoffUntil = new Map() // project session key -> epoch ms
 
 export async function ensureAgentWorkspace(agents = [], log, session) {
+  const label = projectLabel(session) || AGENT_WORKSPACE
   const known = knownWorkspace.get(session ?? '')
-  if (known && agents.some((a) => a.workspace_id === known && (a.session ?? SHARED_SESSION) === SHARED_SESSION)) return known
+  // The label cache (refreshed at least every 30s by agentList) also proves it is
+  // still there, so idle projects do not each re-list workspaces every poll.
+  if (known && (labelCache.labels.get(known) === label || agents.some((a) => a.workspace_id === known && (a.session ?? SHARED_SESSION) === SHARED_SESSION))) return known
   // An older herdr with no `workspace create` would otherwise fail every 2s forever.
   if (Date.now() < (workspaceBackoffUntil.get(session ?? '') ?? 0)) return null
   try {
-    const { id, created } = await agentWorkspace(projectLabel(session) || AGENT_WORKSPACE)
+    const { id, created } = await agentWorkspace(label)
     if (created) log?.(`agent workspace recreated: ${id}`)
     knownWorkspace.set(session ?? '', id)
     return id
