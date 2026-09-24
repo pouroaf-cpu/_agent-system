@@ -169,33 +169,36 @@ export function resolveGitSettings({ projectPath, gitSettings }) {
     worktreesRoot: gitSettings?.worktreesRoot || join(dirname(repoRoot), '.kanban-worktrees', repoRoot.split(/[\\/]/).pop()) }
 }
 
+// Drift or missing packages carry `installIn`: the board installs in that card
+// workspace in the background instead of routing the card to Owner (Tradeflow T-34).
+const needsInstall = (workspacePath, message) => Object.assign(new Error(`dependency setup needed: ${message}; installing dependencies in ${workspacePath}`), { installIn: workspacePath })
+const LOCKFILES = ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']
+const sameText = (a, b) => existsSync(a) === existsSync(b) && (!existsSync(a) || readFileSync(a, 'utf8').replaceAll('\r\n', '\n') === readFileSync(b, 'utf8').replaceAll('\r\n', '\n'))
+
 function prepareDependencies(workspacePath, source) {
   if (!existsSync(join(workspacePath, 'package.json'))) return
   const manifest = JSON.parse(readFileSync(join(workspacePath, 'package.json'), 'utf8'))
   const requireInstalled = (root) => {
     const missing = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).filter(name => !existsSync(join(root, 'node_modules', name, 'package.json')))
-    if (missing.length) throw new Error(`dependency setup needed: missing ${missing.slice(0, 4).join(', ')}; detach any node_modules junction before installing in ${workspacePath}`)
+    if (missing.length) throw needsInstall(workspacePath, `missing ${missing.slice(0, 4).join(', ')}`)
   }
-  if (existsSync(join(workspacePath, 'node_modules'))) { requireInstalled(workspacePath); return }
+  const local = join(workspacePath, 'node_modules')
+  if (existsSync(local) && !lstatSync(local).isSymbolicLink()) { requireInstalled(workspacePath); return }
   if (!existsSync(join(source, 'node_modules'))) {
     const common = git(source, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()
     const mainCheckout = dirname(common)
     if (existsSync(join(mainCheckout, 'node_modules'))) source = mainCheckout
   }
   if (!existsSync(join(source, 'node_modules'))) {
-    const manifest = JSON.parse(readFileSync(join(workspacePath, 'package.json'), 'utf8'))
     if (Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) throw new Error(`dependency setup needed: install dependencies in ${workspacePath}`)
     return
   }
-  for (const file of ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']) {
-    const target = join(workspacePath, file), original = join(source, file)
-    if (existsSync(target) !== existsSync(original) || (existsSync(target) && readFileSync(target, 'utf8').replaceAll('\r\n', '\n') !== readFileSync(original, 'utf8').replaceAll('\r\n', '\n'))) {
-      throw new Error(`dependency setup needed: ${file} differs from integration; install dependencies in ${workspacePath}`)
-    }
-  }
+  const drift = LOCKFILES.find(file => !sameText(join(workspacePath, file), join(source, file)))
+  if (drift) throw needsInstall(workspacePath, `${drift} differs from integration`)
+  if (existsSync(local)) { requireInstalled(workspacePath); return } // our junction, still matching
   if (git(workspacePath, ['check-ignore', 'node_modules/'], { allowFailure: true }).status !== 0) return
   requireInstalled(source)
-  symlinkSync(join(source, 'node_modules'), join(workspacePath, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+  symlinkSync(join(source, 'node_modules'), local, process.platform === 'win32' ? 'junction' : 'dir')
 }
 
 export function prepareWorktreeEnvironment(entry) {
@@ -216,43 +219,72 @@ function runInstall(folder, command, logPath) {
   })
 }
 
+const installCommand = folder => existsSync(join(folder, 'pnpm-lock.yaml')) ? 'pnpm install --frozen-lockfile'
+  : existsSync(join(folder, 'yarn.lock')) ? 'yarn install --frozen-lockfile'
+  : existsSync(join(folder, 'package-lock.json')) ? 'npm ci --no-audit --no-fund' : null
+
+// One background install per folder, behind the 5 GB disk guard. Returns the hold
+// reason ("installing dependencies in ..." is an allowed wait), or null when no
+// lockfile says how to install. Two failures hold for Owner with the reason.
+export function startDependencyInstall({ folder, tasksDir, install = runInstall, free = freeGb, minFreeGb = 5 }) {
+  const key = norm(folder), state = installs.get(key) || { failures: 0 }
+  const waiting = `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
+  if (state.running) return waiting
+  if (state.failures >= 2) return `dependency install failed twice in ${folder}: ${state.error}`
+  const command = installCommand(folder)
+  if (!command) return null
+  const gb = free(folder)
+  if (gb < minFreeGb) return `Drive ${parse(folder).root.replace(/[\\/]$/, '')} has only ${gb.toFixed(1)} GB free; free up space so dependencies can install`
+  // Detach a shared node_modules junction first: unlink the link only, never delete through it.
+  const modules = join(folder, 'node_modules')
+  try { if (lstatSync(modules).isSymbolicLink()) unlinkSync(modules) } catch (err) { if (err.code !== 'ENOENT') throw err }
+  mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
+  const logPath = join(tasksDir, '.evidence', `dependency-install-${Date.now()}.log`)
+  installs.set(key, { ...state, running: true })
+  Promise.resolve().then(() => install(folder, command, logPath)).then(
+    () => installs.delete(key),
+    err => installs.set(key, { failures: state.failures + 1, error: String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300) }))
+  return waiting
+}
+
 // Before a Builder starts: when the integration folder has a lockfile but no
 // node_modules, install there once in the background instead of sending the card
-// to Owner. Returns a hold reason, or null when the card may start.
+// to Owner. A card workspace install (started when the spawn found drift) holds
+// the card while it runs. Returns a hold reason, or null when the card may start.
 export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5 }) {
   try {
+    const entry = readWorktrees(tasksDir)[card.id.toUpperCase()]
+    const own = entry?.workspacePath && installs.get(norm(entry.workspacePath))
+    if (own?.running || own?.failures >= 2) return startDependencyInstall({ folder: entry.workspacePath, tasksDir })
     const folder = resolve(gitSettings?.integrationPath || projectPath, card.workspace || '.')
     if (!existsSync(join(folder, 'package.json'))) return null
-    const key = norm(folder), state = installs.get(key) || { failures: 0 }
-    if (state.running) return `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
-    if (state.failures >= 2) return `dependency install failed twice in ${folder}: ${state.error}`
-    const entry = readWorktrees(tasksDir)[card.id.toUpperCase()]
+    const state = installs.get(norm(folder)) || { failures: 0 }
+    if (state.running || state.failures >= 2) return startDependencyInstall({ folder, tasksDir })
     if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
     if (!state.failures && existsSync(join(folder, 'node_modules'))) return null
     if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
     if (!state.failures && existsSync(join(dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()), 'node_modules'))) return null
     const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
     if (!Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) return null
-    const command = existsSync(join(folder, 'pnpm-lock.yaml')) ? 'pnpm install --frozen-lockfile'
-      : existsSync(join(folder, 'yarn.lock')) ? 'yarn install --frozen-lockfile'
-      : existsSync(join(folder, 'package-lock.json')) ? 'npm ci --no-audit --no-fund' : null
-    if (!command) return null
-    const gb = free(folder)
-    if (gb < minFreeGb) return `Drive ${parse(folder).root.replace(/[\\/]$/, '')} has only ${gb.toFixed(1)} GB free; free up space so dependencies can install`
-    mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
-    const logPath = join(tasksDir, '.evidence', `dependency-install-${Date.now()}.log`)
-    installs.set(key, { ...state, running: true })
-    Promise.resolve().then(() => install(folder, command, logPath)).then(
-      () => installs.delete(key),
-      err => installs.set(key, { failures: state.failures + 1, error: String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300) }))
-    return `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
+    return startDependencyInstall({ folder, tasksDir, install, free, minFreeGb })
   } catch {
     return null // the spawn path reports the dependency problem as before
   }
 }
 
+// Cards list files from the workspace (`app/x.tsx`) or from the project root with
+// the workspace prefix (`site/app/x.tsx`). Drop that prefix unless the workspace
+// really has a folder of that name, so it is never doubled (Tradeflow T-31..T-35).
+function workspaceFiles(card, workspace) {
+  const prefix = slash(card.workspace || '').replace(/^\.\/|\/+$/g, '')
+  return cardFiles(card.path).map((file) => {
+    const f = slash(file).replace(/^\.\//, '')
+    return prefix && prefix !== '.' && f.toLowerCase().startsWith(`${prefix.toLowerCase()}/`) && !existsSync(join(workspace, prefix)) ? f.slice(prefix.length + 1) : f
+  })
+}
+
 function filesFor(card, workspace) {
-  return cardFiles(card.path).map((file) => norm(resolve(workspace, file))).sort()
+  return workspaceFiles(card, workspace).map((file) => norm(resolve(workspace, file))).sort()
 }
 
 function safeInside(parent, child) {
@@ -359,7 +391,7 @@ function commitsAfter(entry) {
 }
 
 function expectedRepoFiles(card, entry) {
-  return cardFiles(card.path).map((file) => slash(join(entry.workspaceRel || '', file))).sort()
+  return workspaceFiles(card, entry.integrationWorkspace || entry.workspacePath).map((file) => slash(join(entry.workspaceRel || '', file))).sort()
 }
 
 function commitFiles(entry, commit) {

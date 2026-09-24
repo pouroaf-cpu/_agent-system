@@ -17,6 +17,7 @@ import { sessionOf } from './herdr.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
+import { CARD_ID } from './ids.mjs'
 
 const oneLine = (s, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max)
 const ms = at => Date.parse(at || '') || 0
@@ -81,7 +82,9 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
       if (builderSlotsFree <= 0) return true
       const blockers = unmetBlockers(card, board, registry)
       if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
-      return /held by [A-Z]+-?\d+|^installing dependencies in /i.test(String(holds[card.id] || ''))
+      // Same rule as autospawn: the holder may sit in any live lane, Owner included.
+      const hold = String(holds[card.id] || ''), holder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
+      return (!!holder && holder !== card.id && byId.has(holder)) || hold.startsWith('installing dependencies in ')
     }
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true

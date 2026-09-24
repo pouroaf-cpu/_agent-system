@@ -22,7 +22,7 @@ import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
-import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependencyInstallHold } from './worktrees.mjs'
+import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
 import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
@@ -293,11 +293,13 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           && !blockedByIssue && unmet.length > 0
           && prerequisites.every(([, hits]) => hits.length === 1 && ['owner', 'planning', 'planned', 'queue', 'working', 'review', 'completed'].includes(hits[0].column))
         const cardProblem = !!(dupId || dupKey || cycle || hold.startsWith('card not ready') || (unmet.length && !allowedDependencyWait && !blockedByIssue))
-        const fileHolder = hold.match(/files busy(?:, likely held by|, held by) ([A-Z]+-\d+)/i)?.[1]
+        // Waiting on another live card's files is allowed in any lane, Owner included:
+        // only the holder is escalated, never the cards queued behind it (Tradeflow T-35).
+        const fileHolder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
+        const allowedFileWait = !!fileHolder && fileHolder !== freshCard.id && liveCards(fresh).some(c => c.id === fileHolder)
         const transient = ['slots full', 'cooling down after failed spawn'].includes(hold)
-          || hold.startsWith('files busy') && fileHolder && holderOf(fresh).includes(fileHolder)
         const workflow = readWorkflow(tasksDir)[freshCard.id] || {}
-        if (allowedDependencyWait || hold.startsWith('installing dependencies in ')) {
+        if (allowedDependencyWait || allowedFileWait || hold.startsWith('installing dependencies in ')) {
           held[freshCard.id] = hold
           delete workflow.queueHoldSince
           updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
@@ -358,6 +360,16 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         slots--
       } catch (err) {
         if (err.paused) { held[moved.id] = err.message; continue }
+        // Dependency drift in the card workspace: install there in the background and wait.
+        const installing = err.installIn && startDependencyInstall({ folder: err.installIn, tasksDir })
+        if (installing && !installing.startsWith('installing dependencies in ')) err.message = installing // low disk or two failures: Owner
+        else if (installing) {
+          moveCard(tasksDir, moved.id, 'queue')
+          held[moved.id] = installing
+          log?.(`${moved.id}: ${err.message}`)
+          onChange?.()
+          continue
+        }
         if (!err.startFailed) recordOperationalFailure(tasksDir, moved, err.message, projectPath, gitSettings)
         recordSpawnFailure({ project, cap: max, reason: err.message })
         if (err.preservePane) {
