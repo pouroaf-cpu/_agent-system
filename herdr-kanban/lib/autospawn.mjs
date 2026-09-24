@@ -13,7 +13,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, findCard, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
+import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
@@ -715,7 +715,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     beginSpawn(paneId)
     try {
       // Same generous startup budget as a builder — Opus is no faster to boot.
-      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(err => { throw startFailed(err) }))?.name ?? name
+      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session, browser: cards.some(needsBrowser) }).catch(err => { throw startFailed(err) }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({
@@ -798,7 +798,7 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
     try {
       const selected = assignmentForCard?.(cards[0], 'issues')
       const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
-      name = (await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session }))?.name ?? name
+      name = (await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session, browser: cards.some(needsBrowser) }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({

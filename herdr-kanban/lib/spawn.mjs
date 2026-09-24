@@ -4,7 +4,7 @@
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList } from './herdr.mjs'
 import { workerPrompt, paneLabel, agentName } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
-import { readBoard, findCard, moveCard, columnByKey } from './cards.mjs'
+import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
 import { recordUsageFinish } from './request-usage.mjs'
 import { cleanupPreparedWorktree, prepareCardWorktree } from './worktrees.mjs'
@@ -223,7 +223,7 @@ export async function spawnForCard({
   }
 
   try {
-    if (!resume) name = (await agentStart({ name, paneId, model, engine, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session }))?.name ?? name
+    if (!resume) name = (await agentStart({ name, paneId, model, engine, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session, browser: needsBrowser(card) }))?.name ?? name
     const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
     if (agent) onPane?.({ pane_id: paneId, tab_id: tabId, model, name, spawning: true, agent_session: agent.agent_session, ...worktree })
   } catch (err) {

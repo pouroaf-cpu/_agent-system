@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
+import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, stagedInput, submitStaged } from './spawn.mjs'
@@ -139,7 +139,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
       save(tasksDir, owners)
-      owner.name = (await agentStart({ name: owner.name, paneId, model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
+      owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
     const submit = async (card, owner, agent) => {

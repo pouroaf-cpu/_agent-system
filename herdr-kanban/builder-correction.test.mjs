@@ -28,7 +28,7 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
   } })
   mock.module('./lib/activity.mjs', { namedExports: { activityLog: entry => logs.push(entry) } })
   mock.module('./lib/bindings.mjs', { namedExports: { readBindings: () => ({}), unbind: () => {} } })
-  mock.module('./lib/cards.mjs', { namedExports: { readBoard: () => ({ queue: [card] }), findCard: () => card, moveCard: () => card, columnByKey: () => ({}) } })
+  mock.module('./lib/cards.mjs', { namedExports: { readBoard: () => ({ queue: [card] }), findCard: () => card, moveCard: () => card, columnByKey: () => ({}), needsBrowser: () => true } })
   mock.module('./lib/request-usage.mjs', { namedExports: { recordUsageFinish: async () => {}, readUsage: () => ({}) } })
   mock.module('./lib/project-control.mjs', { namedExports: { assertPromptAllowed: () => {} } })
   mock.module('./lib/card-run.mjs', { namedExports: { assertCardRunSelection: () => {}, cardRunContext: () => null, bindCardRunAssignment: () => {} } })

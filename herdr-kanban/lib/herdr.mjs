@@ -348,7 +348,7 @@ export function assertManagedModel({ name, model }) {
   if (!allowed.includes(model)) throw new Error(`${name} must use model ${allowed.join(' or ')}, got ${model || '(default)'}`)
 }
 
-export function agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs = [], timeoutMs = 90000 }) {
+export function agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs = [], timeoutMs = 90000, browser = true }) {
   const cfg = typeof engine === 'string' ? { kind: engine } : (engine || {})
   const agentKind = kind || cfg.kind || 'claude'
   const args = ['agent', 'start', name, '--kind', agentKind, '--pane', paneId, '--timeout', String(timeoutMs)]
@@ -370,6 +370,9 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     if (!/orchestrator/i.test(name || '')) {
       args.push('-c', String.raw`hooks.state.'C:\Users\PFrew\.codex\hooks.json:user_prompt_submit:0:0'.enabled=false`)
     }
+    // Browser MCPs start ~4 node processes per Codex agent; 27 idle agents' worth
+    // overloaded herdr (2026-09-24). Agents whose cards don't browse start without them.
+    if (!browser) for (const server of ['chrome-devtools', 'playwright', 'node_repl']) args.push('-c', `mcp_servers.${server}.enabled=false`)
     if (model) args.push('--model', model)
     if (Array.isArray(cfg.reasoningArgs)) args.push(...cfg.reasoningArgs.map(String))
     args.push(...guardArgs)
@@ -394,11 +397,11 @@ async function freeName(base, paneId, session) {
 }
 
 // Resolves to { name } — the name herdr actually registered.
-export async function agentStart({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs = 90000, session }) {
+export async function agentStart({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs = 90000, session, browser = true }) {
   assertPromptAllowed(session)
   name = await freeName(name, paneId, session)
   try {
-    const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs })
+    const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs, browser })
     return { ...(await hold(paneId, () => herdr(args, { timeout: timeoutMs + 15000, session }))), name }
   } catch (err) {
     if (!/agent_not_ready/.test(err.message)) throw err

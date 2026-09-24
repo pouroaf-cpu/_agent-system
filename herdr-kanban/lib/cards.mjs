@@ -675,3 +675,10 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   writeFileSync(path, template.replace(/\{\{(ID|TITLE|CREATED|CATEGORY|WORKSPACE|AUDIT|TOOLS|MISSION|BRIEF|PROJECT_CONSTRAINTS)\}\}/g, (_, key) => values[key]), { flag: 'wx' })
   return parseCard(path, audit ? 'review' : 'planning')
 }
+
+// Whether an agent for this card needs the browser MCPs (chrome-devtools, playwright,
+// computer-use). UI cards and any card naming browser work get them; others start lean.
+export function needsBrowser(card) {
+  if (card.category === 'ui' || card.audit) return true
+  try { return /chrome-devtools|playwright|browser|screenshot|viewport|lighthouse|visual|\b\d{3,4}\s?px\b/i.test(readFileSync(card.path, 'utf8')) } catch { return true }
+}

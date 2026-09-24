@@ -2388,3 +2388,9 @@ test('parseCard reuses a parse only while the file is unchanged', () => {
     assert.equal(parseCard(card.path, 'planning').buildAttempts, 1, 'a changed file is parsed again')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('a Codex agent whose card does not browse starts without browser MCPs', () => {
+  const lean = agentStartArgs({ name: 'b-t-1', paneId: 'p', model: 'gpt-6-luna', engine: { kind: 'codex' }, browser: false })
+  for (const server of ['chrome-devtools', 'playwright', 'node_repl']) assert.ok(lean.includes(`mcp_servers.${server}.enabled=false`))
+  assert.ok(!agentStartArgs({ name: 'b-t-1', paneId: 'p', model: 'gpt-6-luna', engine: { kind: 'codex' } }).some(a => /mcp_servers/.test(a)), 'browser cards keep them')
+})
