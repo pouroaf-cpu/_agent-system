@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, wat
 import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runCardPlanner, readCardPlanners, requestPlannerCorrection } from './lib/card-planner.mjs'
+import { runCardPlanner, readCardPlanners, operatorRetry } from './lib/card-planner.mjs'
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
@@ -850,12 +850,7 @@ const handleRequest = async (req, res) => {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
-      // Dragging a card out of Owner is the operator's "try again": clear the held
-      // failure and give Planning/Issues a fresh Planner with reset counters.
-      if (before.column === 'owner' && to !== 'archive') {
-        updateWorkflow(tasksDirOf(p), card.id, { operational: null })
-        if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDirOf(p), card.id)
-      }
+      if (before.column === 'owner' && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
       if (to === 'archive') {
         unbind(tasksDirOf(p), id)
         stopCardRun(p, id, 'Archived by operator from board')

@@ -17,7 +17,7 @@
 
 import { existsSync, appendFileSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview } from './lib/cards.mjs'
+import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings } from './lib/worktrees.mjs'
@@ -26,7 +26,7 @@ import { auditDestination, auditStatus } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection } from './lib/card-planner.mjs'
 import { assertReviewHandoff, assertReviewInputs } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
-import { appendHistory, writeCurrentFeedback } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
@@ -103,6 +103,7 @@ if (verb === 'park' && !note) fail('park needs to say why no agent can resolve i
 if (verb === 'rework' && !note) fail('rework needs feedback the builder can act on: hkb rework T-02 "criterion 2 fails: ..."')
 let card
 let previousColumn
+let approvalWait = false
 try {
   const current = findCard(tasksDir, cardId)
   // Review runs on integrated code, so every Builder handoff goes to Completed first.
@@ -117,6 +118,12 @@ try {
     console.log(`${current.id}: ${verb} handoff already recorded (${current.column})`)
     process.exit(0)
   }
+  const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))
+  if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again. Edit only your own sections; never rewrite other sections.`)
+  // A Planner cannot add an operator-only approval, so any Planner handoff on a plan
+  // held only by one goes to Owner with the question, never back to planning (T-148).
+  approvalWait = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['move', 'issue', 'owner', 'park'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
+  if (approvalWait) target = 'owner'
   if (reviewClaim || current.column === 'review') assertReviewHandoff(reviewRoot, tasksDir, current.id, reviewClaim)
   if (reviewClaim && !['pass', 'rework', 'owner', 'audit', 'issue'].includes(verb)) fail('Reviewer claim permits only scoped review handoffs')
   previousColumn = current.column
@@ -133,7 +140,7 @@ try {
     }
     auditIntake = target === 'planning'
   }
-  if (['owner', 'park'].includes(verb) && !explicitOwnerReason(note)) {
+  if (['owner', 'park'].includes(verb) && !approvalWait && !explicitOwnerReason(note)) {
     const auditReport = current.audit && /audit report ready/i.test(note)
     if (!auditReport) {
       target = current.column
@@ -156,7 +163,7 @@ try {
     if (!canArchive(current)) fail('pass needs current nonempty Reviewer evidence and latest Review verdict: PASS already recorded')
     assertReviewInputs(reviewRoot, tasksDir, current.id)
   }
-  if (['issue', 'rework'].includes(verb)) {
+  if (['issue', 'rework'].includes(verb) && !approvalWait) {
     const category = failureCategory(note)
     if (category === 'incidental') fail('Incidental findings alone are not a failed handoff: record evidence/classification in the current result and use the normal done/pass handoff only when every agreed criterion is met. In-scope or change-caused defects still require issue/rework.')
     target = failureDestination(category, current.column)
@@ -181,7 +188,7 @@ try {
     }
   }
   const planWorkspace = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? integrationWorkspace(current) : undefined
-  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, planWorkspace, correction: ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
+  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, planWorkspace, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   if (auditIntake && previousColumn !== 'planning') {
@@ -190,12 +197,13 @@ try {
   }
   if (!card.audit && (verb === 'rework' || (previousColumn === 'review' && ['issues', 'planning'].includes(target)))) setAutoReview(tasksDir, card.id, true)
   appendDirtySnapshot(card, dirtySnapshot)
-  if (previousColumn === 'review' || ['issue', 'rework', 'owner', 'park'].includes(verb)) stopCardRun(basename(dirname(tasksDir)), card.id, previousColumn === 'review' ? `Review handoff: ${verb}` : `Stopped at ${verb}`)
+  if (previousColumn === 'review' || approvalWait || ['issue', 'rework', 'owner', 'park'].includes(verb)) stopCardRun(basename(dirname(tasksDir)), card.id, previousColumn === 'review' ? `Review handoff: ${verb}` : `Stopped at ${verb}`)
 } catch (err) {
   fail(err.message)
 }
 
-if (HEADING[verb]) {
+if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
+else if (HEADING[verb]) {
   const tail = capped
     ? `\n\nRepeated review failure: Planner must diagnose the root cause and record a changed approach before requeueing. Preserve all evidence and acceptance criteria.\n`
     : '\n'

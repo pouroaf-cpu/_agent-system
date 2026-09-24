@@ -10,7 +10,10 @@ export function workflowLimits() {
 }
 export function checkWorkflowLimits(tasksDir, id, role, now = Date.now()) {
   const limits = workflowLimits()
-  const runs = Object.values(readUsage(tasksDir).runs).filter(run => !run.duplicateOf && run.cardIds?.includes(id))
+  // Only runs since the operator's last retry count (limitsResetAt, set when a card is
+  // dragged out of Owner); otherwise a card like T-148 stays held forever.
+  const since = Date.parse(readWorkflow(tasksDir)[id]?.limitsResetAt) || 0
+  const runs = Object.values(readUsage(tasksDir).runs).filter(run => !run.duplicateOf && run.cardIds?.includes(id) && (Date.parse(run.start?.at) || 0) >= since)
   const stage = runs.filter(run => run.role === role)
   const unknown = runs.some(run => !run.delta || run.shared || run.cardIds.length !== 1)
   const metrics = [

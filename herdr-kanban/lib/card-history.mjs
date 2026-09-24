@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
@@ -13,6 +13,21 @@ export function appendHistory(tasksDir, id, event) {
   const entry = { ...event, id: randomUUID(), at: new Date().toISOString(), run: event.run || process.env.HERDR_AGENT_SESSION || null, agent: event.agent || process.env.HERDR_AGENT_NAME || 'board' }
   appendFileSync(path, JSON.stringify(entry) + '\n')
   return entry
+}
+// T-147: a Builder rewrote its whole card and dropped Files, plan and criteria.
+// A handoff must keep every required section that had content in the board's last
+// saved copy of the card. Nothing is restored automatically.
+const REQUIRED_SECTIONS = ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']
+const sectionBody = (text, name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
+export function droppedSections(tasksDir, id, text) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return []
+  const lines = readFileSync(path, 'utf8').trim().split('\n')
+  let saved
+  for (let i = lines.length - 1; i >= 0 && saved == null; i--) {
+    try { const entry = JSON.parse(lines[i]); if (typeof entry.text === 'string') saved = entry.text } catch { /* torn line */ }
+  }
+  return saved ? REQUIRED_SECTIONS.filter(name => sectionBody(saved, name) && !sectionBody(text, name)) : []
 }
 const historyMarker = /^\*\*(?:Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \d+|Technical recovery|Diagnostic recovery|Dirty snapshot)\*\*/m
 export function focusedText(text, role) {

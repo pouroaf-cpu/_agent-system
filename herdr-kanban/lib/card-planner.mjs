@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard } from './cards.mjs'
+import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval } from './cards.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
@@ -34,6 +34,12 @@ export function requestPlannerCorrection(dir, cardId) {
   delete owner.noHandoffCount
   save(dir, owners)
   return true
+}
+// Dragging a card out of Owner is the operator's "try again": clear the held failure,
+// restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
+export function operatorRetry(tasksDir, cardId, to) {
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null })
+  if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, deliver, recordUsageStart, recordUsageFinish }
@@ -133,6 +139,12 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     for (let card of [...board.issues, ...board.planning]) {
       if (onlyIds && !onlyIds.includes(card.id)) continue
       if (!card.cardOwned && !card.audit) continue
+      // Waiting only on an operator-only approval: ask the operator, never re-prompt (T-148).
+      if (awaitsOperatorApproval(readFileSync(card.path, 'utf8'))) {
+        askForApproval(tasksDir, card)
+        stopCardRun(project, card.id, 'Waiting for investigation approval')
+        continue
+      }
       let owner = owners[card.id]
       const held = operationalHold(tasksDir, card, projectPath)
       // A Planner that stopped without a handoff is not a reason to park the card

@@ -13,6 +13,7 @@ import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
+import { checkWorkflowLimits } from './workflow-limits.mjs'
 
 // ponytail: in-memory clock, so a restart gives every card a fresh window.
 const seen = new Map() // `${tasksDir}|${id}` -> { column, mtime, since }
@@ -60,9 +61,12 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     // One retry per lane visit: a card file that changed since the retry is a new visit.
     const last = workflow[card.id]?.stallRecovery
     const tried = last?.column === card.column && last.mtime === card.mtime
-    const hold = oneLine(workflow[card.id]?.operational?.reason || holds[card.id] || registry[card.id]?.reason || (tried && last.hold))
+    // A workflow-limit hold never clears by retrying, so it goes straight to Owner with its reason.
+    const role = { planning: 'planner', issues: 'planner', queue: 'builder', working: 'builder', review: 'reviewer' }[card.column]
+    const limit = role && checkWorkflowLimits(tasksDir, card.id, role)
+    const hold = oneLine(limit || workflow[card.id]?.operational?.reason || holds[card.id] || registry[card.id]?.reason || (tried && last.hold))
     const reason = `no change for ${mins}m and no agent working${hold ? `; last hold: ${hold}` : ''}`
-    let action = tried ? '' : recover(tasksDir, card, workflow[card.id])
+    let action = tried || limit ? '' : recover(tasksDir, card, workflow[card.id])
     if (action) {
       updateWorkflow(tasksDir, card.id, { stallRecovery: { column: card.column, mtime: card.mtime, at, action, hold } })
       appendHistory(tasksDir, card.id, { event: 'stall-recovery', stage: card.column, reason, action })
@@ -70,7 +74,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     } else {
       action = 'moved to Owner'
       const moved = moveCard(tasksDir, card.id, 'owner')
-      writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} sat in ${lane} for ${mins} minutes with no agent working on it. Last hold/error: ${hold || 'none recorded'}. ${tried ? 'The automatic retry already ran and did not move it.' : 'No automatic recovery applies.'} All work is preserved. Should the board try again (drag it back to ${lane}), or do you want to change or cancel it?`)
+      writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} sat in ${lane} for ${mins} minutes with no agent working on it. Last hold/error: ${hold || 'none recorded'}. ${limit ? 'Dragging it back resets its workflow-limit counters.' : tried ? 'The automatic retry already ran and did not move it.' : 'No automatic recovery applies.'} All work is preserved. Should the board try again (drag it back to ${lane}), or do you want to change or cancel it?`)
     }
     appendFileSync(join(tasksDir, 'stalls.log'), `${at}\t${card.id}\t${card.column}\t${reason}\t${action}\n`)
     stalls.push({ id: card.id, column: card.column, reason, action })

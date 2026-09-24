@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
-import { appendHistory } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
 import { CARD_ID, nextCardId } from './ids.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
@@ -48,10 +48,12 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   }
   if (readiness === 'investigation') {
     const plan = section('Implementation plan').replaceAll('**', '')
-    if (!/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])) throw new Error('Plan incomplete: investigation requires explicit approval on the card')
     if (!/(?:check|measurement)\s*(?:commands?|method)?\s*:\s*\S|setup\/start\/check commands?[^\n]*\n[\s\S]*?```/i.test(plan) || !/(?:expected result|disposition)\s*:\s*\S/i.test(plan) || !/stop rules?\s*:\s*\S/i.test(plan)) {
       throw new Error('Plan incomplete: investigation needs a measurement/check, expected result or disposition, and stop rules')
     }
+    // Checked last: only the operator can add this marker, so a plan failing on it
+    // alone is waiting for the operator, not for more planning (T-148).
+    if (!/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])) throw Object.assign(new Error('Plan incomplete: investigation requires explicit approval on the card'), { operatorApproval: true })
   }
   if (readiness === 'build-ready') {
     const plan = section('Implementation plan')
@@ -77,6 +79,19 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
       if (!/^\*\*Callers checked:\*\*[ \t]*\S/m.test(plan)) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
     }
   }
+}
+
+// A complete plan held only by an operator-only marker. The board asks the operator
+// once (Owner) instead of re-prompting a Planner that cannot add the marker.
+export function awaitsOperatorApproval(text) {
+  try { validatePlan(text) } catch (error) { return !!error.operatorApproval }
+  return false
+}
+export const approvalQuestion = (id) => `Approve the investigation for ${id}? The plan is ready, but only you can approve it: add the line \`**Investigation approved:** yes\` above ## Approved brief, then drag the card back to Planning. Or edit or cancel the card.`
+export function askForApproval(tasksDir, card) {
+  const moved = moveCard(tasksDir, card.id, 'owner')
+  writeCurrentFeedback(tasksDir, moved, 'Needs you', approvalQuestion(card.id))
+  return moved
 }
 
 // Column order is board order. `dir` is the folder under <project>/TASKS/.
