@@ -504,3 +504,20 @@ test('an untracked evidence log in the card worktree does not hold integration',
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('a build-regenerated tracked file outside the card holds nothing; a dirty card file still does', () => {
+  const f = fixture()
+  try {
+    writeFileSync(join(f.integration, 'sitemap.xml'), 'base\n'); git(f.integration, 'add', 'sitemap.xml'); git(f.integration, 'commit', '-m', 'sitemap')
+    for (const [id, dirty, status] of [['T-1', 'sitemap.xml', 'integrated'], ['T-2', 'app.js', null]]) {
+      const card = f.addCard(id)
+      const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
+      writeFileSync(join(wt, 'app.js'), `${id}\n`); git(wt, 'commit', '-am', `${id} change`)
+      writeFileSync(join(wt, dirty), 'regenerated\n')
+      f.complete(id)
+      const result = reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === id)
+      if (status) assert.equal(result.status, status)
+      else assert.notEqual(result?.status, 'integrated')
+    }
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
