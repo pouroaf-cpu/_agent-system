@@ -33,6 +33,7 @@ export function requestPlannerCorrection(dir, cardId) {
   delete owner.handoffRetried
   delete owner.inactiveSince
   delete owner.noHandoffCount
+  delete owner.deliveryFailures
   save(dir, owners)
   return true
 }
@@ -115,7 +116,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         submitted: false,
         replacementAttempts: (previous?.replacementAttempts || 0) + (previous && !previous.recoveryReady && !fresh ? 1 : 0),
         // Two no-handoffs already sent the card to Owner; a new run means the operator returned it.
-        ...(previous ? { previousPaneId: previous.paneId, correctionRequestedAt: previous.correctionRequestedAt, handoffRetried: previous.handoffRetried, correctionRounds: previous.correctionRounds, failureFingerprint: previous.failureFingerprint, sameFailureCount: previous.sameFailureCount, diagnosticUsed: previous.diagnosticUsed, diagnosticFingerprint: previous.diagnosticFingerprint, diagnosticRound: previous.diagnosticRound, noHandoffCount: previous.noHandoffCount >= 2 ? 0 : previous.noHandoffCount, noHandoffReason: previous.noHandoffReason } : {}),
+        ...(previous ? { previousPaneId: previous.paneId, correctionRequestedAt: previous.correctionRequestedAt, handoffRetried: previous.handoffRetried, correctionRounds: previous.correctionRounds, failureFingerprint: previous.failureFingerprint, sameFailureCount: previous.sameFailureCount, diagnosticUsed: previous.diagnosticUsed, diagnosticFingerprint: previous.diagnosticFingerprint, diagnosticRound: previous.diagnosticRound, noHandoffCount: previous.noHandoffCount >= 2 ? 0 : previous.noHandoffCount, noHandoffReason: previous.noHandoffReason, deliveryFailures: previous.deliveryFailures } : {}),
       }
       save(tasksDir, owners)
       await waitForPrompt(paneId, { session })
@@ -148,6 +149,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         throw new Error('planner prompt produced no observed state change')
       }
       assertPlannerAssignment(tasksDir, card.id, owner)
+      if (owner.deliveryFailures) { delete owner.deliveryFailures; save(tasksDir, owners) }
       updateWorkflow(tasksDir, card.id, { operational: null })
       return true
     }
@@ -207,7 +209,15 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           owner.revokedPaneIds = [...new Set([...(owner.revokedPaneIds || []), owner.paneId])]
           await paneClose(owner.paneId, session).catch(() => {})
         }
+        owner.deliveryFailures = (owner.deliveryFailures || 0) + 1
         save(tasksDir, owners)
+        // Two fresh Planners in a row never took their prompt (e.g. the agent exits at
+        // start): another launch would loop, so ask the operator once.
+        if (owner.deliveryFailures >= 2) {
+          const moved = moveCard(tasksDir, card.id, 'owner')
+          writeCurrentFeedback(tasksDir, moved, 'Needs you', `Two Planner sessions in a row for ${card.id} never accepted their prompt (last: ${owner.paneId}, agent ${deliveryAgent ? deliveryAgent.agent_status : 'not running'}). The agent may be exiting at start in this project; check that pane's output. Drag the card back to Planning to try again.`)
+          continue
+        }
       }
       const held = !deliveryFailed && operationalHold(tasksDir, card, projectPath)
       // A Planner that stopped without a handoff is not a reason to park the card

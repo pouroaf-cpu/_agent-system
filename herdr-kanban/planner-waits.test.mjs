@@ -63,6 +63,18 @@ try {
     assert.equal((await run(Date.now())).spawnedNewAgent, true)
     assert.deepEqual(log.delivered, ['pane-2'])
     assert.ok(readCardPlanners(dir)[card.id].revokedPaneIds.includes('gone'))
+    assert.equal(readCardPlanners(dir)[card.id].deliveryFailures, undefined, 'a confirmed delivery clears the count')
+  }
+  // A second fresh Planner that never takes its prompt goes to Owner, never loops.
+  {
+    const { dir, log, run } = fixture('looping')
+    const card = createCard(dir, { title: 'Looping', brief: 'Plan it' })
+    saveCardPlanners(dir, { [card.id]: { assignmentId: 'a1', lifecycle: 'active', paneId: 'dead', submitted: true, deliveryFailures: 1, revokedPaneIds: [] } })
+    saveDelivery('looping', 'dead', { text: 'x', key: 'k', status: 'uncertain' })
+    assert.equal(await run(Date.now()), null)
+    assert.equal(log.starts, 0)
+    assert.equal(findCard(dir, card.id).column, 'owner')
+    assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /never accepted their prompt/)
   }
 
   // 5. Blocked-by prerequisites unfinished (Tradeflow TF44): wait, no Planner, no loop.
