@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, requestPlannerCorrection } from './lib/card-planner.mjs'
+import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -291,6 +292,9 @@ async function pollProject(project) {
     }
     // Observe usage/results during Pause, but leave assignments and recovery intact.
     if (controlState(project, CONFIG_PATH).paused) { broadcastBoard(project); return }
+    // Pushover alert for every card that newly lands in Owner (one attempt each).
+    alertOwnerCards({ project, tasksDir }).then(ids => { if (ids.length) activity(project, ids.join(','), 'owner-alert', 'Pushover sent') })
+      .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
     // Safety net first, so a failure later in this poll cannot hide a stall.
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
       try {
