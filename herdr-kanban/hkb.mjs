@@ -20,7 +20,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection } from './lib/card-planner.mjs'
@@ -179,6 +179,10 @@ try {
     appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note } })
+  }
+  if (verb === 'done' && current.cardOwned && ['working', 'issues'].includes(current.column)) {
+    const commitError = handoffCommitError(tasksDir, current)
+    if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
   }
   if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
     const text = readFileSync(current.path, 'utf8')

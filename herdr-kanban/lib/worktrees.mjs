@@ -532,6 +532,15 @@ function validateCompleted(card, entry) {
   return commits[0]
 }
 
+// The integration gate, run at the Builder's `hkb done` so the Builder fixes its own
+// commit while it is still there, instead of integration refusing it on every poll
+// (Tradeflow TF51 committed an out-of-scope llms.txt). Null when there is no worktree.
+export function handoffCommitError(tasksDir, card) {
+  const entry = worktreeForCard(tasksDir, card.id)
+  if (!entry?.worktreePath || !existsSync(entry.worktreePath)) return null
+  try { validateCompleted(card, entry); return null } catch (err) { return err.message }
+}
+
 // Rebase the card's one commit onto the integration HEAD inside its own worktree
 // (never the integration checkout). The pre-rebase commit keeps a recovery ref.
 function rebaseCardOnto(entry, head) {

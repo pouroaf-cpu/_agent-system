@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
@@ -542,5 +542,21 @@ test('two queued cards with saved work on a shared file: the older worktree goes
     // Tradeflow T-38 and TF56 each held the other forever.
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: older, projectPath: f.integration }), null)
     assert.match(overlapHoldReason({ tasksDir: f.tasks, card: younger, projectPath: f.integration }), /held by T-1/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('hkb done refuses a commit with out-of-scope files while the Builder can fix it', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
+    moveCard(f.tasks, 'T-1', 'working')
+    writeFileSync(join(wt, 'app.js'), 'card\n'); writeFileSync(join(wt, 'llms.txt'), 'out of scope\n')
+    git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'T-1 change')
+    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8' })
+    // Tradeflow TF51: the out-of-scope file was only caught at integration, on every poll.
+    assert.equal(run.status, 1)
+    assert.match(run.stderr, /done refused: commit must change only card-listed files/)
+    assert.equal(findCard(f.tasks, 'T-1').column, 'working')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
