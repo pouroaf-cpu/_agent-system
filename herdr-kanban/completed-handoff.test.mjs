@@ -138,7 +138,7 @@ test('finished Builder output is durable before close; working/mismatched sessio
   const run = () => reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
   assert.equal((await run())[0].status, 'waiting-builder'); assert.equal(closed, 0); assert.equal(integrated, 0)
   agent.agent_status = 'done'; agent.agent_session.value = 'other'
-  await assert.rejects(run, /identity/); assert.equal(closed, 0)
+  assert.match((await run())[0].reason, /identity/); assert.equal(closed, 0)
   agent.agent_session.value = 'original'
   await run(); await run()
   assert.equal(closed, 1); assert.equal(integrated, 2)
@@ -165,7 +165,7 @@ test('finished Builder whose card sits in Review is retired and integrated', asy
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', commit: 'saved' } }))
   writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { completedStage: 'working', builder: { pane_id: 'p', name: 'builder' } } }))
   writeFileSync(join(tasksDir, '.request-usage.json'), JSON.stringify({ runs: { r: { paneId: 'p', role: 'builder', cardIds: ['T-1'], sessionId: 's' } } }))
-  let agent = { pane_id: 'p', name: 'builder', agent_session: { value: 's' }, agent_status: 'done' }
+  let agent = { pane_id: 'p', name: 'builder', agent_session: { value: 's' }, agent_status: 'idle' }
   const io = { agentList: async () => agent ? [agent] : [], paneRead: async () => 'out', recordUsageFinish: async () => {},
     paneClose: async () => { agent = null }, reconcile: () => [{ id: 'T-1', status: 'integrated' }] }
   assert.equal((await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io }))[0].status, 'integrated')

@@ -14,6 +14,8 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds,
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees } }) {
   const results = [], session = sessionOf(project)
   for (const entry of Object.values(readWorktrees(tasksDir))) {
+    // One card's problem must never freeze the whole project poll.
+    try {
     if (entry.cleaned || (onlyIds && !onlyIds.includes(entry.cardId))) continue
     const card = findCard(tasksDir, entry.cardId)
     if (!['completed', 'review'].includes(card.column)) continue
@@ -26,7 +28,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds,
       const agent = inventory.find(a => a.pane_id === paneId)
       if (!identity || !matches(agent)) throw new Error(`${card.id}: finished Builder identity unavailable; preserve checkout`)
       if (agent.agent_status === 'working') { results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for Builder handoff turn to finish' }); continue }
-      if (agent.agent_status !== 'done') throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)
+      if (!['done', 'idle'].includes(agent.agent_status)) throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)
       if (saved.completedStage !== 'working' || Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) throw new Error(`${card.id}: Builder handoff is not complete`)
       const delivery = readDelivery(session, paneId)
       if (delivery && !['confirmed', 'cancelled'].includes(delivery.status)) throw new Error(`${card.id}: unresolved Builder delivery; preserve checkout`)
@@ -35,7 +37,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds,
       await io.recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
       const history = appendHistory(tasksDir, card.id, { event: 'completed-builder-retirement', builder, sessionId: identity, worktree: entry, card: readFileSync(card.path, 'utf8'), output })
       const current = (await io.agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
-      if (!matches(current) || current.agent_status !== 'done' || !['completed', 'review'].includes(findCard(tasksDir, card.id).column)) throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
+      if (!matches(current) || !['done', 'idle'].includes(current.agent_status) || !['completed', 'review'].includes(findCard(tasksDir, card.id).column)) throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
       await io.paneClose(paneId, session)
       updateWorkflow(tasksDir, card.id, { builderRetired: { paneId, started: builder.started, sessionId: identity, historyId: history.id, at: history.at } })
     }
@@ -44,6 +46,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds,
       results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for retired Builder pane to close' }); continue
     }
     results.push(...io.reconcile({ tasksDir, onlyIds: [card.id] }))
+    } catch (err) { results.push({ id: entry.cardId, status: 'held', reason: err.message }) }
   }
   return results
 }
