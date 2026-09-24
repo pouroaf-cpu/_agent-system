@@ -398,6 +398,21 @@ test('closeFinished gives an unbound builder a short grace before reaping it', a
   rmSync(root, { recursive: true, force: true })
 })
 
+test('closeFinished keeps a Builder pane only while its card can still use it', async () => {
+  const { root, tasks } = fixture()
+  for (const [lane, id] of [['planning', 'T-05'], ['working', 'T-06']]) {
+    mkdirSync(join(tasks, lane), { recursive: true })
+    writeFileSync(join(tasks, lane, `${id}.md`), `# ${id} — Card\n`)
+  }
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-05': { builder: { pane_id: 'zZ:p98' } }, 'T-06': { builder: { pane_id: 'zZ:p99' } } }))
+  const agents = [{ name: 'b-t-05', pane_id: 'zZ:p98', agent_status: 'idle' }, { name: 'b-t-06', pane_id: 'zZ:p99', agent_status: 'idle' }]
+  const t0 = Date.now()
+  await closeFinished({ tasksDir: tasks, agents, now: t0 })
+  const closed = await closeFinished({ tasksDir: tasks, agents, now: t0 + 3 * 60 * 1000 })
+  assert.deepEqual(closed, ['zZ:p98'], 'back in Planning the old Builder is closed (Tradeflow TF51); Working keeps its Builder')
+  rmSync(root, { recursive: true, force: true })
+})
+
 test('server gates finished-pane retirement to hourly housekeeping', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   assert.match(source, /CLEANUP_INTERVAL_MS\s*=\s*60\s*\*\s*60\s*\*\s*1000/)

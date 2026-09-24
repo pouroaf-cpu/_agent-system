@@ -465,7 +465,11 @@ function inactiveLongEnough(agent, now) {
 
 export async function closeFinished({ tasksDir, agents, project, now = Date.now(), retire = true }) {
   const bound = new Set([...Object.values(readBindings(tasksDir)).map((b) => b.pane_id), ...Object.values(readCardPlanners(tasksDir)).filter(p => !p.closedAt).map(p => p.paneId)])
-  const liveCards = new Set(Object.entries(readBoard(tasksDir)).filter(([column]) => column !== 'archive').flatMap(([, cards]) => cards.map(c => c.id)))
+  // A card's Builder pane matters only while it can still hand off, be recovered or be
+  // retired after integration. Back in Planning/Queue the next build is a fresh Builder,
+  // and the old idle one held its worktree's files (Tradeflow TF51: npm ci lock).
+  const builderLanes = ['working', 'issues', 'completed', 'review']
+  const liveCards = new Set(Object.entries(readBoard(tasksDir)).filter(([column]) => builderLanes.includes(column)).flatMap(([, cards]) => cards.map(c => c.id)))
   for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) if (liveCards.has(id) && saved.builder) bound.add(saved.builder.pane_id)
   for (const a of agents) {
     if (isBoardAgent(a) && !bound.has(a.pane_id) && !isSpawning(a.pane_id)) continue
