@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
 import { bind, readBindings, unbind, liveBindings, reap } from './lib/bindings.mjs'
-import { promoteAutoReview, promotePlanned, routeReviewVerdicts, missionIssueHandoff, slotsFree, reviewerRunning, spawnReviewer, spawnIssuesSweeper, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason } from './lib/autospawn.mjs'
+import { promoteAutoReview, promotePlanned, routeReviewVerdicts, missionIssueHandoff, slotsFree, reviewerRunning, spawnReviewer, spawnIssuesSweeper, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason, holdsFor } from './lib/autospawn.mjs'
 import { workerPrompt, reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
 import { recordFailure, coolingDown, attemptsFor, clearRetries } from './lib/retries.mjs'
 import { findWorkspace, agentWorkspace, parseAgentList, agentStartArgs, assertManagedModel, sessionServerArgs } from './lib/herdr.mjs'
@@ -547,25 +547,76 @@ test('Blocked by only matches a real metadata line, not the same words inside a 
   rmSync(root, { recursive: true, force: true })
 })
 
-test('autoSpawn leaves a Blocked-by card sitting in Queue untouched until its prerequisite lands in archive', async () => {
+test('T-9 routes a missing Queue prerequisite to Planning with the reason', async () => {
   const { tasks, root } = fixture()
-  // Isolate the gate: move the fixture's default T-04 out of Queue so the only
-  // queued card is the gated one. A card with no unmet blocker still reaches
-  // spawnForCard, which needs a real herdr running — out of scope for this
-  // test, which is only about the gate itself.
   moveCard(tasks, 'T-04', 'working')
   writeFileSync(join(tasks, 'queue', 'T-09-gated.md'),
     '# T-09 — Gated card\n\n**Priority** 9/10 · **Blocked by:** T-08\n')
-
-  // T-08 has not landed (archive/ is empty), and slots ARE free (max:5,
-  // agents:[]) — if the gate did not exist, this would reach spawnForCard and
-  // throw with no herdr running. It must not even try.
   const started = await autoSpawn({
     project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root,
     model: 'sonnet', agents: [], max: 5,
   })
-  assert.deepEqual(started, [], 'a card whose only queue entry is blocked starts nothing')
-  assert.ok(readBoard(tasks).queue.some((c) => c.id === 'T-09'), 'T-09 stays in Queue, not moved to Working')
+  assert.deepEqual(started, [])
+  const routed = findCard(tasks, 'T-09')
+  assert.equal(routed.column, 'planning')
+  assert.match(readFileSync(routed.path, 'utf8'), /waiting for unique integrated or archived prerequisite T-08/)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('T-9 routes both duplicate live IDs from their exact files without overwriting either', async () => {
+  const { tasks, root } = fixture()
+  moveCard(tasks, 'T-04', 'working')
+  writeFileSync(join(tasks, 'queue', 'T-09-first.md'), '# T-09 — First copy\n')
+  writeFileSync(join(tasks, 'queue', 'T-09-second.md'), '# T-09 — Second copy\n')
+  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 5 })
+  const routed = readBoard(tasks).planning.filter(c => c.id === 'T-09')
+  assert.equal(routed.length, 2)
+  assert.deepEqual(new Set(routed.map(c => readFileSync(c.path, 'utf8').match(/First copy|Second copy/)[0])), new Set(['First copy', 'Second copy']))
+  assert.equal(readBoard(tasks).queue.some(c => c.id === 'T-09'), false)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('T-9 keeps an allowed Owner prerequisite wait visible in Queue', async () => {
+  const { tasks, root } = fixture()
+  moveCard(tasks, 'T-04', 'working')
+  moveCard(tasks, 'T-17', 'working')
+  mkdirSync(join(tasks, 'owner'), { recursive: true })
+  writeFileSync(join(tasks, 'owner', 'T-08-owner.md'), '# T-08 — Owner decision\n')
+  writeFileSync(join(tasks, 'queue', 'T-09-gated.md'), '# T-09 — Gated\n\n**Blocked by:** T-08\n')
+  writeFileSync(join(tasks, 'queue', 'T-10-gated.md'), '# T-10 — Gated\n\n**Blocked by:** T-17\n')
+  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 5 })
+  assert.ok(readBoard(tasks).queue.some(c => c.id === 'T-09'))
+  assert.match(holdsFor('test')['T-09'], /waiting for unique integrated or archived prerequisite T-08/)
+  assert.ok(readBoard(tasks).queue.some(c => c.id === 'T-10'))
+  assert.match(holdsFor('test')['T-10'], /waiting for unique integrated or archived prerequisite T-17/)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('T-9 routes an Issues prerequisite to Owner with a decision', async () => {
+  const { tasks, root } = fixture()
+  moveCard(tasks, 'T-04', 'working')
+  mkdirSync(join(tasks, 'issues'), { recursive: true })
+  writeFileSync(join(tasks, 'issues', 'T-08-issue.md'), '# T-08 — Issue\n')
+  writeFileSync(join(tasks, 'queue', 'T-09-gated.md'), '# T-09 — Gated\n\n**Blocked by:** T-08\n')
+  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 5 })
+  const routed = findCard(tasks, 'T-09')
+  assert.equal(routed.column, 'owner')
+  assert.match(readFileSync(routed.path, 'utf8'), /Decision needed: resolve this hold or authorize a recovery path/)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('T-9 sends a continuous full-slot hold to Issues only after three stall windows', async () => {
+  const { tasks, root } = fixture()
+  moveCard(tasks, 'T-17', 'working')
+  bind(tasks, 'T-17', { pane_id: 'w1:p1' })
+  const args = { project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [{ pane_id: 'w1:p1', agent_status: 'working' }], max: 1, stallSeconds: 1 }
+  await autoSpawn({ ...args, now: 1000 })
+  await autoSpawn({ ...args, now: 4000 })
+  assert.equal(findCard(tasks, 'T-04').column, 'queue', 'exactly three windows stays in Queue')
+  await autoSpawn({ ...args, now: 4001 })
+  const routed = findCard(tasks, 'T-04')
+  assert.equal(routed.column, 'issues')
+  assert.match(readFileSync(routed.path, 'utf8'), /continuously held for 3 seconds/)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -821,12 +872,17 @@ test('Auto-Manager promotion uses the shared Planned helper', () => {
   assert.match(tick, /config\.mode === 'manager' \|\| config\.autoQueuePlanned === true[\s\S]{0,200}promotePlanned\(tasksDir/,
     'the tick moves Planned cards through the shared helper — no agent, no judgement')
 
-  // A blocked card is safe in Queue: autoSpawn is what refuses to start it.
+  // A blocked card stays Planned until its prerequisite is integrated or archived.
   const { root, tasks } = fixture()
   writeFileSync(join(tasks, 'backlog', 'T-18-blocked.md'), '# T-18 — Blocked\n\n**Priority** 9/10\n\n**Blocked by:** T-99\n')
   const board = readBoard(tasks)
   const blocked = board.planned.find((c) => c.id === 'T-18')
-  assert.deepEqual(unmetBlockers(blocked, board), ['T-99'], 'still held back at spawn time, not at queue time')
+  assert.deepEqual(unmetBlockers(blocked, board), ['T-99'])
+  assert.ok(!promotePlanned(tasks).includes('T-18'))
+  assert.ok(readBoard(tasks).planned.some(c => c.id === 'T-18'))
+  mkdirSync(join(tasks, 'archive'), { recursive: true })
+  writeFileSync(join(tasks, 'archive', 'T-99-done.md'), '# T-99 — Landed\n')
+  assert.ok(promotePlanned(tasks).includes('T-18'), 'promotion resumes after the prerequisite reaches Archive')
 
   // And the sweeper no longer carries any promotion instructions.
   const prompt = issuesSweeperPrompt({ cards: board.queue, projectPath: root, boardRoot: root, manager: true })

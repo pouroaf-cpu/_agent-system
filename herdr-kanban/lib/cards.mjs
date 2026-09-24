@@ -2,7 +2,7 @@
 // Nothing is duplicated into a database — the filesystem is the source of truth.
 
 import { readdirSync, readFileSync, writeFileSync, appendFileSync, statSync, existsSync, mkdirSync, renameSync } from 'node:fs'
-import { join, basename, resolve, dirname } from 'node:path'
+import { join, basename, resolve, dirname, extname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
@@ -493,7 +493,10 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
   let col = columnByKey(toKey)
   if (!col) throw new Error(`unknown column: ${toKey}`)
 
-  const card = findCard(tasksDir, cardId)
+  const card = options.sourcePath
+    ? Object.values(readBoard(tasksDir)).flat().find(c => c.path === options.sourcePath)
+    : findCard(tasksDir, cardId)
+  if (!card) throw new Error(`unknown card source: ${options.sourcePath}`)
   if (card.column === toKey) return card
   // Completed means "built, ready to integrate". Review runs after integration,
   // so Auto-review cards need only the Builder PASS here.
@@ -520,7 +523,13 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
   col = columnByKey(toKey)
   const dest = join(tasksDir, col.dir)
   mkdirSync(dest, { recursive: true })
-  const target = join(dest, card.file)
+  let target = join(dest, card.file)
+  if (options.sourcePath && existsSync(target)) {
+    const ext = extname(card.file)
+    const stem = card.file.slice(0, -ext.length)
+    let copy = 2
+    do { target = join(dest, `${stem}-duplicate-${copy++}${ext}`) } while (existsSync(target))
+  }
   if (existsSync(target)) throw new Error(`already exists in ${toKey}: ${card.file}`)
 
   appendHistory(tasksDir, card.id, { event: 'transition', from: card.column, to: toKey, text, ...(options.operatorArchive && toKey === 'archive' ? { note: 'Archived by operator from board without independent review' } : {}) })

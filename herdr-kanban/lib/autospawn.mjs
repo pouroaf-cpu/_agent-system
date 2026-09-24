@@ -258,55 +258,84 @@ export function routeMutualHolds(tasksDir, held, log) {
 const holderOf = (board) => [...board.working, ...board.review].map((c) => c.id)
 
 // Returns the ids it started. Safe to call on every board change and agent poll.
-export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, spawn = spawnForCard }) {
+export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, stallSeconds = 300, now = Date.now(), spawn = spawnForCard }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'builder')
   if (spawn === spawnForCard && controlState(project).paused && !cardRunContext()) return []
-  if (max <= 0 || busy.has(project)) return []
+  if (busy.has(project)) return []
 
-  let slots = slotsFree({ tasksDir, agents, max })
-  if (slots <= 0) return []
+  let slots = max > 0 ? slotsFree({ tasksDir, agents, max }) : 0
 
   const board = readBoard(tasksDir)
   const only = onlyIds?.length ? new Set(onlyIds.map((id) => id.toUpperCase())) : null
   const queued = only ? board.queue.filter((c) => only.has(c.id)) : board.queue
-  if (!queued.length) return []
+  if (!queued.length) { holds.set(project, {}); return [] }
 
   busy.add(project)
   const started = []
   const held = {}
   try {
     for (const card of queued) {
-      if (slots <= 0) break
-      const limit = checkWorkflowLimits(tasksDir, card.id, 'builder')
-      if (limit) { held[card.id] = limit; continue }
-      const operational = operationalHold(tasksDir, card, projectPath, gitSettings)
-      if (operational) { held[card.id] = `Operational recovery held: ${operational}`; continue }
-      const fresh = mission?.id ? readBoard(tasksDir) : board
-      const freshCard = mission?.id
-        ? fresh.queue.find((c) => c.id === card.id && c.file === card.file) || card
-        : card
+      const fresh = readBoard(tasksDir)
+      const freshCard = fresh.queue.find((c) => c.path === card.path)
+      if (!freshCard) continue
       const selected = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
       const selectedModel = selected?.model ?? (freshCard.trivial ? trivialModel : model)
       const selectedEngine = selected?.engine ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : (freshCard.trivial ? trivialEngine : engine)
-      const hold = startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
+      const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
+      const operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
+      const hold = limit || (operational && `Operational recovery held: ${operational}`)
+        || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
+        || (max <= 0 ? 'workflow limit reached: builder capacity is zero' : slots <= 0 ? 'slots full' : null)
       if (hold) {
-        if (hold.startsWith('card not ready')) {
-          const moved = moveCard(tasksDir, freshCard.id, 'planning')
-          appendFileSync(moved.path, `\n\n---\n\n**Kicked back** ${new Date().toISOString()}\n\n${hold}. The isolated worktree, if any, was preserved.\n`)
-          requestPlannerCorrection(tasksDir, moved.id)
-          log?.(`${moved.id}: returned to original Planner — ${hold}`)
-          onChange?.()
+        const dupId = duplicateLiveId(freshCard, fresh)
+        const dupKey = duplicateIssueKey(freshCard, fresh)
+        const cycle = cycleFor(freshCard, fresh)
+        const unmet = unmetBlockers(freshCard, fresh, readWorktrees(tasksDir))
+        const prerequisites = (freshCard.blockedBy || []).map(id => [id, liveCards(fresh).filter(c => c.id === id)])
+        const blockedByIssue = prerequisites.find(([, hits]) => hits.length === 1 && hits[0].column === 'issues')
+        const allowedDependencyWait = hold.startsWith('waiting for unique integrated or archived prerequisite')
+          && !blockedByIssue && unmet.length > 0
+          && prerequisites.every(([, hits]) => hits.length === 1 && ['owner', 'planning', 'planned', 'queue', 'working', 'review', 'completed'].includes(hits[0].column))
+        const cardProblem = !!(dupId || dupKey || cycle || hold.startsWith('card not ready') || (unmet.length && !allowedDependencyWait && !blockedByIssue))
+        const fileHolder = hold.match(/files busy(?:, likely held by|, held by) ([A-Z]+-\d+)/i)?.[1]
+        const transient = ['slots full', 'cooling down after failed spawn'].includes(hold)
+          || hold.startsWith('files busy') && fileHolder && holderOf(fresh).includes(fileHolder)
+        const workflow = readWorkflow(tasksDir)[freshCard.id] || {}
+        if (allowedDependencyWait) {
+          held[freshCard.id] = hold
+          delete workflow.queueHoldSince
+          updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
           continue
         }
-        held[freshCard.id] = hold
-        if (/mission build budget exhausted/.test(hold)) {
-          const parked = moveCard(tasksDir, freshCard.id, 'owner')
-          appendFileSync(parked.path, `\n\n---\n\n**Needs you** ${new Date().toISOString()}\n\n${hold}. Mission budget does not auto-reset.\n`)
-          onChange?.()
+        if (transient) {
+          const since = workflow.queueHoldSince || now
+          const elapsed = now - since
+          held[freshCard.id] = hold
+          if (elapsed > 3 * stallSeconds * 1000) {
+            const moved = moveCard(tasksDir, freshCard.id, 'issues')
+            appendFileSync(moved.path, `\n\n---\n\n**Queue hold expired** ${new Date(now).toISOString()}\n\n${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
+            updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
+            delete held[freshCard.id]
+            onChange?.()
+          } else updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: since })
+          continue
         }
+        const to = cardProblem ? 'planning' : 'owner'
+        const moved = moveCard(tasksDir, freshCard.id, to, dupId ? { sourcePath: freshCard.path } : {})
+        const reason = dupId || dupKey || hold
+        const note = cardProblem
+          ? `**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${reason}. Planner: correct the card/dependency before requeueing. Preserved work remains available.`
+          : `**Needs you** ${new Date(now).toISOString()}\n\n${reason}. Decision needed: resolve this hold or authorize a recovery path before requeueing.`
+        appendFileSync(moved.path, `\n\n---\n\n${note}\n`)
+        updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
+        if (cardProblem) requestPlannerCorrection(tasksDir, moved.id)
+        delete held[freshCard.id]
+        log?.(`${moved.id}: routed to ${to} — ${reason}`)
+        onChange?.()
         continue
       }
 
+      if (readWorkflow(tasksDir)[freshCard.id]?.queueHoldSince) updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
       // Move first so the card is visibly in Working for the ~55s the spawn takes.
       appendBuildAttempt(freshCard)
       const moved = moveCard(tasksDir, freshCard.id, 'working')
@@ -348,6 +377,9 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         continue
       }
       onChange?.()
+    }
+    for (const card of queued) if (!started.includes(card.id) && !held[card.id] && readBoard(tasksDir).queue.some(c => c.id === card.id)) {
+      held[card.id] = 'waiting for available slot'
     }
     if (routeMutualHolds(tasksDir, held, log).length) onChange?.()
   } finally {
@@ -538,8 +570,11 @@ export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCar
 
 export function promotePlanned(tasksDir, { mission, project } = {}) {
   const promoted = []
-  for (const card of readBoard(tasksDir).planned) {
+  const board = readBoard(tasksDir)
+  for (const card of board.planned) {
     if (mission?.id && (mission.project && project !== mission.project || card.mission !== mission.id)) continue
+    const unmet = unmetBlockers(card, board, readWorktrees(tasksDir))
+    if (unmet.length) continue
     moveCard(tasksDir, card.id, 'queue')
     promoted.push(card.id)
   }

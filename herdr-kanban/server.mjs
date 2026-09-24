@@ -256,6 +256,7 @@ async function tick(project, agents) {
     onChange: () => broadcastBoard(project),
     log: (msg) => schedulerActivity(project, msg),
     mission: config.mission,
+    stallSeconds: config.stallSeconds,
     gitSettings: projectSettingsOf(project),
     assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
   })
