@@ -70,14 +70,46 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}`)
     const cause = plan.match(/(?:^|\n)\s*(?:[-*]\s*)?(?:observed cause|cause)\s*:\s*([^\n]+)/i)?.[1] || ''
     if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
-    const fileSection = section('Files')
-    if ([...fileSection.matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
-    if (planRoot) {
-      for (const [, path, rest] of fileSection.matchAll(/^[-*]\s+`([^`]+)`([^\n]*)/gm)) {
-        if (!/\(new\b[^)]*\)/i.test(rest) && !existsSync(resolve(planRoot, path))) throw new Error(`Plan check failed: ## Files path ${path} does not exist in ${planRoot.replaceAll('\\', '/')}. Fix the path, or mark a file this card creates with (new).`)
-      }
-      if (!/^\*\*Callers checked:\*\*[ \t]*\S/m.test(plan)) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
+    if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
+  }
+  if (planRoot) {
+    checkPlanPaths(planRoot, section('Files'), section('Prerequisites'))
+    if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
+  }
+}
+
+// A card worktree is a checkout of the integration HEAD, so a plan may only rely on
+// files git tracks there (T-145/T-148, Kiwitown T-1). Untracked or gitignored files
+// (TASKS/, *.md in some projects) exist for the Planner but not for the Builder.
+// Checks ## Files and backticked path-shaped prerequisites only, never prose.
+function checkPlanPaths(planRoot, filesSection, prereqSection) {
+  const root = planRoot.replaceAll('\\', '/')
+  const readOnly = 'cite a file that exists only outside git by absolute path as a read-only reference in ## Prerequisites'
+  const tracked = (path) => {
+    const git = spawnSync('git', ['-C', planRoot, 'cat-file', '-e', `HEAD:./${path.replace(/\/+$/, '')}`], { windowsHide: true, encoding: 'utf8' })
+    if (git.status === 0) return true
+    if (git.status === null || /not a git repository/i.test(git.stderr)) return existsSync(resolve(planRoot, path)) // non-Git workspace
+    return false
+  }
+  const problem = (path) => tracked(path) ? null
+    : existsSync(resolve(planRoot, path)) ? `exists in ${root} but is not tracked by git at HEAD (untracked or gitignored), so the card worktree will not have it`
+      : `does not exist in ${root}`
+  const newFiles = new Set()
+  for (const [, path, rest] of filesSection.matchAll(/^[-*]\s+`([^`]+)`([^\n]*)/gm)) {
+    if (/\(new\b[^)]*\)/i.test(rest)) { newFiles.add(path); continue }
+    const why = problem(path)
+    if (why) throw new Error(`Plan check failed: ## Files path ${path} ${why}. Fix the path, mark a file this card creates with (new), or ${readOnly}.`)
+  }
+  for (const [, token, rest] of prereqSection.matchAll(/`([^`\s]+)`([^\n`]*)/g)) {
+    if (/^[A-Za-z]:[\\/]/.test(token)) {
+      if (!existsSync(token)) throw new Error(`Plan check failed: ## Prerequisites path ${token} does not exist. Remove it or cite a file that exists.`)
+      continue
     }
+    // Explicit relative file paths only: a/b.ext, not commands, URLs, globs or node_modules (junctioned in).
+    if (!/^[\w@.[\]-]+(?:\/[\w@.[\]-]+)+\.[A-Za-z0-9]{1,6}$/.test(token) || /^node_modules\//.test(token) || /(^|\/)\.\.(\/|$)/.test(token)) continue
+    if (newFiles.has(token) || /^\s*\(new\b/i.test(rest)) continue
+    const why = problem(token)
+    if (why) throw new Error(`Plan check failed: ## Prerequisites path ${token} ${why}. Mark a file this card creates with (new), or ${readOnly}.`)
   }
 }
 

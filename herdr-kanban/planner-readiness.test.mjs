@@ -88,3 +88,33 @@ console.log('Planner readiness validation passed')
     assert.equal(result.status, 0, result.stderr)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
+
+// In a Git workspace the card worktree is a checkout of HEAD: Files and explicit
+// prerequisite paths must be tracked there (Kiwitown T-1, Injectbuddy T-148).
+{
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { execFileSync } = await import('node:child_process')
+  const root = mkdtempSync(join(tmpdir(), 'plan-git-'))
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
+  try {
+    git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
+    mkdirSync(join(root, 'src')); mkdirSync(join(root, 'TASKS'))
+    writeFileSync(join(root, 'src', 'app.mjs'), ''); writeFileSync(join(root, '.gitignore'), '*.md\n')
+    git('add', '.'); git('commit', '-qm', 'base')
+    writeFileSync(join(root, 'REPORT.md'), 'ignored'); writeFileSync(join(root, 'TASKS', 'check.mjs'), 'untracked')
+    const plan = realistic.replace('Changes:', '**Callers checked:** none\nChanges:')
+      .replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —')
+    validatePlan(plan, { workspace: root })
+    assert.throws(() => validatePlan(plan.replace('- `src/app.mjs` —', '- `REPORT.md` —'), { workspace: root }),
+      /## Files path REPORT\.md exists .* not tracked by git .*absolute path as a read-only reference/)
+    const prereq = (line) => plan.replace('Existing Node runtime; no additional access.', line)
+    assert.throws(() => validatePlan(prereq('Run `node TASKS/check.mjs` then `TASKS/check.mjs` validates.'), { workspace: root }),
+      /## Prerequisites path TASKS\/check\.mjs exists .* not tracked/)
+    assert.throws(() => validatePlan(prereq('Rules: `C:/definitely/missing/CLAUDE.md`.'), { workspace: root }),
+      /Prerequisites path C:\/definitely\/missing\/CLAUDE\.md does not exist/)
+    // Tracked, new, absolute existing, node_modules, commands and prose are all fine.
+    validatePlan(prereq(`\`src/app.mjs\` exists; \`scripts/check.mjs\` (new); read-only \`${join(root, 'REPORT.md')}\`; \`node_modules/.bin/x.cmd\`; run \`npm ci\`; see \`lib/guides.ts:getGuide\`.`), { workspace: root })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}
