@@ -222,3 +222,47 @@ test('reviewer snapshot contains the integrated card commit and a real PASS surv
   writeFileSync(join(snap, 'example.js'), 'reviewed code edited\n')
   assert.throws(() => assertReviewInputs(root, tasksDir, 'T-1'), /must run again/)
 })
+
+test('integration conflicts never loop: one Builder resolution, then Owner; a clean rebase must pass the recorded check', async t => {
+  const { runRecordedCheck } = await import('./lib/completed-handoff.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'integration-conflict-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const planned = id => `# ${id} — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: node -e "process.exit(0)"\nResult: passed\n`
+  for (const id of ['T-1', 'T-2', 'T-3']) { mkdirSync(join(tasksDir, 'completed'), { recursive: true }); writeFileSync(join(tasksDir, 'completed', `${id}.md`), planned(id)) }
+  const registryPath = join(tasksDir, '.board-worktrees.json')
+  const registry = states => { // sets states, keeps each card's conflict counter
+    let prior = {}; try { prior = JSON.parse(readFileSync(registryPath, 'utf8')) } catch {}
+    const entry = (id, state) => ({ cardId: id, state, worktreePath: root, workspacePath: root, baseCommit: 'b0', conflictFailures: prior[id]?.conflictFailures })
+    writeFileSync(registryPath, JSON.stringify(Object.fromEntries(Object.entries(states).map(([id, state]) => [id, entry(id, state)]))))
+  }
+  let reconciles = 0
+  const conflict = { status: 'conflict', reason: 'integration conflict: CONFLICT (content): Merge conflict in app.js', files: ['app.js'], hunks: '<<<<<<< HEAD\nmaster\n=======\ncard\n>>>>>>> card', head: 'h1' }
+  const io = { agentList: async () => [], runCheck: async () => ({ ok: false, output: 'check failed: 1 test' }),
+    reconcile: ({ onlyIds }) => { reconciles++; return onlyIds[0] === 'T-1' ? [{ id: 'T-1', ...conflict }] : [{ id: onlyIds[0], status: 'integrated' }] } }
+
+  registry({ 'T-1': 'building' })
+  const [first] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
+  assert.deepEqual([first.status, first.to], ['returned', 'queue'])
+  let text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
+  assert.match(text, /Kicked back: Integration conflict with master[\s\S]*git rebase --onto h1 b0, fix app\.js[\s\S]*<<<<<<< HEAD/)
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].state, 'conflict')
+  // The Builder hands off again but it still conflicts: one plain question to Owner.
+  moveCard(tasksDir, 'T-1', 'completed'); registry({ 'T-1': 'building' })
+  const [second] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
+  assert.equal(second.to, 'owner')
+  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 still does not integrate with master after 2 tries[\s\S]*\?/)
+
+  // Clean rebase: the recorded check gates integration.
+  registry({ 'T-2': 'rebased', 'T-3': 'rebased' })
+  reconciles = 0
+  const [passed] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-2'], io: { ...io, runCheck: async () => ({ ok: true, output: 'ok' }) } })
+  assert.equal(passed.status, 'integrated'); assert.equal(reconciles, 1)
+  const [failed] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-3'], io })
+  assert.deepEqual([failed.status, failed.to], ['returned', 'queue'])
+  assert.match(readFileSync(findCard(tasksDir, 'T-3').path, 'utf8'), /recorded check failed: check failed: 1 test/)
+
+  // The real runner executes the card's Check: in the card worktree.
+  assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, true)
+  writeFileSync(findCard(tasksDir, 'T-2').path, planned('T-2').replace('process.exit(0)', 'process.exit(3)'))
+  assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, false)
+})

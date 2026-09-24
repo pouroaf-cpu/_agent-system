@@ -101,11 +101,29 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
     git(f.integration, 'commit', '-m', 'parallel integration')
     f.complete('T-1')
 
+    const commit = git(prepared.workspacePath, 'rev-parse', 'HEAD')
     const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
-    assert.equal(result.status, 'issue')
+    assert.equal(result.status, 'conflict')
+    assert.deepEqual(result.files, ['app.js'])
+    assert.match(result.hunks, /<<<<<<<|builder/)
     assert.equal(existsSync(prepared.entry.worktreePath), true)
-    assert.equal(readWorktrees(f.tasks)['T-1'].state, 'issue')
+    assert.equal(git(prepared.workspacePath, 'rev-parse', 'HEAD'), commit, 'the rebase attempt was aborted cleanly')
+    assert.equal(git(prepared.workspacePath, 'status', '--porcelain'), '')
+    assert.equal(readWorktrees(f.tasks)['T-1'].state, 'conflict')
     assert.equal(git(f.integration, 'status', '--porcelain'), '')
+    assert.deepEqual(reconcileCompletedWorktrees({ tasksDir: f.tasks }), [], 'a conflict is never retried in a loop')
+
+    // The Builder resolves it in its own worktree, then hands off again: it integrates.
+    const head = git(f.integration, 'rev-parse', 'HEAD')
+    assert.notEqual(spawnSync('git', ['-C', prepared.workspacePath, 'rebase', '--onto', head, prepared.entry.baseCommit]).status, 0)
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'integration\nbuilder\n')
+    git(prepared.workspacePath, 'add', 'app.js')
+    git(prepared.workspacePath, '-c', 'core.editor=true', 'rebase', '--continue')
+    const entries = JSON.parse(readFileSync(join(f.tasks, '.board-worktrees.json'), 'utf8'))
+    entries['T-1'].state = 'building' // prepareCardWorktree resumes a returned card this way
+    writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify(entries))
+    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
+    assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'integration\nbuilder\n')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

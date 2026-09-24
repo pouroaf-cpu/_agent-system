@@ -407,6 +407,20 @@ function validateCompleted(card, entry) {
   return commits[0]
 }
 
+// Rebase the card's one commit onto the integration HEAD inside its own worktree
+// (never the integration checkout). The pre-rebase commit keeps a recovery ref.
+function rebaseCardOnto(entry, head) {
+  git(entry.repoRoot, ['branch', `recovery/${entry.branch}-${Date.now().toString(36)}`, entry.commit], { allowFailure: true })
+  const rebase = git(entry.worktreePath, ['rebase', '--onto', head, entry.baseCommit], { allowFailure: true })
+  if (rebase.status === 0) return { clean: true, commit: git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() }
+  const files = git(entry.worktreePath, ['diff', '--name-only', '--diff-filter=U'], { allowFailure: true }).stdout.split(/\r?\n/).filter(Boolean)
+  const hunks = (git(entry.worktreePath, ['diff'], { allowFailure: true }).stdout || rebase.stderr || '').slice(0, 6000)
+  git(entry.worktreePath, ['rebase', '--abort'], { allowFailure: true })
+  return { clean: false, files, hunks }
+}
+
+export const updateWorktree = updateEntry
+
 // Completed card commits are integrated one at a time. Results are intentionally
 // data-only: the server owns board routing and logging.
 export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
@@ -417,7 +431,7 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
   const results = []
   try {
     const completed = new Map(readBoard(tasksDir).completed.map((card) => [card.id, card]))
-    for (const entry of Object.values(readWorktrees(tasksDir))) {
+    for (let entry of Object.values(readWorktrees(tasksDir))) {
       if (onlyIds && !onlyIds.includes(entry.cardId)) continue
       if (entry.state === 'integrated') {
         if (entry.cleaned) continue
@@ -432,6 +446,10 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
       const card = completed.get(entry.cardId)
       if (!card || !['building', 'ready', 'issue', 'integrating'].includes(entry.state)) continue
       try {
+        // A Builder that resolved a conflict rebased its one commit onto rebaseTarget.
+        if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {
+          entry = updateEntry(tasksDir, entry.cardId, { baseCommit: entry.rebaseTarget, rebaseTarget: null })
+        }
         const commit = validateCompleted(card, entry)
         // Persist intent before Git. Its -x trailer makes a post-pick crash replayable.
         const alreadyPicked = entry.state === 'integrating' && git(entry.repoRoot, ['log', '--format=%B', `${entry.integrationBase}..HEAD`]).stdout.includes(`(cherry picked from commit ${commit})`)
@@ -457,8 +475,18 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
         if (pick.status !== 0) {
           git(entry.repoRoot, ['cherry-pick', '--abort'], { allowFailure: true })
           const reason = `integration conflict: ${(pick.stderr || pick.stdout).trim()}`
-          updateEntry(tasksDir, entry.cardId, { state: 'issue', commit, reason })
-          results.push({ id: entry.cardId, status: 'issue', reason })
+          // Never retry the pick in a loop: rebase once in the card's own worktree.
+          // 'rebased' and 'conflict' are not retried here; completed-handoff runs
+          // the check or returns the card to a Builder.
+          const head = git(entry.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
+          const rebase = rebaseCardOnto({ ...entry, commit }, head)
+          if (rebase.clean) {
+            updateEntry(tasksDir, entry.cardId, { state: 'rebased', baseCommit: head, commit: rebase.commit, reason: `rebased onto integration HEAD ${head.slice(0, 12)}; the recorded check must pass before integration` })
+            results.push({ id: entry.cardId, status: 'rebased', commit: rebase.commit })
+          } else {
+            updateEntry(tasksDir, entry.cardId, { state: 'conflict', commit, reason, rebaseTarget: head })
+            results.push({ id: entry.cardId, status: 'conflict', reason, files: rebase.files, hunks: rebase.hunks, head })
+          }
           continue
         }
         updateEntry(tasksDir, entry.cardId, { state: 'integrated', commit, integratedAt: new Date().toISOString(), reason: null })

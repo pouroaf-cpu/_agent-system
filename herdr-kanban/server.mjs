@@ -401,6 +401,9 @@ async function pollProject(project) {
             lastActivityHold.set(key, result.reason)
             activity(project, result.id, 'cleanup-held', result.reason)
           }
+        } else if (result.status === 'returned') {
+          activity(project, result.id, 'integration-conflict', `${result.reason} — returned to ${result.to === 'owner' ? 'Owner' : 'a Builder'}`, 'error')
+          dirty = true
         } else if (result.status === 'issue') {
           try {
             const card = findCard(tasksDir, result.id)
