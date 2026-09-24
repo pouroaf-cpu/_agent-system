@@ -541,6 +541,7 @@ async function pollProject(project) {
         assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
         mission: config.mission,
         onHold: (err) => ambiguousHold(project, err),
+        onCardError: (card, err) => { if (!ambiguousHold(project, err)) activity(project, card.id, 'failure', `planner: ${err.message}`, 'error') },
       }).catch((err) => {
         if (err.paused || ambiguousHold(project, err)) return null
         recordSpawnFailure({ project, cap: config.maxConcurrentAgents, reason: err.message })

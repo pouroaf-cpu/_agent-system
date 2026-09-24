@@ -72,7 +72,7 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 }
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
-export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
+export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
   const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, paneSendKeys: sendKeys = paneSendKeys, deliver, recordUsageStart, recordUsageFinish } = io
@@ -183,6 +183,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     }
     // Owner is an explicit stop, including older technical-exhaustion cards.
     for (let card of [...board.issues, ...board.planning]) {
+      try {
       if (onlyIds && !onlyIds.includes(card.id)) continue
       // Two live copies of one id hold only that card, never the whole run (Tradeflow T-42).
       try { findCard(tasksDir, card.id) } catch (err) {
@@ -397,6 +398,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         }
       }
       return { cards: [card.id], pane_id: owner.paneId, spawnedNewAgent }
+      } catch (error) {
+        // One card's failure must not end the pass: it handles one card per poll, so a card
+        // that keeps failing starved every card after it (Injectbuddy I192/I193 went to Owner
+        // with no Planner ever started). Explicit runs and pause still stop here.
+        if (error.paused || cardRunContext() || !onCardError) throw error
+        onCardError(card, error)
+        continue
+      }
     }
     return null
   } finally { busy.delete(project) }

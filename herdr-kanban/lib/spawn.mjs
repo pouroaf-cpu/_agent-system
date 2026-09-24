@@ -45,7 +45,9 @@ export async function deliverWith({
     if (stagedInput(await read(paneId, session).catch(() => ''), text)) throw Object.assign(new Error('prompt still on the input line after a brief working state'), { stillStaged: true })
   } catch (first) {
     if (first.paused) throw first
-    if (!first.stillStaged && (await list(session).catch(() => [])).some(a => a.pane_id === paneId && a.agent_status === 'working')) return
+    // herdr's own stall check gives up after 5s, but Codex can take longer to start
+    // working; one immediate look marked real deliveries unconfirmed (Injectbuddy I157).
+    if (!first.stillStaged && await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return
     if (stagedPrompt(await read(paneId, session).catch(() => ''), text)) {
       const result = await submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs })
       if (result === 'working') return

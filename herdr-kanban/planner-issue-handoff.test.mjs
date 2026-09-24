@@ -1,0 +1,61 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { createCard, findCard } from './lib/cards.mjs'
+import { readCardPlanners, runCardPlanner } from './lib/card-planner.mjs'
+import { saveCardPlanners } from './lib/planner-state.mjs'
+
+test('a Planner issue that keeps the card in Planning is a handoff, not a no-handoff', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planner-issue-'))
+  try {
+    const card = createCard(dir, { title: 'Blocked plan', brief: 'Plan it' })
+    const owners = readCardPlanners(dir)
+    owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [] }
+    saveCardPlanners(dir, owners)
+    const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] Returned blocker remains: source list incomplete'], { encoding: 'utf8' })
+    assert.equal(hkb.status, 0, hkb.stderr)
+    assert.equal(findCard(dir, card.id).column, 'planning')
+    // Injectbuddy I152/I178: left submitted, the watchdog later called this a no-handoff.
+    const owner = readCardPlanners(dir)[card.id]
+    assert.equal(owner.submitted, false)
+    assert.ok(owner.correctionRequestedAt)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('one card failing does not end the Planner pass for the cards after it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planner-pass-'))
+  try {
+    const first = createCard(dir, { title: 'Fails', brief: 'x' })
+    const second = createCard(dir, { title: 'Plans', brief: 'y' })
+    let panes = 0
+    const agents = []
+    const io = {
+      agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+      tabCreate: async () => ({ root_pane: { pane_id: `p${++panes}` } }),
+      agentStart: async ({ name, paneId }) => { agents.push({ name, pane_id: paneId, agent_status: 'idle' }) },
+      deliver: async (paneId, text) => { if (text.includes(first.id)) throw Object.assign(new Error('Delivery unconfirmed'), { preservePane: true }) },
+      paneClose: async () => {}, paneRead: async () => '', recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    }
+    const errors = []
+    const result = await runCardPlanner({ project: 'P', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-5.5', io, onCardError: (card, err) => errors.push([card.id, err.message]) })
+    // Injectbuddy I192/I193: the failing card ended every pass, so no Planner ever started.
+    assert.deepEqual(errors, [[first.id, 'Delivery unconfirmed']])
+    assert.deepEqual(result.cards, [second.id])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('a delivery herdr gave up on counts once the agent starts working', async () => {
+  const { deliverWith } = await import('./lib/spawn.mjs')
+  let looks = 0
+  // Injectbuddy I157: herdr's 5s stall check failed, one immediate look saw idle, and a
+  // real delivery was marked unconfirmed twice, sending the card to Owner.
+  await deliverWith({
+    paneId: 'p', text: 'Read the brief', confirmMs: 3000,
+    prompt: async () => { throw new Error('agent_prompt_stalled') }, read: async () => '', sendKeys: async () => {},
+    list: async () => (++looks >= 3 ? [{ pane_id: 'p', agent_status: 'working' }] : []),
+  })
+})

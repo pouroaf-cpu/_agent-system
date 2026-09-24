@@ -204,6 +204,10 @@ try {
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, planWorkspace, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
+  // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
+  // a fresh Planner. Left "submitted" it was counted as a no-handoff and sent to Owner
+  // under a false reason (Injectbuddy I152, I178).
+  if (previousColumn === 'planning' && target === 'planning' && verb === 'issue' && !prerequisiteWait && !approvalWait) requestPlannerCorrection(tasksDir, card.id)
   if (auditIntake && previousColumn !== 'planning') {
     requestPlannerCorrection(tasksDir, card.id)
     appendFileSync(card.path, '\n\n**Audit findings intake**\nValidate current findings, deduplicate against existing cards, and link each numbered finding to an approved remediation card. Create only missing in-scope fixes through Planner -> Builder -> scoped independent review. Archive this report only after all findings are linked; report closure does not mean fixes are complete. No deployment or unsafe business/data change is authorized.\n')
