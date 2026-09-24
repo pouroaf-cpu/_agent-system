@@ -112,3 +112,11 @@ try {
   }
   console.log('Planner waits passed')
 } finally { rmSync(root, { recursive: true, force: true }) }
+
+// An integrated prerequisite sitting in Review has already landed (review happens after integration).
+{
+  const { unmetBlockers } = await import('./lib/cards.mjs')
+  const board = { review: [{ id: 'T-31', column: 'review' }], queue: [], archive: [] }
+  assert.deepEqual(unmetBlockers({ blockedBy: ['T-31'] }, board, { 'T-31': { state: 'integrated' } }), [])
+  assert.deepEqual(unmetBlockers({ blockedBy: ['T-31'] }, board, { 'T-31': { state: 'building' } }), ['T-31'])
+}

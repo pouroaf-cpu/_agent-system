@@ -624,7 +624,8 @@ export function unmetBlockers(card, board, integrated = {}) {
     const alive = live.filter((c) => c.id === id)
     const archived = board.archive.filter((c) => c.id === id)
     if (!alive.length && archived.length === 1) return false
-    return !(alive.length === 1 && archived.length === 0 && alive[0].column === 'completed' && integrated[id]?.state === 'integrated')
+    // Review now happens after integration, so an integrated card in Review has already landed.
+    return !(alive.length === 1 && archived.length === 0 && ['completed', 'review'].includes(alive[0].column) && integrated[id]?.state === 'integrated')
   })
 }
 // Unmet prerequisites that are still live cards: an allowed wait (TF44). A
