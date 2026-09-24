@@ -28,8 +28,10 @@ $pidFile = Join-Path $root '.server.pid'
 $config = Get-Content (Join-Path $root 'board.config.json') -Raw | ConvertFrom-Json
 $port = $config.port
 if (-not $Project) { $Project = $config.projects[0] }
-$lanAddress = '192.168.1.11'
+# The home address is DHCP (was .11, now .7): use this PC's current 192.168.1.x on a physical adapter.
 $lanSubnet = '192.168.1.0/24'
+$lanAddress = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -like '192.168.1.*' } | Select-Object -First 1).IPAddress
 
 function Stop-Board {
     if (-not (Test-Path $pidFile)) { Write-Host 'board: not running'; return }
