@@ -1,7 +1,7 @@
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, rmdirSync, statfsSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, renameSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard } from './cards.mjs'
@@ -420,8 +420,10 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
     // Git already removed its metadata but Windows left a directory behind.
     // Never recursively remove unknown residual contents. An empty directory
     // left by Windows is recoverable after the finished session releases it.
-    if (readdirSync(entry.worktreePath).length) throw new Error('Residual worktree files require inspection; preserved')
-    rmdirSync(entry.worktreePath)
+    // A tree of empty folders holds nothing (Tradeflow T-35 after a forced remove).
+    const onlyEmptyDirs = (dir) => readdirSync(dir, { withFileTypes: true }).every(d => d.isDirectory() && !d.isSymbolicLink() && onlyEmptyDirs(join(dir, d.name)))
+    if (!onlyEmptyDirs(entry.worktreePath)) throw new Error('Residual worktree files require inspection; preserved')
+    rmSync(entry.worktreePath, { recursive: true })
     git(entry.repoRoot, ['branch', '-D', entry.branch], { allowFailure: true })
     finish()
     return
