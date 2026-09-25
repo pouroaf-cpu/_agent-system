@@ -345,12 +345,12 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   // No recorded plan means current (worktrees made before this check keep resuming).
   if (existing?.planAttempt && existing.planAttempt !== plan) {
     const wt = existing.worktreePath
-    if (!clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '--no-verify', '-m', `${id}: work saved from an earlier plan attempt`]) }
+    if (!clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '-m', `${id}: work saved from an earlier plan attempt`]) }
     const head = git(wt, ['rev-parse', 'HEAD']).stdout.trim()
     if (head !== existing.baseCommit) {
       const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
       git(existing.repoRoot, ['branch', recovery, head])
-      git(wt, ['reset', '--hard', existing.baseCommit]) // saved on the recovery branch above
+      git(wt, ['checkout', '--detach', existing.baseCommit]) // the work is on the recovery branch; leave the checkout at its base so it can be removed
       appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${new Date().toISOString()}\n\nThe card worktree from the previous plan attempt held saved work; it is on branch \`${recovery}\`. This attempt starts from a fresh worktree on integration HEAD.\n`)
     }
     removeCleanWorktree(tasksDir, existing)
