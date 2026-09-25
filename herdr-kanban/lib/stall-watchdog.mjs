@@ -53,7 +53,7 @@ export function laneTimes({ tasksDir, board, agents = [], claims = [], planners 
 // (usage runs, bindings), the last recovery, and the last time this watchdog saw an
 // agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
 // `resumedAt` (the project's last Pause/Start) restarts every clock: paused time is not a stall.
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, resumedAt, now = Date.now() }) {
+export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, holdsKnown = true, resumedAt, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = openClaims(claims, tasksDir)
@@ -81,6 +81,9 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (paused) return true // low-disk pause: nothing may start, so nothing is stuck
     if (card.column === 'queue') {
       if (builderSlotsFree <= 0) return true
+      // Before the first scheduler pass after a restart the file-lock holds are unknown
+      // (Injectbuddy I211 went to Owner at 04:08 while waiting on public/app.js).
+      if (!holdsKnown) return true
       const blockers = unmetBlockers(card, board, registry)
       if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
       // Same rule as autospawn: the holder may sit in any live lane, Owner included.

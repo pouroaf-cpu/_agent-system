@@ -395,7 +395,7 @@ async function pollProject(project) {
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
-        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt,
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, holdsKnown: holdsReady.has(project),
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)
@@ -528,7 +528,7 @@ async function pollProject(project) {
 
     // Builders are the main flow. Start them before slower planner/reviewer
     // housekeeping so a guarded poll never starves Queue capacity.
-    if (!lowDisk) await tick(project, agents)
+    if (!lowDisk) { await tick(project, agents); holdsReady.add(project) }
 
     if (autoEnabled && !lowDisk) {
       if (config.leadPlanner?.autoIssues) {
@@ -1307,6 +1307,7 @@ const handleRequest = async (req, res) => {
 
 let port = config.port
 let pollersStarted = false
+const holdsReady = new Set() // projects whose file-lock holds this process has computed
 const server = createServer(handleRequest)
 
 async function startPollers() {

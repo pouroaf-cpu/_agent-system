@@ -216,3 +216,11 @@ test('an agent appending to the card does not buy another retry in the same lane
   assert.equal(second.action, 'sent to the Planner')
   assert.equal(findCard(tasks, 'T-1').column, 'planning')
 })
+
+test('right after a restart, before holds are known, a queued card is not a stall (Injectbuddy I211)', t => {
+  const { tasks, put } = board(t)
+  put('queue', 'T-1', '**Blocked by:** T-9\n')
+  put('archive', 'T-9')
+  assert.deepEqual(checkStalls({ tasksDir: tasks, holdsKnown: false, now: T + 90 * MIN }), [])
+  assert.equal(checkStalls({ tasksDir: tasks, now: T + 111 * MIN }).length, 1, 'once holds are known, an unexplained wait is a stall')
+})
