@@ -9,9 +9,13 @@ export function recoveryTransition(text, from, to, { intake = false, correction 
   const state = recoveryState(text)
   let changed = false
   // One issued plan = one attempt; duplicate polling/delivery cannot mint one.
-  if ((from === 'planning' && ['planned', 'queue', 'review', 'working'].includes(to)) || (from === 'queue' && to === 'working')) {
+  const replanned = from === 'planning' && ['planned', 'queue', 'review', 'working'].includes(to)
+  if (replanned || (from === 'queue' && to === 'working')) {
     state.attempt = randomUUID(); changed = true
   }
+  // `plan` changes only on a new plan, not on every dispatch: a card worktree from an
+  // earlier plan is preserved and replaced, never reused (Injectbuddy I195).
+  if (replanned) state.plan = state.attempt
   const failedReturn = !intake && ((to === 'planning' && ['issues', 'queue', 'working', 'review', 'completed'].includes(from)) || (correction && to === 'queue' && ['working', 'review', 'completed'].includes(from)))
   if (failedReturn && state.counted !== state.attempt) {
     state.returns++; state.counted = state.attempt; changed = true

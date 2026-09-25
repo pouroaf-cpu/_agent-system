@@ -1,12 +1,13 @@
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
+import { recoveryState } from './recovery.mjs'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
 const lockPath = (tasksDir) => join(tasksDir, '.board-integration.lock')
@@ -333,9 +334,29 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     updateEntry(tasksDir, id, null) // An explicitly requeued card starts a fresh correction.
     existing = null
   }
+  const plan = recoveryState(readFileSync(card.path, 'utf8')).plan
   if (existing) {
     if (existing.state === 'integrated') throw new Error(`${id} is already integrated; cleanup is pending`)
     if (!existsSync(existing.worktreePath)) throw new Error(`${id} worktree registry points to missing path: ${existing.worktreePath}`)
+  }
+  // A worktree from an earlier plan sits on a stale base, often with a failed Builder's
+  // work: Injectbuddy I195's next Builder found 192 unrelated changed files and stopped.
+  // Save that work on a recovery branch, then start fresh on integration HEAD.
+  // No recorded plan means current (worktrees made before this check keep resuming).
+  if (existing?.planAttempt && existing.planAttempt !== plan) {
+    const wt = existing.worktreePath
+    if (!clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '--no-verify', '-m', `${id}: work saved from an earlier plan attempt`]) }
+    const head = git(wt, ['rev-parse', 'HEAD']).stdout.trim()
+    if (head !== existing.baseCommit) {
+      const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
+      git(existing.repoRoot, ['branch', recovery, head])
+      git(wt, ['reset', '--hard', existing.baseCommit]) // saved on the recovery branch above
+      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${new Date().toISOString()}\n\nThe card worktree from the previous plan attempt held saved work; it is on branch \`${recovery}\`. This attempt starts from a fresh worktree on integration HEAD.\n`)
+    }
+    removeCleanWorktree(tasksDir, existing)
+    existing = null
+  }
+  if (existing) {
     prepareDependencies(existing.workspacePath, integrationWorkspace)
     const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], state: 'building', reason: null, resumedAt: new Date().toISOString() })
     return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false }
@@ -366,6 +387,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     baseCommit,
     files: filesFor(card, integrationWorkspace),
     state: 'building',
+    planAttempt: plan,
     createdAt: new Date().toISOString(),
   }
   updateEntry(tasksDir, id, entry)

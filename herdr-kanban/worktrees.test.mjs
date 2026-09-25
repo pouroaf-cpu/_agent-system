@@ -604,3 +604,37 @@ test('a card waiting in Owner does not hold its files against queued cards', () 
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: queued, projectPath: f.integration }), null)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+// Injectbuddy I195: a re-planned card reused its stale, dirty worktree from the last plan.
+test('a worktree from an earlier plan is saved to a recovery branch and replaced; the same plan resumes it', () => {
+  const f = fixture()
+  try {
+    f.addCard('T-1')
+    moveCard(f.tasks, 'T-1', 'planning')
+    moveCard(f.tasks, 'T-1', 'queue') // plan A
+    const first = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: moveCard(f.tasks, 'T-1', 'working'), gitSettings: f.settings })
+    writeFileSync(join(first.workspacePath, 'saved.js'), 'failed builder work\n')
+    // Same plan, re-dispatched from Queue: the saved work is resumed in place.
+    moveCard(f.tasks, 'T-1', 'queue')
+    const again = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: moveCard(f.tasks, 'T-1', 'working'), gitSettings: f.settings })
+    assert.equal(again.created, false)
+    assert.equal(again.workspacePath, first.workspacePath)
+    // Integration moves on; the card is re-planned (plan B).
+    writeFileSync(join(f.integration, 'other.js'), 'newer\n')
+    git(f.integration, 'add', 'other.js')
+    git(f.integration, 'commit', '-m', 'newer integration')
+    moveCard(f.tasks, 'T-1', 'planning')
+    moveCard(f.tasks, 'T-1', 'queue')
+    const card = moveCard(f.tasks, 'T-1', 'working')
+    const fresh = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.equal(fresh.created, true)
+    assert.notEqual(fresh.workspacePath, first.workspacePath)
+    assert.equal(existsSync(first.workspacePath), false)
+    assert.equal(git(fresh.workspacePath, 'rev-parse', 'HEAD'), git(f.integration, 'rev-parse', 'HEAD'))
+    assert.deepEqual(semanticDirtyFiles(fresh.workspacePath), [])
+    const recovery = git(f.integration, 'branch', '--list', `recovery/${first.entry.branch}-*`, '--format=%(refname:short)')
+    assert.match(recovery, /^recovery\/kanban\/t-1-/)
+    assert.equal(git(f.integration, 'show', `${recovery}:saved.js`), 'failed builder work')
+    assert.ok(readFileSync(card.path, 'utf8').includes(recovery))
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
