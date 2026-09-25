@@ -37,7 +37,7 @@ const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes } = await import('./lib/stall-watchdog.mjs')
-const { stopCard, resumeDeliveries } = await import('./lib/spawn.mjs')
+const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards } = await import('./lib/review-claims.mjs')
@@ -528,6 +528,7 @@ async function pollProject(project) {
 
     // Builders are the main flow. Start them before slower planner/reviewer
     // housekeeping so a guarded poll never starves Queue capacity.
+    for (const id of confirmLateDeliveries({ tasksDir, session: sessionOf(project), agents })) activity(project, id, 'delivery', 'agent started after a slow start; delivery confirmed, hold cleared')
     if (!lowDisk) { await tick(project, agents); holdsReady.add(project) }
 
     if (autoEnabled && !lowDisk) {

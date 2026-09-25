@@ -33,6 +33,24 @@ async function waitPaneWorking(paneId, session, { list = agentList, timeoutMs = 
   return false
 }
 
+// A slow start under load marks a real delivery "unconfirmed" and holds its card; once the
+// pane is seen working, it was delivered (all 8 flagged on 2026-09-25 were running).
+export function confirmLateDeliveries({ tasksDir, session, agents }) {
+  const cleared = []
+  for (const agent of agents) {
+    if (agent.agent_status !== 'working') continue
+    const delivery = readDelivery(session, agent.pane_id)
+    if (delivery?.status !== 'uncertain') continue
+    saveDelivery(session, agent.pane_id, { ...delivery, status: 'confirmed', confirmedLate: true })
+    const bare = String(agent.pane_id).split('@')[0]
+    for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) {
+      const reason = saved.operational?.reason || ''
+      if (reason.includes('Delivery unconfirmed') && reason.includes(`prompt ${bare} `)) { updateWorkflow(tasksDir, id, { operational: null }); cleared.push(id) }
+    }
+  }
+  return cleared
+}
+
 export async function deliverWith({
   paneId, text, session, prompt = agentPrompt, read = paneRead, sendKeys = paneSendKeys, list = agentList, confirmMs = 10000,
 }) {
