@@ -4,7 +4,7 @@
 #
 #   .\kanban.ps1              # board + browser + herdr
 #   .\kanban.ps1 -NoHerdr     # board + browser only
-#   .\kanban.ps1 -Lan         # also listen on 192.168.1.11 for home LAN phones
+#   .\kanban.ps1 -Lan         # also listen on this PC's 192.168.1.x for phones (sticky)
 #   .\kanban.ps1 -Silent      # server only - no browser tab, no herdr focus-steal.
 #                               For unattended restarts (scheduled tasks, watchdogs,
 #                               anything not a human sitting at the shortcut) - opening
@@ -25,6 +25,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $pidFile = Join-Path $root '.server.pid'
+# The phone (LAN) listener is sticky: once launched with -Lan, every later launch (the
+# watchdog's recovery, restart-kanban.ps1) keeps it. Delete .lan-on to turn it off.
+$lanFlag = Join-Path $root '.lan-on'
+if ($Lan) { Set-Content $lanFlag '' } elseif (Test-Path $lanFlag) { $Lan = [switch]::Present }
 $config = Get-Content (Join-Path $root 'board.config.json') -Raw | ConvertFrom-Json
 $port = $config.port
 if (-not $Project) { $Project = $config.projects[0] }

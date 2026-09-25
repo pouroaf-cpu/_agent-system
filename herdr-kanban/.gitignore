@@ -15,6 +15,7 @@ review-evidence/
 .server.pid
 .manager-alerts.json
 .watchdog-outage
+.lan-on
 tmp/
 artifacts/
 TASKS/activity.log

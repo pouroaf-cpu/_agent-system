@@ -1309,7 +1309,14 @@ const handleRequest = async (req, res) => {
 let port = config.port
 let pollersStarted = false
 const holdsReady = new Set() // projects whose file-lock holds this process has computed
-const server = createServer(handleRequest)
+// One bad request must never take the board down: an async handler that throws is an
+// unhandled rejection, which kills node (a project folder that no longer exists did this).
+const serve = (req, res) => handleRequest(req, res).catch((err) => {
+  console.error(`${req.method} ${req.url}: ${err.stack || err.message}`)
+  if (res.headersSent) res.end()
+  else json(res, 500, { ok: false, error: err.message })
+})
+const server = createServer(serve)
 
 async function startPollers() {
   if (pollersStarted) return
@@ -1331,7 +1338,7 @@ async function startPollers() {
 
 function startLan() {
   if (!lanHost) return
-  const lanServer = createServer(handleRequest)
+  const lanServer = createServer(serve)
   lanServer.on('error', (err) => console.error(`kanban lan ${lanHost}:${port}: ${err.message}`))
   lanServer.listen(port, lanHost, () => console.log(`kanban lan: http://${lanHost}:${port}`))
 }
