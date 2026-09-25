@@ -626,6 +626,21 @@ test('a card waiting in Owner does not hold its files against queued cards', () 
 })
 
 // Injectbuddy I195: a re-planned card reused its stale, dirty worktree from the last plan.
+test('an empty worktree made while the card waited is fast-forwarded to integration before the Builder starts (Injectbuddy I195)', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const first = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(f.integration, 'fix.js'), 'prerequisite fix\n')
+    git(f.integration, 'add', 'fix.js'); git(f.integration, 'commit', '-m', 'prerequisite lands')
+    const again = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: findCard(f.tasks, 'T-1'), gitSettings: f.settings })
+    assert.equal(again.workspacePath, first.workspacePath, 'same checkout, dependencies kept')
+    assert.equal(git(again.workspacePath, 'rev-parse', 'HEAD'), git(f.integration, 'rev-parse', 'HEAD'))
+    assert.equal(readWorktrees(f.tasks)['T-1'].baseCommit, git(f.integration, 'rev-parse', 'HEAD'))
+    assert.ok(existsSync(join(again.workspacePath, 'fix.js')))
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('a worktree from an earlier plan is saved to a recovery branch and replaced; the same plan resumes it', () => {
   const f = fixture()
   try {

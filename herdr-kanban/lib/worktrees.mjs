@@ -359,6 +359,16 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     removeCleanWorktree(tasksDir, existing)
     existing = null
   }
+  // An empty worktree made while the card waited sits on the base it was made from: I195's
+  // Builder started on it after its prerequisites I243/I244 landed and never saw their fixes.
+  // Fast-forward it (keeping its installed dependencies) before the Builder starts.
+  if (existing && clean(existing.worktreePath) && git(existing.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() === existing.baseCommit) {
+    const head = git(repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
+    if (head !== existing.baseCommit) {
+      git(existing.worktreePath, ['merge', '--ff-only', head])
+      existing = updateEntry(tasksDir, id, { baseCommit: head })
+    }
+  }
   if (existing) {
     prepareDependencies(existing.workspacePath, integrationWorkspace)
     const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], state: 'building', reason: null, resumedAt: new Date().toISOString() })

@@ -56,7 +56,8 @@ test('dependency drift installs in the card workspace after detaching the juncti
   writeFileSync(join(site, 'package.json'), '{"dependencies":{"dep":"1","other":"2"}}')
   git(f.integration, 'commit', '-am', 'merge origin/master')
   const err = (() => { try { prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }) } catch (e) { return e } })()
-  assert.match(err.message, /package\.json differs from integration/)
+  // The empty worktree is fast-forwarded to integration first, so the new dependency shows as missing.
+  assert.match(err.message, /package\.json differs from integration|missing other/)
   assert.equal(err.installIn, first.workspacePath)
 
   let settle, calls = 0
