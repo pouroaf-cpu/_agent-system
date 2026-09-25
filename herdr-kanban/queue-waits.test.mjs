@@ -132,3 +132,16 @@ test('a workspace-prefixed file list integrates the card commit', t => {
   assert.equal(result.status, 'integrated', result.reason)
   assert.match(readFileSync(join(f.integration, 'site', 'app.js'), 'utf8'), /^changed/)
 })
+
+test('an empty or partial shared node_modules is reinstalled, not treated as installed (Tradeflow, Injectbuddy)', async t => {
+  const f = repo(t)
+  const site = join(f.integration, 'site')
+  writeFileSync(join(site, 'package.json'), '{"dependencies":{"dep":"1","other":"2"}}')
+  writeFileSync(join(site, 'package-lock.json'), '{"v":1}')
+  mkdirSync(join(site, 'node_modules', 'dep'), { recursive: true }) // "other" is missing
+  writeFileSync(join(site, 'node_modules', 'dep', 'package.json'), '{}')
+  const card = f.add('T-40', ['site/app.js'])
+  let started = null
+  const hold = dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: f.settings, install: folder => { started = folder; return new Promise(() => {}) }, free: () => 20 })
+  assert.ok(hold.startsWith(`installing dependencies in ${site}`), hold) // may queue behind another test's install
+})

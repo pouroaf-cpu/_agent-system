@@ -274,6 +274,13 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
 // node_modules, install there once in the background instead of sending the card
 // to Owner. A card workspace install (started when the spawn found drift) holds
 // the card while it runs. Returns a hold reason, or null when the card may start.
+// A node_modules folder is not an install: Tradeflow's shared one was empty and Injectbuddy's
+// half-installed, so the board never repaired them and every card downloaded its own copy.
+function installedIn(folder, root) {
+  const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
+  return Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).every(name => existsSync(join(root, 'node_modules', name, 'package.json')))
+}
+
 export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5 }) {
   try {
     const entry = readWorktrees(tasksDir)[card.id.toUpperCase()]
@@ -284,9 +291,9 @@ export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings
     const state = installs.get(norm(folder)) || { failures: 0 }
     if (state.running || state.failures >= 2) return startDependencyInstall({ folder, tasksDir })
     if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
-    if (!state.failures && existsSync(join(folder, 'node_modules'))) return null
+    if (!state.failures && installedIn(folder, folder)) return null
     if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
-    if (!state.failures && existsSync(join(dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()), 'node_modules'))) return null
+    if (!state.failures && installedIn(folder, dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()))) return null
     const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
     if (!Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) return null
     return startDependencyInstall({ folder, tasksDir, install, free, minFreeGb })

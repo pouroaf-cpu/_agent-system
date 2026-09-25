@@ -28,7 +28,8 @@ test('a missing node_modules starts one background install; the card waits, then
   await tick()
   assert.equal(f.hold(), `installing dependencies in ${f.folder}`, 'still running: no second install')
   assert.deepEqual(f.calls, ['npm ci --no-audit --no-fund'])
-  mkdirSync(join(f.folder, 'node_modules'))
+  mkdirSync(join(f.folder, 'node_modules', 'dep'), { recursive: true }) // what a finished install leaves
+  writeFileSync(join(f.folder, 'node_modules', 'dep', 'package.json'), '{}')
   f.settle().ok(); await tick()
   assert.equal(f.hold(), null)
 })
