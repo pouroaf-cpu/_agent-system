@@ -65,6 +65,10 @@ test('dependency drift installs in the card workspace after detaching the juncti
   assert.equal(existsSync(modules), false, 'the junction is unlinked')
   assert.ok(existsSync(join(site, 'node_modules', 'dep', 'package.json')), 'nothing deleted through it')
   assert.equal(dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: f.settings }), `installing dependencies in ${first.workspacePath}`, 'an allowed wait while it runs')
+  // One install at a time: a second folder queues behind it (Injectbuddy I246's parallel npm ci crashes).
+  const other = mkdtempSync(join(tmpdir(), 'second-install-')); t.after(() => rmSync(other, { recursive: true, force: true }))
+  writeFileSync(join(other, 'package-lock.json'), '{}')
+  assert.match(startDependencyInstall({ folder: other, tasksDir: f.tasks, install, free: () => 20 }), /^installing dependencies in .*queued behind another install/)
   await tick(); settle.fail(new Error('ERESOLVE')); await tick()
   assert.match(startDependencyInstall({ folder: err.installIn, tasksDir: f.tasks, install, free: () => 20 }), /retry after: ERESOLVE/)
   await tick(); settle.fail(new Error('ERESOLVE again')); await tick()

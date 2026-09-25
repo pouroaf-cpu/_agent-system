@@ -251,6 +251,9 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   const waiting = `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
   if (state.running) return waiting
   if (state.failures >= 2) return `dependency install failed twice in ${folder}: ${state.error}`
+  // One install at a time, board-wide: parallel `npm ci` runs (about 1.5 GB each) on a
+  // loaded machine crashed Injectbuddy I246's install three times in two minutes.
+  if ([...installs.values()].some(other => other.running)) return `installing dependencies in ${folder} (queued behind another install)`
   const command = installCommand(folder)
   if (!command) return null
   const gb = free(folder)
