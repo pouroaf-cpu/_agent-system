@@ -559,6 +559,11 @@ test('Blocked by only matches a real metadata line, not the same words inside a 
     '**Priority** 7/10\n\n' +
     '> Note: a line like `**Blocked by:** nothing` would be read as an unresolvable id.\n')
   assert.deepEqual(parseCard(join(tasks, 'queue', 'T-59-no-real-blocker.md'), 'queue').blockedBy, [])
+  // Prose after the field is not a card id (Injectbuddy I228 sat in Planned on "none. No deployment…").
+  writeFileSync(join(tasks, 'queue', 'I228-prose.md'), '# I228 — Card\n\n- **Blocked by:** none. No deployment or live-site acceptance check.\n')
+  assert.deepEqual(parseCard(join(tasks, 'queue', 'I228-prose.md'), 'queue').blockedBy, [])
+  writeFileSync(join(tasks, 'queue', 'I229-real.md'), '# I229 — Card\n\n**Blocked by:** I227 (dashboard reorder), TF46\n')
+  assert.deepEqual(parseCard(join(tasks, 'queue', 'I229-real.md'), 'queue').blockedBy, ['I227', 'TF46'])
   rmSync(root, { recursive: true, force: true })
 })
 

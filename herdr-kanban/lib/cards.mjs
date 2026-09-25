@@ -350,10 +350,9 @@ function parseCardFile(path, columnKey) {
     agentSettings,
     estBuild: head.match(EST_BUILD)?.[1] ? Number(head.match(EST_BUILD)[1]) : null,
     estReview: head.match(EST_REVIEW)?.[1] ? Number(head.match(EST_REVIEW)[1]) : null,
-    blockedBy: (head.match(BLOCKED_BY)?.[1] || '')
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean),
+    // Only real card IDs count: "**Blocked by:** none. No deployment…" became one
+    // unresolvable blocker and held Injectbuddy I228 in Planned (2026-09-25).
+    blockedBy: [...new Set((head.match(BLOCKED_BY)?.[1] || '').toUpperCase().match(new RegExp(String.raw`\b${CARD_ID}\b`, 'g')) || [])],
     issueKey: plain(head.match(ISSUE_KEY)?.[1]),
     mission: plain(head.match(MISSION)?.[1]),
     buildAttempts: (text.match(BUILD_ATTEMPT) || []).length,
