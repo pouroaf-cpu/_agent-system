@@ -112,7 +112,9 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       if (!['done', 'idle'].includes(agent.agent_status)) throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)
       if (saved.completedStage !== 'working' || Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) throw new Error(`${card.id}: Builder handoff is not complete`)
       const delivery = readDelivery(session, paneId)
-      if (delivery && !['confirmed', 'cancelled'].includes(delivery.status)) throw new Error(`${card.id}: unresolved Builder delivery; preserve checkout`)
+      // A completed hkb done proves the prompt arrived: an 'uncertain' mark from a slow start
+      // under load must not hold the merge forever (Tradeflow TF71 went to Owner).
+      if (delivery && !['confirmed', 'cancelled', 'uncertain'].includes(delivery.status)) throw new Error(`${card.id}: unresolved Builder delivery; preserve checkout`)
       const output = await io.paneRead(paneId, session)
       if (!String(output).trim()) throw new Error(`${card.id}: cannot preserve finished output`)
       await io.recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
