@@ -384,6 +384,21 @@ function holdsNoWork(entry) {
   return empty
 }
 
+// What a waiting card's saved work actually touched (committed since its base, plus
+// dirty files), as integration-checkout paths; null when unknown (keeps the full lock).
+const savedWork = new Map()
+function savedWorkFiles(entry) {
+  const hit = savedWork.get(entry.worktreePath)
+  if (hit && Date.now() - hit.at < 30_000) return hit.files
+  let files = null
+  try {
+    const committed = git(entry.worktreePath, ['diff', '--name-only', '-z', '--no-renames', `${entry.baseCommit}..HEAD`]).stdout.split('\0')
+    files = [...committed, ...semanticDirtyFiles(entry.worktreePath)].filter(Boolean).map(f => norm(resolve(entry.repoRoot || entry.integrationWorkspace, f)))
+  } catch { /* unknown keeps the full lock */ }
+  savedWork.set(entry.worktreePath, { at: Date.now(), files })
+  return files
+}
+
 export function overlapHoldReason({ tasksDir, card, projectPath }) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   if (!candidate.size) return 'card not ready — no exact files listed'
@@ -409,8 +424,18 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     // on each other forever (Tradeflow T-38 and TF56): the older worktree goes first.
     const mine = registry[card.id.toUpperCase()]
     if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && mine?.createdAt && entry.createdAt && mine.createdAt < entry.createdAt) continue
+    // Waiting off the build lanes, only the saved work needs protecting, not every file the
+    // plan names (Injectbuddy I184 locked 45 files for 24 queued cards; 2 had changed).
+    if (live && ['planning', 'planned', 'queue'].includes(live.column)) {
+      const saved = savedWorkFiles(entry)
+      if (saved) {
+        const hit = saved.find((file) => candidate.has(file))
+        if (hit) return `files busy, held by ${id} — ${slash(relative(resolve(projectPath), hit))}`
+        continue
+      }
+    }
     // Preserve locks on existing changes even if a correction narrows the card.
-    const files = [...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
+    const files =[...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })
     const overlap = files.find((file) => candidate.has(norm(file)))
     if (overlap) return `files busy, held by ${id} — ${slash(relative(resolve(projectPath), overlap))}`

@@ -94,6 +94,21 @@ test('exact overlapping card files are held while unrelated files are free', () 
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test('a queued card with saved work locks only the files it changed (Injectbuddy I184)', () => {
+  const f = fixture()
+  try {
+    writeFileSync(join(f.integration, 'other.js'), 'other\n')
+    git(f.integration, 'add', 'other.js'); git(f.integration, 'commit', '-m', 'other')
+    const first = f.addCard('T-1')
+    writeFileSync(first.path, readFileSync(first.path, 'utf8').replace('- `app.js` — change', '- `app.js` — change\n- `other.js` — change'))
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: findCard(f.tasks, 'T-1'), gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'saved work\n')
+    const onOther = f.addCard('T-2', 'other.js'), onApp = f.addCard('T-3')
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: onOther, projectPath: f.integration }), null)
+    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: onApp, projectPath: f.integration }), /held by T-1 — app\.js/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('an integration conflict aborts cleanly and preserves the card worktree', () => {
   const f = fixture()
   try {
