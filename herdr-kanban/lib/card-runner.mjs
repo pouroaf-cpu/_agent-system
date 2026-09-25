@@ -66,7 +66,7 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
     let card = findCard(tasksDir, run.cardId)
     if (run.reviewOnly && !['completed', 'review', 'archive'].includes(card.column)) return stop('Review-only recovery cannot replay Planning or Builder')
     if (run.planningRecoveryOnly && run.stages.planner && card.column !== 'planning') return stop('Planning recovery handed off; inspect preserved scope/work before authorizing implementation')
-    if (['owner', 'issues', 'archive'].includes(card.column)) return stop(`Card reached ${card.column}; authorization ended`)
+    if (['pou', 'owner', 'issues', 'archive'].includes(card.column)) return stop(`Card reached ${card.column}; authorization ended`)
     if (readWorkflow(tasksDir)[card.id]?.operational) return stop('Operational failure recorded; no automatic retry')
     const verdict = currentReviewDecision(readFileSync(card.path, 'utf8'))
     if (run.stages.reviewer && verdict) {

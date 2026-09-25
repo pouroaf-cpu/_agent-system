@@ -418,7 +418,8 @@ function cardStatus(card) {
   const timer = laneTimer(card);
   if (orphaned(card)) return { text: timer && timer.tone !== 'active' ? timer.text : 'No agent', tone: 'problem', title: 'In Working with nothing running on it — move it back to Queue to run it again' };
   if (spawning.has(card.id)) return { text: 'Starting…', tone: 'active' };
-  if (card.column === 'owner') return { text: 'Waiting on you', tone: 'owner' };
+  if (card.column === 'pou') return { text: 'Waiting on Pou', tone: 'owner' };
+  if (card.column === 'owner') return { text: 'Waiting on Kanban Manager', tone: 'muted' };
   const notice = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning;
   if (notice) return { text: notice, tone: 'problem' };
   const ind = state.stageIndicators?.[card.id];
@@ -505,8 +506,8 @@ function cardNode(card) {
   });
   n.append(meta);
 
-  // Operator buttons: Approve an Owner card, Finish a Review or Completed card.
-  const op = card.column === 'owner' ? 'approve' : ['review', 'completed'].includes(card.column) ? 'finish' : null;
+  // Operator buttons: Approve a Pou or Owner card, Finish a Review or Completed card.
+  const op = ['pou', 'owner'].includes(card.column) ? 'approve' : ['review', 'completed'].includes(card.column) ? 'finish' : null;
   if (op && !picking) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -1749,7 +1750,7 @@ el.project.addEventListener('change', () => {
 
 
 
-const MOBILE_ORDER = ['working', 'queue', 'issues', 'owner', 'review', 'completed', 'planned', 'planning'];
+const MOBILE_ORDER = ['pou', 'working', 'queue', 'issues', 'owner', 'review', 'completed', 'planned', 'planning'];
 
 let selectedStage = '';
 
@@ -2175,7 +2176,7 @@ async function spawn(hit) {
 
 
 
-const LANE_LABEL = { owner: 'Owner', planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', issues: 'Issues', review: 'Review', completed: 'Completed', archive: 'Archive' };
+const LANE_LABEL = { pou: 'Pou', owner: 'Owner', planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', issues: 'Issues', review: 'Review', completed: 'Completed', archive: 'Archive' };
 async function operatorAction(op, id, button) {
   if (MOCK) return toast('mock: would ' + op + ' ' + id);
   button.disabled = true;
@@ -2434,7 +2435,7 @@ function renderDrawer() {
   // Owner and Issues are the two columns nothing moves out of on its own, so
   // they are the two that get a one-click way back into the run.
   // A Working card with nothing running on it is stuck; requeuing is the fix.
-  const handedBack = card.column === 'owner' || card.column === 'issues' || orphaned(card);
+  const handedBack = ['pou', 'owner', 'issues'].includes(card.column) || orphaned(card);
   el.drawerQueue.hidden = !handedBack;
 
   // Keep the terminal tail where the user put it.
@@ -2483,7 +2484,7 @@ function renderDrawer() {
 
   // ---- The agent's own words on what it needs: the one thing you have to read.
   // Handover notes only mean something where the card still waits on someone.
-  const askIsLive = card.ask && (card.column === 'owner' || card.column === 'issues' || orphaned(card));
+  const askIsLive = card.ask && (['pou', 'owner', 'issues'].includes(card.column) || orphaned(card));
   if (askIsLive) {
     // The parser can hand back "Kind: first clause" as the kind; the heading is
     // only the kind, and everything after it is the body.

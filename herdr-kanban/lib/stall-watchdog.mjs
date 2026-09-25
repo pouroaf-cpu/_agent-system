@@ -69,7 +69,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   const byId = new Map(Object.entries(board).filter(([k]) => k !== 'archive').flatMap(([, cards]) => cards).map(c => [c.id, c]))
   const idle = new Map()
   for (const card of byId.values()) {
-    if (card.column === 'owner') continue
+    if (['pou', 'owner'].includes(card.column)) continue
     if (busy(card.id)) { reset(card.id); continue }
     const since = sinceOf(card)
     if (now - since >= minutes * 60000) idle.set(card.id, { card, since })

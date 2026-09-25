@@ -155,7 +155,7 @@ export function recordStartFailure(tasksDir, cardId, role, reason) {
   const count = prior?.role === role ? prior.count + 1 : 1
   appendHistory(tasksDir, card.id, { event: 'start-failed', stage: card.column, role, reason, count })
   updateWorkflow(tasksDir, card.id, { startFailure: { role, count, reason, at: new Date().toISOString() } })
-  if (count < 2 || card.column === 'owner') return null
+  if (count < 2 || ['pou', 'owner'].includes(card.column)) return null
   const lane = columnByKey(card.column).label
   const moved = moveCard(tasksDir, card.id, 'owner')
   writeCurrentFeedback(tasksDir, moved, 'Needs you', `The ${role[0].toUpperCase() + role.slice(1)} for ${card.id} failed to start twice in a row (last error: ${String(reason).replace(/\s+/g, ' ').slice(0, 300)}). All work is preserved. Should the board try again? Drag it back to ${lane} to retry.`)

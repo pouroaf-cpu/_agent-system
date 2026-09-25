@@ -143,7 +143,7 @@ select {
 .lane-head:hover .lane-name { color: var(--active); }
 .lane-chev { display: none; color: var(--muted); }
 .count { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
-.lane[data-key="owner"]:not(.vacant) .count { font-weight: 600; color: var(--owner); }
+.lane[data-key="pou"]:not(.vacant) .count { font-weight: 600; color: var(--owner); }
 .lane-body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
   padding: 0 8px 8px;

@@ -958,7 +958,7 @@ const handleRequest = async (req, res) => {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
-      if (before.column === 'owner' && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
+      if (['pou', 'owner'].includes(before.column) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
       if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)

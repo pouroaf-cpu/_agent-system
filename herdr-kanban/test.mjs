@@ -317,8 +317,8 @@ test('backoff grows, so three attempts are not spent in one polling tick', () =>
   rmSync(root, { recursive: true, force: true })
 })
 
-test('Owner is the first column and has its own folder', () => {
-  assert.equal(COLUMNS[0].key, 'owner')
+test('Pou is the first column; Owner has its own folder', () => {
+  assert.equal(COLUMNS[0].key, 'pou')
   assert.equal(columnByKey('owner').dir, 'owner')
   const { tasks, root } = fixture()
   moveCard(tasks, 'T-04', 'owner')

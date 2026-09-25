@@ -435,17 +435,17 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
     // An archived card is closed: its preserved worktree must never block live cards.
     if (live?.column === 'archive') continue
-    // A card in Owner waits on the operator, often for hours: its saved work stays on its
+    // A card in Pou or Owner waits on the operator or the Kanban Manager, often for hours: its saved work stays on its
     // branch and is rebased when it resumes, but it must not starve every card behind it
     // (Injectbuddy I164/I169 held next.config.ts and package.json for 7 queued cards overnight).
-    if (live?.column === 'owner') continue
+    if (['pou', 'owner'].includes(live?.column)) continue
     // Back before Working with a clean checkout at its base, a card has no work to
     // protect (Tradeflow T-36's empty worktree held 14 queued cards).
-    if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && holdsNoWork(entry)) continue
+    if (live && ['planning', 'planned', 'queue', 'pou', 'owner'].includes(live.column) && holdsNoWork(entry)) continue
     // Two cards off the build lanes, each with saved work on a shared file, would wait
     // on each other forever (Tradeflow T-38 and TF56): the older worktree goes first.
     const mine = registry[card.id.toUpperCase()]
-    if (live && ['planning', 'planned', 'queue', 'owner'].includes(live.column) && mine?.createdAt && entry.createdAt && mine.createdAt < entry.createdAt) continue
+    if (live && ['planning', 'planned', 'queue', 'pou', 'owner'].includes(live.column) && mine?.createdAt && entry.createdAt && mine.createdAt < entry.createdAt) continue
     // Waiting off the build lanes, only the saved work needs protecting, not every file the
     // plan names (Injectbuddy I184 locked 45 files for 24 queued cards; 2 had changed).
     if (live && ['planning', 'planned', 'queue'].includes(live.column)) {

@@ -84,6 +84,8 @@ if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
 
 let target = verb === 'move' ? note.toLowerCase() : VERBS[verb]
 if (!target && !['done', 'pass'].includes(verb)) fail('move needs a target column, e.g. hkb move T-02 review')
+// Pou is the operator's lane: only a deliberate board move reaches it (2026-09-25).
+if (target === 'pou') fail('agents cannot move cards to Pou; hand off with hkb owner and the Kanban Manager decides')
 
 // The cap is enforced here rather than in the reviewer's prompt, because a
 // prompt is advice and this has to hold even when the reviewer ignores it.

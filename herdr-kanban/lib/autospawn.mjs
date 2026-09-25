@@ -306,7 +306,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         const blockedByIssue = prerequisites.find(([, hits]) => hits.length === 1 && hits[0].column === 'issues')
         const allowedDependencyWait = hold.startsWith('waiting for unique integrated or archived prerequisite')
           && !blockedByIssue && unmet.length > 0
-          && prerequisites.every(([, hits]) => hits.length === 1 && ['owner', 'planning', 'planned', 'queue', 'working', 'review', 'completed'].includes(hits[0].column))
+          && prerequisites.every(([, hits]) => hits.length === 1 && ['pou', 'owner', 'planning', 'planned', 'queue', 'working', 'review', 'completed'].includes(hits[0].column))
         const cardProblem = !!(dupId || dupKey || cycle || hold.startsWith('card not ready') || (unmet.length && !allowedDependencyWait && !blockedByIssue))
         // Waiting on another live card's files is allowed in any lane, Owner included:
         // only the holder is escalated, never the cards queued behind it (Tradeflow T-35).

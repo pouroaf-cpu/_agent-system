@@ -1,6 +1,7 @@
-// Pushover alert when a card lands in Owner, on any project. Same credentials and
+// Pushover alert when a card lands in Pou, the operator's lane, on any project. Owner
+// belongs to the Kanban Manager and never alerts. Same credentials and
 // one-attempt rule as watchdog-alert.ps1: the alerted set is persisted before the
-// send, so an ambiguous timeout never repeats a push. A card that leaves Owner and
+// send, so an ambiguous timeout never repeats a push. A card that leaves Pou and
 // comes back alerts again.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
@@ -29,7 +30,7 @@ export async function alertOwnerCards({ project, tasksDir, send = pushover }) {
   const path = join(tasksDir, STATE)
   const first = !existsSync(path)
   const alerted = first ? {} : JSON.parse(readFileSync(path, 'utf8'))
-  const owner = readBoard(tasksDir).owner
+  const owner = readBoard(tasksDir).pou
   const fresh = owner.filter(c => !alerted[c.id])
   const next = Object.fromEntries(owner.map(c => [c.id, alerted[c.id] || new Date().toISOString()]))
   const changed = fresh.length || Object.keys(alerted).some(id => !next[id])

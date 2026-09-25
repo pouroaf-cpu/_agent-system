@@ -58,7 +58,7 @@ export function auditFindings(tasksDir, source) {
 export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = [], reason = '', prefix, mission = '' }) {
   const { audit, findings: all, links } = auditFindings(tasksDir, { id, report })
   if (audit.column === 'archive') return { audit: audit.id, created: [], links, archived: true, remaining: [] }
-  if (!report && !['owner', 'planning'].includes(audit.column)) throw new Error(`${audit.id} is in ${audit.column}; turn findings into cards once the report is in Owner or Planning`)
+  if (!report && !['pou', 'owner', 'planning'].includes(audit.column)) throw new Error(`${audit.id} is in ${audit.column}; turn findings into cards once the report is in Pou, Owner or Planning`)
   const known = new Set(all.map(f => f.n))
   const numbers = (list, name) => {
     if (!Array.isArray(list) || list.some(n => !known.has(n))) throw new Error(`${name} must list finding numbers from: ${[...known].join(', ')}`)

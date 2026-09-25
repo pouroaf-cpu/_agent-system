@@ -44,13 +44,13 @@ export function operatorRetry(tasksDir, cardId, to) {
   updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
-// Board Approve button on an Owner card: record the decision, add the operator-only
+// Board Approve button on a Pou or Owner card: record the decision, add the operator-only
 // investigation marker when that is all the plan waits on, then retry the card in
 // the lane it left (Planning for investigation approvals or when history is silent).
 const APPROVED = '**Investigation approved:** yes'
 export function operatorApprove(tasksDir, cardId, now = new Date()) {
   const card = findCard(tasksDir, cardId)
-  if (card.column !== 'owner') throw new Error(`${card.id} is in ${card.column}; Approve works only on Owner cards`)
+  if (!['pou', 'owner'].includes(card.column)) throw new Error(`${card.id} is in ${card.column}; Approve works only on Pou or Owner cards`)
   let text = readFileSync(card.path, 'utf8')
   const investigation = awaitsOperatorApproval(text)
   if (investigation) {
@@ -283,7 +283,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         save(tasksDir, owners)
         // A Planner going quiet is operational, not a failed plan: no failed return.
         card = moveCard(tasksDir, card.id, 'planning', { intake: plannerHold })
-        if (card.column === 'owner') continue
+        if (['pou', 'owner'].includes(card.column)) continue
       }
       const escalate = (error) => {
         if (cardRunContext()) { stopCardRun(project, card.id, error.message); throw error }
@@ -366,7 +366,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         fresh = true
       }
       if (card.column === 'issues') card = moveCard(tasksDir, card.id, 'planning')
-      if (card.column === 'owner') continue
+      if (['pou', 'owner'].includes(card.column)) continue
       let spawnedNewAgent = false
       // Corrections and retries go to a fresh session, never back into an idle
       // (possibly day-old) one. An uncertain delivery keeps its pane for inspection.

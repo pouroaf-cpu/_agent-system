@@ -10,8 +10,8 @@ function priorIssueStage(tasksDir, card) {
     try { const e = JSON.parse(line); return e.event === 'transition' ? [e] : [] } catch { return [] }
   })
   for (const move of moves.reverse()) {
-    if (['planning', 'review'].includes(move.from) && ['issues', 'owner'].includes(move.to)) return move.from
-    if (!['issues', 'owner'].includes(move.from) || !['issues', 'owner'].includes(move.to)) break
+    if (['planning', 'review'].includes(move.from) && ['issues', 'pou', 'owner'].includes(move.to)) return move.from
+    if (!['issues', 'pou', 'owner'].includes(move.from) || !['issues', 'pou', 'owner'].includes(move.to)) break
   }
   return null
 }
@@ -53,7 +53,7 @@ export function stageIndicators({ tasksDir, reviewRoot, board, planners, claims,
       else if (decision || workflow[card.id]?.operational?.stage === 'review' || claim && (claim.phase !== 'starting' && !agent || agent && ['done', 'idle', 'blocked', 'unknown'].includes(agent.agent_status))) {
         result[card.id] = { status: 'issue', stage: 'Reviewer', reason: workflow[card.id]?.operational?.reason || (decision ? `Review verdict: ${decision.verdict}` : 'Reviewer ended without a passing verdict') }
       } else if (claim) result[card.id] = { status: 'working', stage: 'Reviewer', reason: 'Reviewer assigned and working' }
-    } else if (['issues', 'owner'].includes(card.column)) {
+    } else if (['issues', 'pou', 'owner'].includes(card.column)) {
       const stage = priorIssueStage(tasksDir, card)
       if (stage) result[card.id] = { status: 'issue', stage: stage === 'planning' ? 'Planner' : 'Reviewer', reason: `${stage === 'planning' ? 'Planning' : 'Review'} issue; see card feedback` }
     }

@@ -131,7 +131,10 @@ export function askForApproval(tasksDir, card) {
 // Column order is board order. `dir` is the folder under <project>/TASKS/.
 // `backlog` and `queue` keep their historical names so existing repos need no migration.
 export const COLUMNS = [
-  // First, because it is the only column the board cannot act on by itself.
+  // First, because it is the only column the board cannot act on by itself. Only a
+  // deliberate board move reaches it; every automatic route stops in Owner, which the
+  // Kanban Manager works (2026-09-25: 40 Owner alerts in a day, mostly board problems).
+  { key: 'pou',       dir: 'pou',       label: 'Pou'       },
   { key: 'owner',     dir: 'owner',     label: 'Owner'     },
   { key: 'planning',  dir: 'planning',  label: 'Planning'  },
   { key: 'planned',   dir: 'backlog',   label: 'Planned'   },

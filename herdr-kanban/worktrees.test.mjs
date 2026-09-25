@@ -11,6 +11,7 @@ import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { reconcileCompletedHandoffs, runShell } from './lib/completed-handoff.mjs'
+import { alertOwnerCards } from './lib/owner-alerts.mjs'
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
@@ -90,6 +91,25 @@ test('exact overlapping card files are held while unrelated files are free', () 
     const third = f.addCard('T-3', 'other.js')
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: third, projectPath: f.integration }), null)
     moveCard(f.tasks, 'T-1', 'archive', { operatorArchive: true })
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), null)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// 2026-09-25: most Owner cards were board problems, each a phone alert. Automatic routes
+// stay in Owner for the Kanban Manager; only a deliberate board move reaches Pou, which alerts.
+test('an automatic move to Owner sends no alert; a board move to Pou alerts and holds no locks', async () => {
+  const f = fixture()
+  try {
+    prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1'), gitSettings: f.settings })
+    moveCard(f.tasks, 'T-1', 'working')
+    const second = f.addCard('T-2')
+    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), /held by T-1/)
+    const sent = [], send = async (title) => { sent.push(title) }
+    assert.equal(moveCard(f.tasks, 'T-1', 'owner').column, 'owner')
+    assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: f.tasks, send }), [])
+    assert.equal(sent.length, 0, 'Owner never alerts')
+    assert.equal(moveCard(f.tasks, 'T-1', 'pou').column, 'pou') // what POST /api/move does
+    assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: f.tasks, send }), ['T-1'])
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), null)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })

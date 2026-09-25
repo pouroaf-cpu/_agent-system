@@ -29,13 +29,14 @@ export function droppedSections(tasksDir, id, text) {
   }
   return saved ? REQUIRED_SECTIONS.filter(name => sectionBody(saved, name) && !sectionBody(text, name)) : []
 }
-// The lane a card left when it last went to Owner, or null when history does not say.
+// The lane a card left when it last went to Pou or Owner, or null when history does not say.
+// An Owner -> Pou promotion is not a lane the card left.
 export function laneBeforeOwner(tasksDir, id) {
   const path = historyPath(tasksDir, id)
   if (!existsSync(path)) return null
   let from = null
   for (const line of readFileSync(path, 'utf8').split('\n')) {
-    try { const entry = JSON.parse(line); if (entry.event === 'transition' && entry.to === 'owner') from = entry.from } catch { /* torn line */ }
+    try { const entry = JSON.parse(line); if (entry.event === 'transition' && ['pou', 'owner'].includes(entry.to) && !['pou', 'owner'].includes(entry.from)) from = entry.from } catch { /* torn line */ }
   }
   return from
 }

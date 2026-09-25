@@ -61,7 +61,7 @@ test('Approve without the investigation marker returns the card to the lane it l
   put(tasksDir, 'owner', 'T-5') // no history: Planning
   assert.equal(operatorApprove(tasksDir, 'T-5').card.column, 'planning')
   put(tasksDir, 'queue', 'T-6')
-  assert.throws(() => operatorApprove(tasksDir, 'T-6'), /only on Owner cards/)
+  assert.throws(() => operatorApprove(tasksDir, 'T-6'), /only on Pou or Owner cards/)
 })
 
 test('Finish on Review adds an operator PASS that survives integration and archives instead of re-reviewing', async t => {
