@@ -47,10 +47,12 @@ if (args[0] === '--planner-assignment') { plannerAssignment = args[1]; args.spli
 const [verb, cardId, ...rest] = args
 const note = rest.join(' ').trim()
 
-const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'issues', owner: 'owner', park: 'owner', review: 'review', rework: 'issues', pass: null, move: null }
+const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'issues', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'issues', pass: null, move: null }
 
 // What gets stamped above the note, and what the board reads back out.
-const HEADING = { issue: 'Kicked back', owner: 'Needs you', park: 'Parked', rework: 'Review feedback' }
+// split: an investigation found several separate issues. The card stops, and the project's
+// orchestrator turns each finding into its own card (operator, 2026-09-25).
+const HEADING = { issue: 'Kicked back', owner: 'Needs you', park: 'Parked', split: 'Split needed', rework: 'Review feedback' }
 
 // Repeated failed reviews require deeper Planner diagnosis, never a human dump.
 const MAX_REVIEW_ROUNDS = 3
@@ -74,7 +76,7 @@ function fail(msg) {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|review|rework|pass|move> <card-id> [note|column]\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|review|rework|pass|move> <card-id> [note|column]\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 
@@ -100,6 +102,7 @@ if (verb === 'owner' && !note) fail('owner needs to say what you need: hkb owner
 // park = owner, but the auto-manager sweep skips it from now on. For cards no
 // amount of agent effort can resolve, so re-reading them every 15 minutes is waste.
 if (verb === 'park' && !note) fail('park needs to say why no agent can resolve it: hkb park T-02 "needs your bank details"')
+if (verb === 'split' && !/^\s*1[.)]/m.test(note)) fail('split needs the separate findings as a numbered list, each with its evidence: hkb split T-02 "1. ... 2. ..."')
 if (verb === 'rework' && !note) fail('rework needs feedback the builder can act on: hkb rework T-02 "criterion 2 fails: ..."')
 let card
 let previousColumn
@@ -125,7 +128,7 @@ try {
   if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again. Edit only your own sections; never rewrite other sections.`)
   // A Planner cannot add an operator-only approval, so any Planner handoff on a plan
   // held only by one goes to Owner with the question, never back to planning (T-148).
-  approvalWait = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['move', 'issue', 'owner', 'park'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
+  approvalWait = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['move', 'issue', 'owner', 'park', 'split'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
   if (approvalWait) target = 'owner'
   if (reviewClaim || current.column === 'review') assertReviewHandoff(reviewRoot, tasksDir, current.id, reviewClaim)
   if (reviewClaim && !['pass', 'rework', 'owner', 'audit', 'issue'].includes(verb)) fail('Reviewer claim permits only scoped review handoffs')
@@ -224,7 +227,7 @@ try {
   }
   if (!card.audit && (verb === 'rework' || (previousColumn === 'review' && ['issues', 'planning'].includes(target)))) setAutoReview(tasksDir, card.id, true)
   appendDirtySnapshot(card, dirtySnapshot)
-  if (previousColumn === 'review' || approvalWait || ['issue', 'rework', 'owner', 'park'].includes(verb)) stopCardRun(basename(dirname(tasksDir)), card.id, previousColumn === 'review' ? `Review handoff: ${verb}` : `Stopped at ${verb}`)
+  if (previousColumn === 'review' || approvalWait || ['issue', 'rework', 'owner', 'park', 'split'].includes(verb)) stopCardRun(basename(dirname(tasksDir)), card.id, previousColumn === 'review' ? `Review handoff: ${verb}` : `Stopped at ${verb}`)
 } catch (err) {
   fail(err.message)
 }
@@ -259,10 +262,10 @@ activityLog({
   tasksDir,
   project: basename(dirname(tasksDir)),
   cardId: card.id,
-  event: previousColumn === 'working' ? `builder-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
-    : previousColumn === 'review' ? `reviewer-${['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
-    : previousColumn === 'planning' ? `planner-${prerequisiteWait ? 'wait' : ['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'finish'}`
-    : ['issue', 'rework', 'owner', 'park'].includes(verb) ? 'failure' : 'move',
+  event: previousColumn === 'working' ? `builder-${['issue', 'rework', 'owner', 'park', 'split'].includes(verb) ? 'failure' : 'finish'}`
+    : previousColumn === 'review' ? `reviewer-${['issue', 'rework', 'owner', 'park', 'split'].includes(verb) ? 'failure' : 'finish'}`
+    : previousColumn === 'planning' ? `planner-${prerequisiteWait ? 'wait' : ['issue', 'rework', 'owner', 'park', 'split'].includes(verb) ? 'failure' : 'finish'}`
+    : ['issue', 'rework', 'owner', 'park', 'split'].includes(verb) ? 'failure' : 'move',
   message: `${previousColumn} -> ${target} (${verb})`,
 })
 
