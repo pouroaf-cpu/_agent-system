@@ -609,6 +609,12 @@ test('T-9 keeps an allowed Owner prerequisite wait visible in Queue', async () =
   assert.match(holdsFor('test')['T-09'], /waiting for unique integrated or archived prerequisite T-08/)
   assert.ok(readBoard(tasks).queue.some(c => c.id === 'T-10'))
   assert.match(holdsFor('test')['T-10'], /waiting for unique integrated or archived prerequisite T-17/)
+  // One prerequisite archived, one still building: still an allowed wait (Injectbuddy I195).
+  mkdirSync(join(tasks, 'archive'), { recursive: true })
+  writeFileSync(join(tasks, 'archive', 'T-06-done.md'), '# T-06 — Done\n')
+  writeFileSync(join(tasks, 'queue', 'T-11-gated.md'), '# T-11 — Gated\n\n**Blocked by:** T-06, T-17\n')
+  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 5 })
+  assert.ok(readBoard(tasks).queue.some(c => c.id === 'T-11'))
   rmSync(root, { recursive: true, force: true })
 })
 

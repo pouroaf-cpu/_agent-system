@@ -302,7 +302,9 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         const dupKey = duplicateIssueKey(freshCard, fresh)
         const cycle = cycleFor(freshCard, fresh)
         const unmet = unmetBlockers(freshCard, fresh, readWorktrees(tasksDir))
-        const prerequisites = (freshCard.blockedBy || []).map(id => [id, liveCards(fresh).filter(c => c.id === id)])
+        // Only unfinished prerequisites count: an archived one has no live copy, and counting it
+        // made Injectbuddy I195's wait on I244 look broken once I243 landed (card went to Owner).
+        const prerequisites = (freshCard.blockedBy || []).filter(id => unmet.includes(id)).map(id => [id, liveCards(fresh).filter(c => c.id === id)])
         const blockedByIssue = prerequisites.find(([, hits]) => hits.length === 1 && hits[0].column === 'issues')
         const allowedDependencyWait = hold.startsWith('waiting for unique integrated or archived prerequisite')
           && !blockedByIssue && unmet.length > 0
