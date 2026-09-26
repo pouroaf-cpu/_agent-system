@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
 
@@ -143,4 +144,23 @@ export function writeCurrentFeedback(tasksDir, card, heading, note) {
   const pattern = /^## Current feedback\r?\n[\s\S]*?(?=^## |^\*\*Recovery:\*\*|^---\s*$|^\*\*(?:Build attempt|Failed return \d+)\*\*|$(?![\s\S]))/m
   const next = pattern.test(text) ? text.replace(pattern, section + '\n') : text + '\n\n' + section
   writeFileSync(card.path, next)
+  if (heading === 'Needs you') askManager(tasksDir, card, note)
+}
+
+// A "Needs you" question goes to the project's registered manager chat first; the
+// operator only hears from Pou. I326's Planner question stayed in Planning and reached
+// the operator through the Planner's own session instead (2026-09-27). Projects without
+// a manager ask the Kanban Manager. Folders that are not board projects (tests) skip it.
+function askManager(tasksDir, card, note) {
+  try {
+    const here = dirname(dirname(fileURLToPath(import.meta.url)))
+    const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || join(here, 'board.config.json'), 'utf8'))
+    const project = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(dirname(tasksDir)).toLowerCase())
+    if (!project) return
+    const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+    const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 600)
+    mkdirSync(dirname(inbox), { recursive: true })
+    appendFileSync(inbox, `- ${new Date().toISOString()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${question}
+`)
+  } catch { /* the question is still on the card; routing is best effort */ }
 }
