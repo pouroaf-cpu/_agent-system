@@ -672,7 +672,23 @@ export function setAutoReview(tasksDir, cardId, on) {
   return { ...card, autoReview: on }
 }
 
+// Archive holds most cards and rarely changes, yet every poll re-stats each file
+// (most of the board server's CPU, 2026-09-27). Reuse it until a card enters or
+// leaves (the folder's mtime changes), or ARCHIVE_TTL_MS passes for in-place edits.
+const ARCHIVE_TTL_MS = 30000
+const archiveCache = new Map()
 function readColumn(tasksDir, col) {
+  if (col.key !== ARCHIVE.key) return readColumnNow(tasksDir, col)
+  let dirMtime
+  try { dirMtime = statSync(join(tasksDir, col.dir)).mtimeMs } catch { return [] }
+  const hit = archiveCache.get(tasksDir)
+  if (hit && hit.dirMtime === dirMtime && Date.now() - hit.at < ARCHIVE_TTL_MS) return structuredClone(hit.cards)
+  const cards = readColumnNow(tasksDir, col)
+  archiveCache.set(tasksDir, { dirMtime, at: Date.now(), cards })
+  return structuredClone(cards)
+}
+
+function readColumnNow(tasksDir, col) {
   const dir = join(tasksDir, col.dir)
   if (!existsSync(dir)) return []
   return readdirSync(dir)
@@ -707,10 +723,10 @@ export function readBoard(tasksDir) {
 // is usually about to move one of them.
 export function findCard(tasksDir, cardId) {
   const id = String(cardId).toUpperCase()
-  const all = Object.values(readBoard(tasksDir)).flat().filter((c) => c.id === id)
+  const live = ALL.filter((col) => col.key !== ARCHIVE.key).flatMap((col) => readColumn(tasksDir, col)).filter((c) => c.id === id)
+  const all = live.length ? live : readColumn(tasksDir, ARCHIVE).filter((c) => c.id === id)
   if (!all.length) throw new Error(`unknown card: ${cardId}`)
 
-  const live = all.filter((c) => c.column !== 'archive')
   if (live.length > 1) {
     if (live.length === 2 && mergeLateCopy(tasksDir, id, live)) return findCard(tasksDir, id)
     throw Object.assign(new Error(`${id} is ambiguous — ${live.map((c) => `${c.column}/${c.file}`).join(' and ')}`), { ambiguous: id })
