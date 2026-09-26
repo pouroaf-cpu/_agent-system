@@ -51,6 +51,20 @@ export function lastTransition(tasksDir, id) {
   }
   return last
 }
+// True when the Builder's hkb done/unchanged is recorded since the card last entered Working.
+export function builderHandedOff(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return false
+  let handedOff = false
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    try {
+      const e = JSON.parse(line)
+      if (e.event === 'transition' && e.to === 'working') handedOff = false
+      if (e.event === 'handoff' && ['done', 'unchanged'].includes(e.outcome)) handedOff = true
+    } catch { /* torn line */ }
+  }
+  return handedOff
+}
 // When the card last moved into `column` (ms), from its history transitions; null when
 // history does not say. Histories reach ~0.5MB and every poll asks, so the answer is
 // cached per file size+mtime.

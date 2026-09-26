@@ -4,11 +4,11 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { findCard, moveCard, appendReviewPass } from './cards.mjs'
-import { readBindings } from './bindings.mjs'
+import { readBindings, unbind } from './bindings.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { readUsage, recordUsageFinish } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
-import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration } from './worktrees.mjs'
 
@@ -110,7 +110,13 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       if (!identity || !matches(agent)) throw new Error(`${card.id}: finished Builder identity unavailable; preserve checkout`)
       if (agent.agent_status === 'working') { results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for Builder handoff turn to finish' }); continue }
       if (!['done', 'idle'].includes(agent.agent_status)) throw new Error(`${card.id}: Builder is not confirmed done; preserve checkout`)
-      if (saved.completedStage !== 'working' || Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) throw new Error(`${card.id}: Builder handoff is not complete`)
+      if (saved.completedStage !== 'working' || Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) {
+        // hkb done recorded its handoff but stopped before the stage and unbind (Tradeflow T-43):
+        // the idle Builder is finished, so complete those steps here instead of holding for Owner.
+        if (!builderHandedOff(tasksDir, card.id)) throw new Error(`${card.id}: Builder handoff is not complete`)
+        updateWorkflow(tasksDir, card.id, { completedStage: 'working', ...(card.column === 'completed' ? { completedAt: new Date().toISOString() } : {}) })
+        for (const [id, b] of Object.entries(readBindings(tasksDir))) if (b.pane_id === paneId) unbind(tasksDir, id)
+      }
       const delivery = readDelivery(session, paneId)
       // A completed hkb done proves the prompt arrived: an 'uncertain' mark from a slow start
       // under load must not hold the merge forever (Tradeflow TF71 went to Owner).

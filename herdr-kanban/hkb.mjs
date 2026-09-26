@@ -123,7 +123,15 @@ try {
   if ((verb === 'done' && ['completed', 'review', 'archive'].includes(current.column)) ||
       (verb === 'unchanged' && (['review', 'archive'].includes(current.column) || (current.column === 'completed' && (current.trivial || current.reviewPassed)))) ||
       (verb === 'pass' && ['completed', 'archive'].includes(current.column) && current.reviewPassed)) {
-    console.log(`${current.id}: ${verb} handoff already recorded (${current.column})`)
+    // A handoff stopped after the card move (EPERM, busy lock, killed process) left the
+    // Builder bound or its stage unrecorded; finish those steps so it can integrate (Tradeflow T-43).
+    const bound = readBindings(tasksDir)[current.id], saved = readWorkflow(tasksDir)[current.id]
+    if (bound || !saved?.completedStage) {
+      updateWorkflow(tasksDir, current.id, { ...(bound && { builder: bound }), operational: null, completedStage: saved?.completedStage || (verb === 'pass' ? 'review' : 'working'),
+        ...(current.column === 'completed' ? { completedAt: new Date().toISOString() } : {}) })
+      unbind(tasksDir, current.id)
+    }
+    console.log(`${current.id}: ${verb} handoff already recorded (${current.column})${bound || !saved?.completedStage ? '; finished its interrupted steps' : ''}`)
     process.exit(0)
   }
   const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))

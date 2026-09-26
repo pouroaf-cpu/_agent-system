@@ -74,6 +74,45 @@ test('Builder done from Issues records the Builder stage so the card can integra
   assert.equal(JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1'].completedStage, 'working')
 })
 
+test('re-running hkb done finishes a handoff that stopped after the card move (Tradeflow T-43)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-resume-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  putCard(tasksDir, 'completed', 'T-1')
+  // Half-applied: moved to Completed, but the Builder is still bound and no stage is recorded.
+  writeFileSync(join(tasksDir, '.board.json'), JSON.stringify({ 'T-1': { pane_id: 'p', name: 'b-t-1' } }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'p' } } }))
+  const result = runHkb(tasksDir, 'done', 'T-1')
+  assert.equal(result.status, 0, result.stderr)
+  const saved = JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1']
+  assert.equal(saved.completedStage, 'working')
+  assert.ok(saved.completedAt)
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board.json'), 'utf8'))['T-1'], undefined)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+})
+
+test('a Completed card whose hkb done stopped half-applied is repaired and integrates on the next poll', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-half-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  putCard(tasksDir, 'completed', 'T-1')
+  putCard(tasksDir, 'completed', 'T-2')
+  const builder = id => ({ pane_id: `p${id}`, name: `b${id}` })
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building' }, 'T-2': { cardId: 'T-2', state: 'building' } }))
+  writeFileSync(join(tasksDir, '.board.json'), JSON.stringify({ 'T-1': builder(1), 'T-2': builder(2) }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: builder(1) }, 'T-2': { builder: builder(2) } }))
+  writeFileSync(join(tasksDir, '.request-usage.json'), JSON.stringify({ runs: { a: { paneId: 'p1', role: 'builder', cardIds: ['T-1'], sessionId: 's1' }, b: { paneId: 'p2', role: 'builder', cardIds: ['T-2'], sessionId: 's2' } } }))
+  // T-1's Builder ran hkb done (history has the handoff); T-2's card was moved without one.
+  mkdirSync(join(tasksDir, '.history'), { recursive: true })
+  writeFileSync(join(tasksDir, '.history', 'T-1.jsonl'), [{ event: 'transition', from: 'queue', to: 'working' }, { event: 'transition', from: 'working', to: 'completed' }, { event: 'handoff', stage: 'working', outcome: 'done' }].map(e => JSON.stringify(e)).join('\n') + '\n')
+  let agents = [1, 2].map(n => ({ pane_id: `p${n}`, name: `b${n}`, agent_session: { value: `s${n}` }, agent_status: 'idle' }))
+  const io = { agentList: async () => agents, paneRead: async () => 'out', recordUsageFinish: async () => {},
+    paneClose: async pane => { agents = agents.filter(a => a.pane_id !== pane) }, reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const results = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', io })
+  assert.equal(results.find(r => r.id === 'T-1').status, 'integrated')
+  assert.match(results.find(r => r.id === 'T-2').reason, /Builder handoff is not complete/)
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1'].completedStage, 'working')
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(tasksDir, '.board.json'), 'utf8'))), ['T-2'])
+})
+
 test('archive requires Builder PASS and integration while Review PASS and audit gates remain', t => {
   const root = mkdtempSync(join(tmpdir(), 'archive-gate-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
