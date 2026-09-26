@@ -75,7 +75,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
   }
   if (planRoot) {
-    checkPlanPaths(planRoot, section('Files'), section('Prerequisites'))
+    checkPlanPaths(planRoot, section('Files'), section('Prerequisites'), section('Implementation plan'))
     if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
   }
 }
@@ -83,8 +83,9 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
 // A card worktree is a checkout of the integration HEAD, so a plan may only rely on
 // files git tracks there (T-145/T-148, Kiwitown T-1). Untracked or gitignored files
 // (TASKS/, *.md in some projects) exist for the Planner but not for the Builder.
-// Checks ## Files and backticked path-shaped prerequisites only, never prose.
-function checkPlanPaths(planRoot, filesSection, prereqSection) {
+// Checks ## Files and backticked path-shaped words in ## Prerequisites and
+// ## Implementation plan, never prose.
+function checkPlanPaths(planRoot, filesSection, prereqSection, planSection) {
   const root = planRoot.replaceAll('\\', '/')
   const readOnly = 'cite a file that exists only outside git by absolute path as a read-only reference in ## Prerequisites'
   const tracked = (path) => {
@@ -102,16 +103,31 @@ function checkPlanPaths(planRoot, filesSection, prereqSection) {
     const why = problem(path)
     if (why) throw new Error(`Plan check failed: ## Files path ${path} ${why}. Fix the path, mark a file this card creates with (new), or ${readOnly}.`)
   }
-  for (const [, token, rest] of prereqSection.matchAll(/`([^`\s]+)`([^\n`]*)/g)) {
-    if (/^[A-Za-z]:[\\/]/.test(token)) {
-      if (!existsSync(token)) throw new Error(`Plan check failed: ## Prerequisites path ${token} does not exist. Remove it or cite a file that exists.`)
-      continue
+  // Ignored root files such as .env.devtools.local exist only in the integration
+  // checkout (Injectbuddy I227/I265); the Builder gets the project's envFile instead.
+  const hint = (path) => /(^|\/)\.env/i.test(path)
+    ? 'Card checkouts have no ignored .env files: rely on the project\'s approved envFile (board.config.json projectSettings envFile), which the Builder runs with node --env-file="<absolute envFile>"; never copy or test it inside the card checkout'
+    : `Mark a file this card creates with (new), or ${readOnly}`
+  for (const [name, text] of [['Prerequisites', prereqSection], ['Implementation plan', planSection]]) {
+    for (const [, span, rest] of text.matchAll(/`([^`]+)`([^\n`]*)/g)) {
+      if (/^\s*\(new\b/i.test(rest)) continue
+      const single = !/\s/.test(span.trim())
+      for (const word of span.trim().split(/\s+/)) {
+        const token = word.split('=').pop().replace(/^["'(]+|["'),;]+$/g, '').replaceAll('\\', '/').replace(/^\.\//, '')
+        if (/^[A-Za-z]:\//.test(token)) {
+          if (single && name === 'Prerequisites' && !existsSync(token)) throw new Error(`Plan check failed: ## Prerequisites path ${token} does not exist. Remove it or cite a file that exists.`)
+          continue
+        }
+        // Relative file paths only (a/b.ext, .env.local), not URLs, globs or node_modules (junctioned in).
+        if (!/^[\w@.[\]-]+(?:\/[\w@.[\]-]+)*\.[\w-]{1,20}$/.test(token) || /^node_modules\//.test(token) || /(^|\/)\.\.(\/|$)/.test(token) || newFiles.has(token)) continue
+        // A lone a/b.ext prerequisite must exist and be tracked. Anything else (root-level
+        // names, command arguments, plan steps) is refused only when it is a file the
+        // Planner can see that the card worktree will not have.
+        const why = single && name === 'Prerequisites' && token.includes('/') ? problem(token)
+          : statSync(resolve(planRoot, token), { throwIfNoEntry: false })?.isFile() ? problem(token) : null
+        if (why) throw new Error(`Plan check failed: ## ${name} path ${token} ${why}. ${hint(token)}.`)
+      }
     }
-    // Explicit relative file paths only: a/b.ext, not commands, URLs, globs or node_modules (junctioned in).
-    if (!/^[\w@.[\]-]+(?:\/[\w@.[\]-]+)+\.[A-Za-z0-9]{1,6}$/.test(token) || /^node_modules\//.test(token) || /(^|\/)\.\.(\/|$)/.test(token)) continue
-    if (newFiles.has(token) || /^\s*\(new\b/i.test(rest)) continue
-    const why = problem(token)
-    if (why) throw new Error(`Plan check failed: ## Prerequisites path ${token} ${why}. Mark a file this card creates with (new), or ${readOnly}.`)
   }
 }
 

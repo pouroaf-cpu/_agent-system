@@ -120,5 +120,21 @@ console.log('Planner readiness validation passed')
       /Prerequisites path C:\/definitely\/missing\/CLAUDE\.md does not exist/)
     // Tracked, new, absolute existing, node_modules, commands and prose are all fine.
     validatePlan(prereq(`\`src/app.mjs\` exists; \`scripts/check.mjs\` (new); read-only \`${join(root, 'REPORT.md')}\`; \`node_modules/.bin/x.cmd\`; run \`npm ci\`; see \`lib/guides.ts:getGuide\`.`), { workspace: root })
+
+    // Root-level ignored files (.env*) exist in the integration checkout the Planner
+    // reads but never in a card worktree (Injectbuddy I227/I265). Prerequisites and
+    // Implementation plan setup commands are both checked, word by word.
+    writeFileSync(join(root, '.gitignore'), '*.md\n.env*\n'); writeFileSync(join(root, 'package.json'), '{}')
+    git('add', '.'); git('commit', '-qm', 'env ignore')
+    writeFileSync(join(root, '.env.devtools.local'), 'X=1\n')
+    assert.throws(() => validatePlan(prereq('`.env.devtools.local` exists; copy it to `.env.local` before starting Next.'), { workspace: root }),
+      /## Prerequisites path \.env\.devtools\.local exists .* not tracked .*envFile/)
+    assert.throws(() => validatePlan(prereq('Run `Copy-Item -LiteralPath ".\\.env.devtools.local" -Destination .env.local`.'), { workspace: root }),
+      /\.env\.devtools\.local exists .* not tracked/)
+    assert.throws(() => validatePlan(plan.replace('Setup: none; use the existing Node runtime.', 'Setup: `Test-Path .env.devtools.local` then `node --env-file=.env.devtools.local scripts/check.mjs`'), { workspace: root }),
+      /## Implementation plan path \.env\.devtools\.local exists .* not tracked .*envFile/)
+    // A tracked root file, a file not yet created and ordinary words stay fine.
+    validatePlan(prereq('`package.json` lists the scripts; `.env.local` is written by the card (absent); `Next.js` dev server.'), { workspace: root })
+    validatePlan(plan.replace('Setup: none; use the existing Node runtime.', 'Setup: `npm run check -- package.json` and `node scripts/new-check.mjs`'), { workspace: root })
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
