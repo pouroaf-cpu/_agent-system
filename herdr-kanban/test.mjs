@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readFileSync } from 'node:fs'
+import { readFileSync, utimesSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
@@ -17,7 +17,7 @@ import { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } from './l
 import { computeReviewPlan, cardFiles, cardEstimates, REVIEW_BATCH_CAP_MINUTES } from './lib/review-plan.mjs'
 import { deliverWith } from './lib/spawn.mjs'
 import { parseManagerTasks } from './lib/manager-tasks.mjs'
-import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
+import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { latestTokenSnapshot, recordUsageFinish, recordUsageStart, tokenSnapshots, usageDelta, usageSummary } from './lib/request-usage.mjs'
 
 const CARD = `# T-04 — Money calc pages fail mobile LCP (TRT 4.23s / Sema 4.26s)
@@ -2339,49 +2339,79 @@ test('mission project scope also gates session startup and automatic review', ()
   assert.match(source, /const autoEnabled = !controlState\(project, CONFIG_PATH\)\.paused && config\.maxConcurrentAgents > 0 && missionAllowsProject\(project\)/)
 })
 
-test('manager exception alerts prompt idle Manager once per unchanged durable key', async () => {
+// Audit 2026-09-26 finding 4: alerts went to a herdr agent that no longer exists, and
+// through herdr, so a herdr outage could never be reported.
+test('manager exception alerts push and append to the inbox without herdr, once per key per cooldown', async () => {
   const root = mkdtempSync(join(tmpdir(), 'hkb-alert-'))
   try {
-    const sent = []
+    const sent = [], inbox = join(root, 'roles', 'KANBAN_MANAGER-INBOX.md')
     const args = {
-      boardRoot: root,
-      key: 'hold:Injectbuddy:T-01',
-      title: 'Injectbuddy T-01 held',
-      detail: 'duplicate live card id T-01: queue/T-01.md, planned/T-01.md',
-      list: async () => [{ name: 'kanban-observer', agent_status: 'idle' }],
-      prompt: async (target, text, opts) => sent.push({ target, text, opts }),
+      boardRoot: root, inbox, now: 1000,
+      key: 'herdr',
+      title: 'HERDR unavailable',
+      detail: 'Injectbuddy: {"error":{"code":"server_not_running"}}',
+      send: async (title, message) => sent.push({ title, message }),
       log: () => {},
     }
     assert.deepEqual(await notifyManagerException(args), { sent: true })
     assert.equal(sent.length, 1)
-    assert.equal(sent[0].target, 'kanban-observer')
-    assert.equal(sent[0].opts.session, 'injectbuddy')
-    assert.match(sent[0].text, /\[HERDR exception\] Injectbuddy T-01 held:/)
-    assert.equal((await notifyManagerException(args)).reason, 'duplicate')
+    assert.match(sent[0].title, /HERDR unavailable/)
+    assert.match(sent[0].message, /server_not_running/)
+    assert.match(readFileSync(inbox, 'utf8'), /HERDR unavailable: Injectbuddy: .*server_not_running/)
+    // Seven projects report the same outage with different text: still one push.
+    assert.equal((await notifyManagerException({ ...args, detail: 'Tradeflow: agent list failed', now: 2000 })).reason, 'cooldown')
     assert.equal(sent.length, 1)
+    // Recovery clears the key, so the next outage alerts again.
+    resolveManagerException(root, 'herdr')
+    assert.deepEqual(await notifyManagerException({ ...args, now: 3000 }), { sent: true })
+    assert.equal(sent.length, 2)
+    // A persisting condition reminds only after its cooldown.
+    assert.equal((await notifyManagerException({ ...args, now: 3000 + 60 * 60 * 1000 })).reason, 'cooldown')
+    assert.deepEqual(await notifyManagerException({ ...args, now: 3000 + 4 * 60 * 60 * 1000 }), { sent: true })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test('manager exception alerts retry with cooldown and a finite bound', async () => {
+test('a failed manager push is not repeated (ambiguous timeout) but still reaches the inbox', async () => {
   const root = mkdtempSync(join(tmpdir(), 'hkb-alert-'))
   try {
+    let tries = 0
     const args = {
-      boardRoot: root,
-      key: 'herdr:Injectbuddy',
-      title: 'Injectbuddy HERDR unavailable',
-      detail: 'agent list failed',
-      now: 1000,
-      list: async () => [{ name: 'kanban-observer', agent_status: 'working' }],
-      prompt: async () => { throw new Error('must not prompt while manager works') },
-      log: () => {},
+      boardRoot: root, inbox: join(root, 'INBOX.md'), now: 1000,
+      key: 'circuit-breaker', title: 'Kanban circuit breaker tripped', detail: 'auto-spawn halted',
+      send: async () => { tries++; throw new Error('timeout') }, log: () => {},
     }
     assert.equal((await notifyManagerException(args)).reason, 'failed')
-    assert.equal((await notifyManagerException({ ...args, now: 2000 })).reason, 'cooldown')
-    assert.equal((await notifyManagerException({ ...args, now: 1000 + 10 * 60 * 1000 })).reason, 'failed')
-    assert.equal((await notifyManagerException({ ...args, now: 1000 + 20 * 60 * 1000 })).reason, 'failed')
-    assert.equal((await notifyManagerException({ ...args, now: 1000 + 30 * 60 * 1000 })).reason, 'retry-bound')
+    assert.equal((await notifyManagerException({ ...args, now: 5000 })).reason, 'cooldown')
+    assert.equal(tries, 1)
+    assert.match(readFileSync(args.inbox, 'utf8'), /circuit breaker tripped: auto-spawn halted/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Owner ageing: an old Owner card or a burst of arrivals is reported with the cards it blocks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hkb-owner-age-'))
+  try {
+    const HOUR = 3600000, now = Date.now()
+    const put = (column, id, at, extra = '') => {
+      mkdirSync(join(root, column), { recursive: true })
+      const file = join(root, column, `${id}.md`)
+      writeFileSync(file, `# ${id} — card ${id}\n${extra}`)
+      utimesSync(file, new Date(at), new Date(at))
+    }
+    put('owner', 'T-1', now - 2 * HOUR)
+    put('queue', 'T-9', now, '**Blocked by:** T-1\n')
+    assert.equal(ownerAgeing(root, { now }), null, 'one card for two hours is neither old nor a burst')
+    put('owner', 'T-2', now - 5 * HOUR)
+    const old = ownerAgeing(root, { now })
+    assert.match(old.title, /1 Owner card waiting over 4h/)
+    assert.match(old.detail, /T-2/)
+    assert.match(old.detail, /Blocked behind them: T-9/)
+    rmSync(join(root, 'owner', 'T-2.md'))
+    put('owner', 'T-3', now - 30 * 60000); put('owner', 'T-4', now - 10 * 60000); put('owner', 'T-5', now - 5 * 60000)
+    assert.match(ownerAgeing(root, { now }).title, /3 cards reached Owner within an hour/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -2395,7 +2425,9 @@ test('server poll uses existing hard-hold exceptions but skips routine holds', (
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   assert.match(source, /notifyManagerException\(\{[\s\S]+key: `hold:\$\{project\}:\$\{id\}`/)
   assert.match(source, /notifyManagerException\(\{[\s\S]+key: 'circuit-breaker'/)
-  assert.match(source, /if \(missionAllowsProject\(project\)\) {[\s\S]+key: `herdr:\$\{project\}`/)
+  assert.match(source, /if \(missionAllowsProject\(project\) && [\s\S]+key: 'herdr'/)
+  assert.match(source, /resolveManagerException\(HERE, 'herdr'\)/)
+  assert.match(source, /ownerAgeing\(tasksDir\)[\s\S]+key: `owner:\$\{project\}`/)
 })
 
 test('managed Codex launches do not inject broad shared context policy', () => {

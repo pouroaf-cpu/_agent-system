@@ -9,7 +9,7 @@ import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyP
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
-import { isHardHold, notifyManagerException } from './lib/manager-alerts.mjs'
+import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
 import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './lib/card-run.mjs'
@@ -73,6 +73,9 @@ function ensureTasks(project) {
 // Last known agent state per project, refreshed by each SSE client's poll.
 const agentCache = new Map() // project -> { agents, herdrUp }
 let herdrFailed = false
+// Since when herdr has not answered; the board starting counts, so a reboot that leaves herdr down alerts too.
+let herdrUnconfirmedSince = Date.now()
+const HERDR_ALERT_AFTER_MS = 6 * 60 * 1000
 
 const announcedBreakers = new Set()
 const lastActivityHold = new Map()
@@ -227,17 +230,21 @@ async function pollAgentsNow(project) {
     // worktree, so exact-cwd filtering would make live panes vanish.
     const agents = allAgents
     if (herdrFailed) { console.log('herdr: back up'); herdrFailed = false }
+    if (herdrUnconfirmedSince) { herdrUnconfirmedSince = null; resolveManagerException(HERE, 'herdr') }
     const state = { agents, herdrUp: true }
     agentCache.set(project, state)
     return state
   } catch (err) {
     if (!herdrFailed) { console.log('herdr: unavailable —', err.message); herdrFailed = true }
-    if (missionAllowsProject(project)) {
+    // herdr is shared, so one alert for all projects, and only after the scheduled
+    // watchdog (every 5 minutes) has had a chance to start it.
+    herdrUnconfirmedSince ??= Date.now()
+    if (missionAllowsProject(project) && Date.now() - herdrUnconfirmedSince >= HERDR_ALERT_AFTER_MS) {
       await notifyManagerException({
         boardRoot: HERE,
-        key: `herdr:${project}`,
-        title: `${project} HERDR unavailable`,
-        detail: err.message,
+        key: 'herdr',
+        title: 'HERDR unavailable',
+        detail: `${project}: ${err.message}`,
       })
     }
     const state = { agents: [], herdrUp: false }
@@ -610,6 +617,8 @@ async function pollProject(project) {
         title: `${project} ${card.id}: automatic recovery stopped after ${recovery.returns} failed returns`,
         detail: `Five distinct failed returns; attempts and failure evidence preserved in ${card.path}. Choose a changed recovery approach, narrower scope, or cancellation. No unchanged retry is authorized.` })
     }
+    const ageing = ownerAgeing(tasksDir)
+    if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
     const breaker = breakerState(project)
     if (breaker.breakerTripped) {
     await notifyManagerException({

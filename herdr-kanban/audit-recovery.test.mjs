@@ -35,9 +35,9 @@ test('distinct failed returns 1-4 recover, fifth stops, duplicated returns/resta
     assert.equal(restarted.returns, 5)
     assert.ok(restarted.escalatedAt)
     let sent = 0
-    const alert = { boardRoot: dir, key: `${card.id}:${restarted.escalatedAt}`, title: 'Five failed returns', detail: `${card.id}: ${card.path}; choose changed approach or cancel`, list: async () => [{ name: 'kanban-observer', agent_status: 'idle' }], prompt: async () => { sent++ }, log: null }
+    const alert = { boardRoot: dir, key: `${card.id}:${restarted.escalatedAt}`, title: 'Five failed returns', detail: `${card.id}: ${card.path}; choose changed approach or cancel`, inbox: join(dir, 'INBOX.md'), send: async () => { sent++ }, log: null }
     assert.equal((await notifyManagerException(alert)).sent, true)
-    assert.equal((await notifyManagerException({ ...alert })).reason, 'duplicate')
+    assert.equal((await notifyManagerException({ ...alert })).reason, 'cooldown')
     assert.equal(sent, 1)
     const intake = createCard(dir, { title: 'Successful findings intake', brief: 'Approved' })
     moveCard(dir, intake.id, 'review')
