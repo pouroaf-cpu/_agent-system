@@ -186,6 +186,12 @@ function gitRoot(workspace) {
 }
 
 export function resolveGitSettings({ projectPath, gitSettings }) {
+  // manager is the project chat's registration, not a Git setting: alone it must not make a
+  // project without a Git root look Git-integrated.
+  if (gitSettings?.manager) {
+    const { manager, ...rest } = gitSettings
+    gitSettings = Object.keys(rest).length ? rest : undefined
+  }
   const repoRoot = gitRoot(gitSettings?.integrationPath || projectPath)
   if (!repoRoot) return gitSettings
   return { ...gitSettings, integrationPath: gitSettings?.integrationPath || repoRoot,

@@ -7,6 +7,8 @@
 //   node hkb.mjs park  T-02 "needs your bank details — no agent can supply them"
 //   node hkb.mjs pass  T-02
 //   node hkb.mjs move  T-02 review
+//   node hkb.mjs found T-02 "e2e/x.spec.ts fails on base too: ..."
+//   node hkb.mjs found --board T-02 "hkb refused a valid handoff: ..."
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -15,7 +17,7 @@
 // `owner` is a decision, credential, asset or judgement call only the human can
 // supply — no amount of agent effort will resolve it.
 
-import { existsSync, appendFileSync, readFileSync } from 'node:fs'
+import { existsSync, appendFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
@@ -61,13 +63,18 @@ const MAX_REVIEW_ROUNDS = 3
 // checkout (where ## Files paths must already exist) and the project's sharedFiles.
 function planCheck(card) {
   const projectPath = dirname(tasksDir)
-  let gitSettings
+  const gitSettings = projectSettings()
+  return { planWorkspace: resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.'), sharedFiles: gitSettings?.sharedFiles }
+}
+
+// This project's projectSettings entry in the board config (read-only). No config: none, so the
+// project's own Git root is the integration checkout and findings go to the Kanban Manager.
+function projectSettings() {
   try {
     const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || fileURLToPath(new URL('./board.config.json', import.meta.url)), 'utf8'))
-    const name = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(projectPath).toLowerCase())
-    gitSettings = config.projectSettings?.[name]
-  } catch { /* No config: the project's own Git root is the integration checkout. */ }
-  return { planWorkspace: resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.'), sharedFiles: gitSettings?.sharedFiles }
+    const name = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(dirname(tasksDir)).toLowerCase())
+    return config.projectSettings?.[name]
+  } catch { return undefined }
 }
 
 function fail(msg) {
@@ -75,24 +82,31 @@ function fail(msg) {
   process.exit(1)
 }
 
-// found: something outside this card's scope. The card doesn't move; the finding goes to the
-// Kanban Manager's inbox, who fixes board issues and sends product ones to the project's
-// orchestrator. I213's Builder noted two failing specs only in its card, and nobody saw them
+// found: something outside this card's scope. The card doesn't move. The finding goes to the
+// project's registered manager chat (POST /api/project-manager), else to the Kanban Manager,
+// who forwards product ones. --board sends a board/process problem to the Kanban Manager
+// always. I213's Builder noted two failing specs only in its card, and nobody saw them
 // until the operator did (2026-09-26).
 if (verb === 'found') {
-  if (!cardId || !note) fail('found needs the card and the finding with its evidence: hkb found T-02 "e2e/x.spec.ts fails on base too: ..."')
-  const card = findCard(tasksDir, cardId)
+  const toBoard = cardId === '--board'
+  const [id, ...words] = toBoard ? rest : [cardId, ...rest]
+  const finding = words.join(' ').trim()
+  if (!id || !finding) fail('found needs the card and the finding with its evidence: hkb found [--board] T-02 "e2e/x.spec.ts fails on base too: ..."')
+  const card = findCard(tasksDir, id)
   const project = basename(dirname(tasksDir))
-  const inbox = process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
-  appendFileSync(inbox, `- ${new Date().toISOString()} FOUND ${project} ${card.id} (${card.column}): ${note.replace(/\s+/g, ' ')}\n`)
-  appendHistory(tasksDir, card.id, { event: 'found', note })
-  activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: note })
-  console.log(`hkb: ${card.id} finding sent to the Kanban Manager; carry on with your card`)
+  const manager = !toBoard && projectSettings()?.manager
+  const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+  mkdirSync(dirname(inbox), { recursive: true })
+  appendFileSync(inbox, `- ${new Date().toISOString()} FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}\n`)
+  const to = manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
+  appendHistory(tasksDir, card.id, { event: 'found', note: finding, to })
+  activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: `${finding} (to ${to})` })
+  console.log(`hkb: ${card.id} finding sent to ${to}; carry on with your card`)
   process.exit(0)
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|review|rework|pass|move> <card-id> [note|column]\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 

@@ -44,6 +44,7 @@ export function laneTimes({ tasksDir, board, agents = [], claims = [], planners 
       since: new Date(laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime).toISOString(),
       agentActive: bound?.agent.agent_status === 'working',
       agentRole: bound?.role ?? null,
+      agentName: bound?.agent.name ?? null,
     }
   }
   return result

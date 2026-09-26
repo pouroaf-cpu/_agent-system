@@ -184,12 +184,12 @@ test('lane times: since from the lane entry (else file mtime); agentActive only 
   writeFileSync(join(tasks, '.board.json'), JSON.stringify({ 'T-1': { pane_id: 'b1' } }))
   writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ 'T-3': { lifecycle: 'active', paneId: 'p3' } }))
   const claims = [{ tasksDir: tasks, cards: ['T-2'], paneId: 'r1' }]
-  const agents = [{ pane_id: 'b1', agent_status: 'working' }, { pane_id: 'r1', agent_status: 'idle' }]
+  const agents = [{ pane_id: 'b1', name: 'Builder T-1', agent_status: 'working' }, { pane_id: 'r1', name: 'Reviewer', agent_status: 'idle' }]
   const times = laneTimes({ tasksDir: tasks, board: readBoard(tasks), agents, claims })
   assert.deepEqual(times, {
-    'T-1': { since: new Date(T - 10 * MIN).toISOString(), agentActive: true, agentRole: 'builder' },
-    'T-2': { since: new Date(T).toISOString(), agentActive: false, agentRole: 'reviewer' },
-    'T-3': { since: new Date(T).toISOString(), agentActive: false, agentRole: null },
+    'T-1': { since: new Date(T - 10 * MIN).toISOString(), agentActive: true, agentRole: 'builder', agentName: 'Builder T-1' },
+    'T-2': { since: new Date(T).toISOString(), agentActive: false, agentRole: 'reviewer', agentName: 'Reviewer' },
+    'T-3': { since: new Date(T).toISOString(), agentActive: false, agentRole: null, agentName: null },
   }, 'Owner cards are not timed; a Planner pane that is gone is no agent')
 })
 

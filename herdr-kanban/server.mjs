@@ -2,8 +2,9 @@
 
 import { createServer } from 'node:http'
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch } from 'node:fs'
-import { spawn } from 'node:child_process'
-import { join, extname, normalize, dirname } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
+import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners } from './lib/card-planner.mjs'
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
@@ -17,7 +18,7 @@ import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './li
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
-import { historyPath, appendHistory } from './lib/card-history.mjs'
+import { historyPath, appendHistory, laneEnteredAt } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
@@ -293,7 +294,7 @@ function boardPayload(project) {
     planners,
     workflow,
     stageIndicators: indicators,
-    // Per card in Planning/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole }.
+    // Per card in Planning/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
     laneTimes: times,
     bindings: readBindings(tasksDirOf(project)),
     retries: readRetries(tasksDirOf(project)),
@@ -327,6 +328,51 @@ function boardPayload(project) {
       supportedAgentSettings: catalog(),
       mission: config.mission ?? null,
     },
+  }
+}
+
+// --- project chat reads: stuck cards and summary ---------------------------
+
+// Every non-archived card with its minutes in lane, the live agent working on it and
+// why it waits, from the same lane times, holds and stage indicators the board shows.
+function cardWaits(project, now = Date.now()) {
+  const tasksDir = tasksDirOf(project), board = readBoard(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir)
+  const agents = agentCache.get(project)?.agents ?? [], claims = readReviewClaims(REVIEW_ROOT)
+  let indicators = {}, times = {}
+  try { indicators = stageIndicators({ tasksDir, reviewRoot: REVIEW_ROOT, board, planners, claims, agents, workflow }) } catch { /* as on the board: no indicator */ }
+  try { times = laneTimes({ tasksDir, board, planners, workflow, claims, agents }) } catch { /* fall back to lane entry below */ }
+  const holds = { ...holdsFor(project), ...quotaHoldsOf(project, board) }
+  const cards = COLUMNS.flatMap(c => board[c.key] || []).map(card => {
+    const since = Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime)
+    return { project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
+      agent: times[card.id]?.agentActive ? times[card.id].agentName : null, reason: holds[card.id] ?? indicators[card.id]?.reason ?? null }
+  })
+  return { board, cards }
+}
+
+// Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
+function integrationAheadOfMaster(project) {
+  const path = projectSettingsOf(project)?.integrationPath
+  if (!path) return null
+  const r = spawnSync('git', ['-C', path, 'rev-list', '--count', 'origin/master..HEAD'], { encoding: 'utf8', timeout: 5000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })
+  return r.status === 0 ? Number(r.stdout.trim()) : null
+}
+
+function projectSummary(project) {
+  const { board, cards } = cardWaits(project)
+  const control = controlState(project, CONFIG_PATH)
+  const oldest = cards.reduce((a, c) => (!a || c.minutes > a.minutes ? c : a), null)
+  return {
+    project,
+    paused: control.paused,
+    ...(control.release && { release: control.release }),
+    lanes: Object.fromEntries(COLUMNS.map(c => [c.key, (board[c.key] || []).length])),
+    oldestCard: oldest && { id: oldest.id, lane: oldest.lane, minutes: oldest.minutes },
+    owner: board.owner.map(c => c.id),
+    pou: board.pou.map(c => c.id),
+    stuck: cards.filter(c => c.minutes >= 60).length,
+    quotaBlocks: activeQuota(HERE),
+    integrationAheadOfMaster: integrationAheadOfMaster(project),
   }
 }
 
@@ -1171,6 +1217,51 @@ const handleRequest = async (req, res) => {
     }
     broadcastBoard(p)
     return
+  }
+
+  // A project chat registers as its project's manager: hkb found then goes to its inbox
+  // instead of the Kanban Manager's. { project, chat: null } unregisters.
+  if (url.pathname === '/api/project-manager' && ['GET', 'POST'].includes(req.method)) {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const input = req.method === 'GET' ? { project: url.searchParams.get('project') } : JSON.parse(body || '{}')
+      const p = input.project
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      if (req.method === 'POST') {
+        const { chat } = input
+        const inbox = (input.inbox ?? join(HERE, '..', '_roles', 'inbox', `${p}-INBOX.md`)).replaceAll('\\', '/')
+        if (chat !== null) {
+          if (typeof chat !== 'string' || !chat.trim() || chat.length > 60 || /[\r\n]/.test(chat)) throw new Error('chat must be the chat display name, 1-60 characters on one line')
+          if (typeof inbox !== 'string' || !isAbsolute(inbox)) throw new Error('inbox must be an absolute path')
+          try { mkdirSync(dirname(inbox), { recursive: true }) } catch (err) { throw new Error(`inbox folder cannot be created: ${err.message}`) }
+        }
+        // Patch the current file, as /api/config does; hkb reads it, so replace it atomically.
+        Object.assign(config, JSON.parse(readFileSync(CONFIG_PATH, 'utf8')))
+        config.projectSettings ||= {}
+        const settings = config.projectSettings[p] ||= {}
+        if (chat === null) delete settings.manager
+        else settings.manager = { chat: chat.trim(), inbox }
+        if (!Object.keys(settings).length) delete config.projectSettings[p]
+        writeFileSync(CONFIG_PATH + '.tmp', JSON.stringify(config, null, 2) + '\n')
+        renameSync(CONFIG_PATH + '.tmp', CONFIG_PATH)
+        activity(p, '-', 'manager', chat === null ? 'project manager unregistered' : `project manager: ${chat.trim()} (${inbox})`)
+      }
+      return json(res, 200, { ok: true, project: p, manager: config.projectSettings?.[p]?.manager ?? null })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  // Cards at least `minutes` (default 60) in their lane, for one project or all of them.
+  if (req.method === 'GET' && (url.pathname === '/api/stuck' || url.pathname === '/api/summary')) {
+    try {
+      const only = url.searchParams.get('project')
+      if (only && !config.projects.includes(only)) throw new Error('Unknown project')
+      const projects = (only ? [only] : config.projects).filter(p => existsSync(tasksDirOf(p)))
+      if (url.pathname === '/api/summary') return json(res, 200, { ok: true, projects: projects.map(projectSummary) })
+      const minutes = Number(url.searchParams.get('minutes') ?? 60)
+      if (!Number.isFinite(minutes) || minutes < 0) throw new Error('minutes must be a number of minutes, 0 or more')
+      return json(res, 200, { ok: true, minutes, cards: projects.flatMap(p => cardWaits(p).cards).filter(c => c.minutes >= minutes).sort((a, b) => b.minutes - a.minutes) })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 
   // Settings are applied to the running server and written back to disk, so a
