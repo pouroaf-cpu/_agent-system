@@ -16,7 +16,7 @@ function priorIssueStage(tasksDir, card) {
   return null
 }
 
-export function stageIndicators({ tasksDir, reviewRoot, board, planners, claims, agents, workflow }) {
+export function stageIndicators({ tasksDir, reviewRoot, board, planners, claims, agents, workflow, now = Date.now() }) {
   const result = {}
   const byPane = new Map(agents.map(agent => [agent.pane_id, agent]))
   for (const card of Object.values(board).flat()) {
@@ -24,7 +24,11 @@ export function stageIndicators({ tasksDir, reviewRoot, board, planners, claims,
       const owner = planners[card.id]
       if (!owner || owner.lifecycle !== 'active') continue
       const agent = byPane.get(owner.paneId)
-      if (owner.error || workflow[card.id]?.operational?.stage === 'planning' || !agent || ['blocked', 'unknown'].includes(agent.agent_status)) {
+      // A Planner assigned in the last two minutes whose pane isn't listed yet is starting,
+      // not broken (the operator read "unavailable or blocked" on I311 as a fault, 2026-09-26).
+      if (!agent && !owner.error && workflow[card.id]?.operational?.stage !== 'planning' && now - Date.parse(owner.createdAt || 0) < 120000) {
+        result[card.id] = { status: 'working', stage: 'Planner', reason: 'Planner starting' }
+      } else if (owner.error || workflow[card.id]?.operational?.stage === 'planning' || !agent || ['blocked', 'unknown'].includes(agent.agent_status)) {
         result[card.id] = { status: 'issue', stage: 'Planner', reason: owner.error || workflow[card.id]?.operational?.reason || 'Planner session unavailable or blocked' }
       } else if (['done', 'idle'].includes(agent.agent_status) && !owner.submitted) {
         result[card.id] = { status: 'issue', stage: 'Planner', reason: 'Planner ended before receiving its plan assignment' }

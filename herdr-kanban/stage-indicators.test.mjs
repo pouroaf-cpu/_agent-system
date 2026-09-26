@@ -19,6 +19,12 @@ try {
   assert.equal(stageIndicators(input)['T-1'].status, 'passed')
   writeFileSync(path, plan.replace('Stop rules:', 'Unclear rules:'))
   assert.equal(stageIndicators(input)['T-1'].status, 'issue')
+  // A Planner whose pane isn't listed yet: starting for two minutes, then an issue (I311).
+  const now = Date.parse('2026-09-26T10:20:00Z')
+  planners['T-1'] = { lifecycle: 'active', paneId: 'gone', submitted: true, createdAt: '2026-09-26T10:19:30Z' }
+  assert.deepEqual(stageIndicators({ ...input, now })['T-1'], { status: 'working', stage: 'Planner', reason: 'Planner starting' })
+  planners['T-1'].createdAt = '2026-09-26T10:10:00Z'
+  assert.equal(stageIndicators({ ...input, now })['T-1'].reason, 'Planner session unavailable or blocked')
   delete planners['T-1']
   assert.equal(stageIndicators(input)['T-1'], undefined)
 
