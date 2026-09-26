@@ -22,7 +22,7 @@ export const AUDITS = Object.keys(AUDIT_TEMPLATES)
 
 // `workspace` (absolute) is passed only at a Planner handoff, so cards already
 // queued or working are never blocked retroactively by the plan check.
-export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null } = {}) {
+export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null, sharedFiles = [] } = {}) {
   const section = (name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').replace(/^\*\*Callers checked:\*\*\s*$/gm, '').trim()
   const workspace = text.match(/^\*\*Workspace:\*\*\s*([^\n]+)$/im)?.[1]?.trim() || '.'
   const readinessLine = text.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)?.[0]
@@ -50,7 +50,8 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   }
   // A card that edits many files is several cards: Injectbuddy I191 (33 files) spent 14.5M
   // tokens across Planner loops and locked files the whole queue waited on (operator, 2026-09-26).
-  const edited = section('Files').split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).length
+  const editedFiles = section('Files').split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
+  const edited = editedFiles.length
   if (planRoot && edited > MAX_PLAN_FILES) throw new Error(`Plan too wide: ${edited} files to edit (limit ${MAX_PLAN_FILES}). Don't hand this off as one card. Split it: hkb split <card-id> "1. <smaller card: its outcome and files> 2. ..." so the project's orchestrator re-cards each part.`)
   if (readiness === 'investigation') {
     const plan = section('Implementation plan').replaceAll('**', '')
@@ -81,6 +82,22 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
   }
   if (planRoot) {
+    // Card checkouts share the integration node_modules through a junction, so an install
+    // there rewrote the shared copy under running Builders (throughput audit 2026-09-26 F3).
+    const steps = `${section('Prerequisites')}\n${section('Implementation plan')}`.split(/\r?\n/).filter(line => !/\b(?:do not|don't|never|no|avoid|without)\b/i.test(line)).join('\n')
+    const install = steps.match(/\b(?:npm (?:ci|install|i)|pnpm (?:install|i)|yarn install)\b/i)?.[0]
+    if (install && !editedFiles.some(f => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml)$/.test(f))) throw new Error(`Plan check failed: the plan runs \`${install}\`, but card checkouts share the integration node_modules through a junction, and installing there rewrites it under running Builders. Remove the install step (dependencies are already installed), or list package.json or the lockfile in ## Files if this card changes dependencies.`)
+    // Shared per-project check scripts (projectSettings.<project>.sharedFiles) were locked by
+    // every card that added its own check to them, one card at a time (Injectbuddy
+    // scripts/capture-authed.mjs, 15 cards; throughput audit F1).
+    const slashed = p => p.replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase()
+    const same = (a, b) => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
+    const about = `${text.match(/^# .*$/m)?.[0] || ''}\n${section('Approved brief')}`.replaceAll('\\', '/').toLowerCase()
+    const shared = editedFiles.find(f => sharedFiles.some(s => same(slashed(f), slashed(s))) && !about.includes(slashed(f)) && !about.includes(basename(f).toLowerCase()))
+    if (shared) {
+      const id = text.match(/^# (\S+)/m)?.[1]?.toLowerCase() || '<card-id>'
+      throw new Error(`Plan check failed: ${shared} is shared by every card in this project, and locking it makes the other cards wait. Leave it out of ## Files and write this card's own check as scripts/check-${id}-*.mjs (new), importing what it needs from ${shared}. Only a card whose title or Approved brief names ${shared} may change it.`)
+    }
     checkPlanPaths(planRoot, section('Files'), section('Prerequisites'), section('Implementation plan'))
     if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
   }
@@ -615,7 +632,7 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
   if (toKey === 'completed' && card.cardOwned && !card.trivial && !card.reviewPassed && !hasBuilderPass(card)) {
     throw new Error(`${card.id} requires Builder PASS before Completed`)
   }
-  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment, workspace: options.planWorkspace })
+  if (card.cardOwned && ['planned', 'queue'].includes(toKey)) validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!options.plannerAssignment, workspace: options.planWorkspace, sharedFiles: options.sharedFiles })
   if (card.column === 'archive' && toKey !== 'archive') {
     // Only reachable when every copy of the id is archived; moving one back out
     // silently is more surprising than refusing.

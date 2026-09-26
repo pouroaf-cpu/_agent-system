@@ -119,7 +119,7 @@ console.log('Planner readiness validation passed')
     assert.throws(() => validatePlan(prereq('Rules: `C:/definitely/missing/CLAUDE.md`.'), { workspace: root }),
       /Prerequisites path C:\/definitely\/missing\/CLAUDE\.md does not exist/)
     // Tracked, new, absolute existing, node_modules, commands and prose are all fine.
-    validatePlan(prereq(`\`src/app.mjs\` exists; \`scripts/check.mjs\` (new); read-only \`${join(root, 'REPORT.md')}\`; \`node_modules/.bin/x.cmd\`; run \`npm ci\`; see \`lib/guides.ts:getGuide\`.`), { workspace: root })
+    validatePlan(prereq(`\`src/app.mjs\` exists; \`scripts/check.mjs\` (new); read-only \`${join(root, 'REPORT.md')}\`; \`node_modules/.bin/x.cmd\`; run \`npm test\`; see \`lib/guides.ts:getGuide\`.`), { workspace: root })
 
     // Root-level ignored files (.env*) exist in the integration checkout the Planner
     // reads but never in a card worktree (Injectbuddy I227/I265). Prerequisites and
@@ -148,4 +148,47 @@ console.log('Planner readiness validation passed')
   validatePlan(wide)
   const refs = realistic.replace(/## Files\n[\s\S]*?## Implementation plan/, `## Files\n${many(15)}\n- \`src/ctx.mjs\` — unchanged, read for context\n## Implementation plan`)
   assert.doesNotThrow(() => { try { validatePlan(refs, { workspace: process.cwd() }) } catch (e) { if (/too wide/.test(e.message)) throw e } })
+}
+
+// Card checkouts share the integration node_modules through a junction: a plan's npm ci
+// reinstalled the shared copy under running Builders (throughput audit 2026-09-26 F3).
+{
+  const setup = cmd => realistic.replace('Setup: none; use the existing Node runtime.', `Setup: from the card workspace run \`${cmd}\` then node scripts/check-x.mjs`)
+  const installError = (plan) => { try { validatePlan(plan, { workspace: process.cwd() }) } catch (e) { return /install/i.test(e.message) ? e.message : null } return null }
+  assert.match(installError(setup('npm ci')), /npm ci[\s\S]*package\.json/)
+  for (const cmd of ['npm install', 'npm i -D x', 'pnpm install', 'yarn install']) assert.ok(installError(setup(cmd)), cmd)
+  assert.ok(installError(realistic.replace('Existing Node runtime; no additional access.', 'Run npm ci in the card checkout.')), 'Prerequisites too')
+  assert.equal(installError(setup('npm ci').replace('- `src/app.mjs` —', '- `package.json` — add the dependency\n- `src/app.mjs` —')), null, 'a manifest change may install')
+  assert.equal(installError(realistic.replace('Existing Node runtime; no additional access.', 'Do not run npm ci; node_modules is shared.')), null, 'a warning is not a step')
+  validatePlan(setup('npm ci')) // cards already queued are never re-checked
+}
+
+// A project's shared check scripts serialised its queue when every card added its own check
+// to them (Injectbuddy scripts/capture-authed.mjs, 15 cards; throughput audit F1).
+{
+  const shared = { workspace: process.cwd(), sharedFiles: ['scripts/capture-authed.mjs'] }
+  const plan = (title, brief = 'Deliver the agreed keyboard behavior.') => `# I300 — ${title}\n${realistic.replace('Deliver the agreed keyboard behavior.', brief).replace('- `test/keyboard.test.mjs` —', '- `scripts/capture-authed.mjs` — add the keyboard capture\n- `test/keyboard.test.mjs` —')}`
+  const sharedError = (text, opts = shared) => { try { validatePlan(text, opts) } catch (e) { return /shared/.test(e.message) ? e.message : null } return null }
+  assert.match(sharedError(plan('Keyboard fix')), /scripts\/capture-authed\.mjs is shared[\s\S]*scripts\/check-i300-\*\.mjs/)
+  assert.equal(sharedError(plan('Split helpers out of scripts/capture-authed.mjs')), null, 'the card is about the shared file')
+  assert.equal(sharedError(plan('Keyboard fix', 'Speed up capture-authed.mjs logins.')), null, 'the brief names it')
+  assert.equal(sharedError(plan('Keyboard fix').replace('- `scripts/capture-authed.mjs` — add', '- `scripts/capture-authed.mjs` — read-only, add')), null, 'a reference takes no lock')
+  assert.equal(sharedError(plan('Keyboard fix'), { workspace: process.cwd() }), null, 'no sharedFiles setting')
+
+  // hkb reads projectSettings.<project>.sharedFiles from the board config at a Planner handoff.
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const root = mkdtempSync(join(tmpdir(), 'plan-shared-')), project = join(root, 'Proj'), tasks = join(project, 'TASKS')
+  try {
+    for (const d of [join(tasks, 'planning'), join(project, 'src'), join(project, 'scripts')]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(project, 'src', 'app.mjs'), ''); writeFileSync(join(project, 'scripts', 'capture-authed.mjs'), '')
+    writeFileSync(join(root, 'board.config.json'), JSON.stringify({ projectsRoot: root, projects: ['Proj'], projectSettings: { Proj: { sharedFiles: ['scripts/capture-authed.mjs'] } } }))
+    writeFileSync(join(tasks, 'planning', 'I300.md'), plan('Keyboard fix').replace('# I300 — Keyboard fix', '# I300 — Keyboard fix\n**Workflow:** card-owned')
+      .replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —').replace('Changes:', '**Callers checked:** none\nChanges:'))
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'I300', 'planned'], { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: join(root, 'board.config.json') } })
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /capture-authed\.mjs is shared/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 }

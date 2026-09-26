@@ -57,9 +57,9 @@ const HEADING = { issue: 'Kicked back', owner: 'Needs you', park: 'Parked', spli
 // Repeated failed reviews require deeper Planner diagnosis, never a human dump.
 const MAX_REVIEW_ROUNDS = 3
 
-// The card's workspace in the project's integration checkout: where a Planner's
-// ## Files paths must already exist at handoff.
-function integrationWorkspace(card) {
+// The plan check at a Planner handoff: the card's workspace in the project's integration
+// checkout (where ## Files paths must already exist) and the project's sharedFiles.
+function planCheck(card) {
   const projectPath = dirname(tasksDir)
   let gitSettings
   try {
@@ -67,7 +67,7 @@ function integrationWorkspace(card) {
     const name = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(projectPath).toLowerCase())
     gitSettings = config.projectSettings?.[name]
   } catch { /* No config: the project's own Git root is the integration checkout. */ }
-  return resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.')
+  return { planWorkspace: resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.'), sharedFiles: gitSettings?.sharedFiles }
 }
 
 function fail(msg) {
@@ -239,8 +239,8 @@ try {
       if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
     }
   }
-  const planWorkspace = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? integrationWorkspace(current) : undefined
-  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, planWorkspace, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
+  const check = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
+  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
