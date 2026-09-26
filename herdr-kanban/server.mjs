@@ -64,7 +64,7 @@ const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPa
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
 const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
-const quotaHoldsOf = (project) => quotaHolds(HERE, readBoard(tasksDirOf(project)), (card, stage) => { const a = assignmentForCard(project, card, stage); return quotaKey(a.engine, a.model) })
+const quotaHoldsOf = (project, board = readBoard(tasksDirOf(project))) => quotaHolds(HERE, board, (card, stage) => { const a = assignmentForCard(project, card, stage); return quotaKey(a.engine, a.model) })
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
 
 function ensureTasks(project) {
@@ -298,7 +298,7 @@ function boardPayload(project) {
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or
     // files another card is still holding. Without it a held card is visually
     // identical to one simply waiting its turn.
-    holds: { ...holdsFor(project), ...quotaHoldsOf(project) },
+    holds: { ...holdsFor(project), ...quotaHoldsOf(project, board) },
     // Engine usage blocks in force, keyed "claude" (every model) or "claude:<model>": { until, since }.
     quotaBlocks: activeQuota(HERE),
     agents: cached.agents,

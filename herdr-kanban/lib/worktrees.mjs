@@ -477,9 +477,18 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   return { git: true, workspacePath, cwd: workspacePath, entry, created: true }
 }
 
-export function overlapHoldReason({ tasksDir, card, projectPath }) {
+// Lookup as findCard does (archive never wins; ambiguous or missing is unknown), in the
+// board read once per poll: findCard is a full readBoard per registry entry.
+function cardIn(cards, id) {
+  const all = cards.filter((c) => c.id === id)
+  const live = all.filter((c) => c.column !== 'archive')
+  return live.length > 1 ? undefined : live[0] ?? all[0]
+}
+
+export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir) }) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   if (!candidate.size) return 'card not ready — no exact files listed'
+  const cards = Object.values(board).flat()
   const registry = readWorktrees(tasksDir)
   for (const [id, entry] of Object.entries(registry)) {
     if (id === card.id.toUpperCase()) {
@@ -487,8 +496,7 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
       continue
     }
     if (entry.state === 'integrated') continue
-    let live
-    try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
+    const live = cardIn(cards, id) // removed or ambiguous cards keep their saved locks
     // An archived card is closed: its preserved worktree must never block live cards.
     if (live?.column === 'archive') continue
     // A card that is not running holds no locks: its saved work stays on its branch and is

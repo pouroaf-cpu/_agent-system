@@ -198,7 +198,7 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
   if (backoff) return backoff
   const unmet = unmetBlockers(card, board, tasksDir ? readWorktrees(tasksDir) : {})
   if (unmet.length) return `waiting for unique integrated or archived prerequisite ${unmet.join(', ')}`
-  const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath })
+  const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath, board })
   if (overlap) return overlap
   if (gitSettings?.integrationPath) {
     try {
@@ -297,9 +297,12 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
   busy.add(project)
   const started = []
   const held = {}
+  // One board read per pass, again only after a move: a read per queued card cost about
+  // 100 reads per Injectbuddy poll and starved the event loop (audit 2026-09-26).
+  let fresh = board
   try {
     for (const card of queued) {
-      const fresh = readBoard(tasksDir)
+      fresh ??= readBoard(tasksDir)
       const freshCard = fresh.queue.find((c) => c.path === card.path)
       if (!freshCard) continue
       const selected = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
@@ -343,6 +346,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           held[freshCard.id] = hold
           if (elapsed > 3 * stallSeconds * 1000) {
             const moved = moveCard(tasksDir, freshCard.id, 'issues')
+            fresh = null
             appendFileSync(moved.path, `\n\n---\n\n**Queue hold expired** ${new Date(now).toISOString()}\n\n${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
             updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
             delete held[freshCard.id]
@@ -352,6 +356,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         }
         const to = cardProblem ? 'planning' : 'owner'
         const moved = moveCard(tasksDir, freshCard.id, to, dupId ? { sourcePath: freshCard.path } : {})
+        fresh = null
         const reason = dupId || dupKey || hold
         const note = cardProblem
           ? `**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${reason}. Planner: correct the card/dependency before requeueing. Preserved work remains available.`
@@ -371,6 +376,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       // Move first so the card is visibly in Working for the ~55s the spawn takes.
       appendBuildAttempt(freshCard)
       const moved = moveCard(tasksDir, freshCard.id, 'working')
+      fresh = null
       try {
         const result = await spawn({
           project, projectPath, tasksDir, boardRoot, card: moved, model: selectedModel, engine: selectedEngine, gitSettings,
@@ -421,7 +427,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       }
       onChange?.()
     }
-    for (const card of queued) if (!started.includes(card.id) && !held[card.id] && readBoard(tasksDir).queue.some(c => c.id === card.id)) {
+    const queueNow = (fresh ?? readBoard(tasksDir)).queue
+    for (const card of queued) if (!started.includes(card.id) && !held[card.id] && queueNow.some(c => c.id === card.id)) {
       held[card.id] = 'waiting for available slot'
     }
     if (routeMutualHolds(tasksDir, held, log).length) onChange?.()
