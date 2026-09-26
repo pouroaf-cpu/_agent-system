@@ -120,3 +120,11 @@ test('an install failure names the file-lock error from npm\'s log so the backof
     assert.ok(!isTransient(installFailure('npm ci', 1, log)))
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('a card whose node_modules exists but is empty still waits for an install', async t => {
+  const f = fixture(t)
+  const tasksDir = join(f.folder, '..', 'TASKS'), card = join(f.folder, '..', 'card')
+  mkdirSync(join(card, 'node_modules'), { recursive: true }) // the junction target was emptied
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { workspacePath: card } }))
+  assert.ok(f.hold()?.startsWith(`installing dependencies in ${f.folder}`)) // may queue behind an earlier test's install
+})

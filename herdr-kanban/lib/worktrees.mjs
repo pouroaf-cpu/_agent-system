@@ -350,7 +350,9 @@ export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings
     if (!existsSync(join(folder, 'package.json'))) return null
     const state = installs.get(norm(folder)) || { failures: 0 }
     if (state.running || state.failures >= 2 || state.retry) return startDependencyInstall({ folder, ...opts })
-    if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
+    // Installed, not merely present: a card's node_modules is a junction to integration's,
+    // and an emptied integration folder still exists (Tradeflow TF95, Injectbuddy I332).
+    if (entry?.workspacePath && installedIn(folder, entry.workspacePath)) return null
     if (!state.failures && installedIn(folder, folder)) return null
     if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
     // The main checkout counts only when integration has no node_modules, exactly as in
