@@ -83,10 +83,15 @@ test('stuck lists a card over the threshold with its reason and omits a fresh on
   assert.equal(r.status, 200, r.body.error)
   assert.equal(r.body.cards.length, 1)
   const [card] = r.body.cards
-  assert.deepEqual({ ...card, minutes: undefined }, { project: 'Proj', id: old.id, title: 'Old', lane: 'owner', minutes: undefined, agent: null, reason: 'Planning issue; see card feedback' })
+  assert.deepEqual({ ...card, minutes: undefined }, { project: 'Proj', id: old.id, title: 'Old', lane: 'owner', minutes: undefined, agent: null, waitingOn: [], reason: 'Planning issue; see card feedback' })
   assert.ok(card.minutes >= 119, String(card.minutes))
   r = await get('/api/stuck?minutes=0')
   assert.deepEqual(r.body.cards.map(c => c.id).sort(), [old.id, fresh.id].sort())
+  // A card waiting on an unfinished blocker is queued, not stuck (I310 waited on I307).
+  const waiting = createCard(tasks, { title: 'Waiting', brief: 'x', prefix: 'P' })
+  writeFileSync(waiting.path, readFileSync(waiting.path, 'utf8').replace(/^(\*\*Trivial:\*\*.*)$/m, `$1\n**Blocked by:** ${fresh.id}`))
+  r = await get('/api/stuck?minutes=0')
+  assert.ok(!r.body.cards.some(c => c.id === waiting.id), 'blocked card listed as stuck')
   assert.equal((await get('/api/stuck?project=Nope')).status, 400)
   assert.equal((await get('/api/stuck?minutes=-1')).status, 400)
 })
@@ -98,7 +103,7 @@ test('summary has lane counts, the oldest card, owner ids and the stuck count', 
   assert.equal(s.project, 'Proj')
   assert.equal(s.paused, true) // maxConcurrentAgents 0
   assert.equal(s.lanes.owner, 1)
-  assert.equal(s.lanes.planning, 1)
+  assert.equal(s.lanes.planning, 2) // Fresh and the blocked Waiting card
   assert.deepEqual({ ...s.oldestCard, minutes: undefined }, { id: old.id, lane: 'owner', minutes: undefined })
   assert.deepEqual(s.owner, [old.id])
   assert.deepEqual(s.pou, [])

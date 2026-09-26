@@ -342,13 +342,22 @@ function cardWaits(project, now = Date.now()) {
   try { indicators = stageIndicators({ tasksDir, reviewRoot: REVIEW_ROOT, board, planners, claims, agents, workflow }) } catch { /* as on the board: no indicator */ }
   try { times = laneTimes({ tasksDir, board, planners, workflow, claims, agents }) } catch { /* fall back to lane entry below */ }
   const holds = { ...holdsFor(project), ...quotaHoldsOf(project, board) }
+  let registry = {}
+  try { registry = readWorktrees(tasksDir) } catch { /* no registry: blockers count as unmet by archive state alone */ }
   const cards = COLUMNS.flatMap(c => board[c.key] || []).map(card => {
     const since = Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime)
+    const waitingOn = unmetBlockers(card, board, registry)
     return { project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
-      agent: times[card.id]?.agentActive ? times[card.id].agentName : null, reason: holds[card.id] ?? indicators[card.id]?.reason ?? null }
+      agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
+      reason: holds[card.id] ?? (waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }
+
+// Stuck = waiting past the threshold with nobody working on it and no unfinished blocker.
+// A card an agent is on, or one queued behind another card, is moving (operator saw
+// "stuck 3" for cards waiting on I307 that were planned the minute it merged, 2026-09-26).
+const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length
 
 // Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
 function integrationAheadOfMaster(project) {
@@ -370,7 +379,7 @@ function projectSummary(project) {
     oldestCard: oldest && { id: oldest.id, lane: oldest.lane, minutes: oldest.minutes },
     owner: board.owner.map(c => c.id),
     pou: board.pou.map(c => c.id),
-    stuck: cards.filter(c => c.minutes >= 60).length,
+    stuck: cards.filter(c => isStuck(c, 60)).length,
     quotaBlocks: activeQuota(HERE),
     integrationAheadOfMaster: integrationAheadOfMaster(project),
   }
@@ -1260,7 +1269,7 @@ const handleRequest = async (req, res) => {
       if (url.pathname === '/api/summary') return json(res, 200, { ok: true, projects: projects.map(projectSummary) })
       const minutes = Number(url.searchParams.get('minutes') ?? 60)
       if (!Number.isFinite(minutes) || minutes < 0) throw new Error('minutes must be a number of minutes, 0 or more')
-      return json(res, 200, { ok: true, minutes, cards: projects.flatMap(p => cardWaits(p).cards).filter(c => c.minutes >= minutes).sort((a, b) => b.minutes - a.minutes) })
+      return json(res, 200, { ok: true, minutes, cards: projects.flatMap(p => cardWaits(p).cards).filter(c => isStuck(c, minutes)).sort((a, b) => b.minutes - a.minutes) })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 
