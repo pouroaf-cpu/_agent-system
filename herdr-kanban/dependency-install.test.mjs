@@ -1,10 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { spawnSync } from 'node:child_process'
-import { dependencyInstallHold } from './lib/worktrees.mjs'
+import { spawn, spawnSync } from 'node:child_process'
+import { dependencyInstallHold, startDependencyInstall } from './lib/worktrees.mjs'
+
+// Running installs are recorded beside the board config, so a restarted board can see them.
+const stateDir = mkdtempSync(join(tmpdir(), 'hkb-deps-state-'))
+process.env.KANBAN_CONFIG = join(stateDir, 'board.config.json')
+process.on('exit', () => rmSync(stateDir, { recursive: true, force: true }))
+const installsFile = join(stateDir, '.dependency-installs.json')
+const sleeper = t => { const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)']); t.after(() => child.kill()); return { child, exited: new Promise(r => child.on('exit', r)) } }
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'hkb-deps-'))
@@ -27,6 +34,7 @@ test('a missing node_modules starts one background install; the card waits, then
   assert.equal(f.hold(), `installing dependencies in ${f.folder}`)
   await tick()
   assert.equal(f.hold(), `installing dependencies in ${f.folder}`, 'still running: no second install')
+  await tick()
   assert.deepEqual(f.calls, ['npm ci --no-audit --no-fund'])
   mkdirSync(join(f.folder, 'node_modules', 'dep'), { recursive: true }) // what a finished install leaves
   writeFileSync(join(f.folder, 'node_modules', 'dep', 'package.json'), '{}')
@@ -63,4 +71,38 @@ test('ENOTEMPTY install failures back off and retry instead of failing twice (I2
   assert.match(f.hold({ now: t0 + 3 * min }), /^installing dependencies in .*EPERM.*; retrying at /)
   assert.equal(f.calls.length, 2)
   assert.match(f.hold({ now: t0 + 4 * 60 * min }), /^dependency install kept failing in .* for 3 hours: EPERM/)
+})
+
+test('a hung install is killed after 20 minutes and frees the board-wide slot', async t => {
+  const f = fixture(t)
+  const { child, exited } = sleeper(t)
+  const install = (dir, command, log, onStart) => { onStart(child.pid); return new Promise(() => {}) } // hangs forever
+  const t0 = Date.now(), min = 60000
+  assert.equal(f.hold({ install, now: t0 }), `installing dependencies in ${f.folder}`)
+  await tick()
+  assert.equal(JSON.parse(readFileSync(installsFile, 'utf8'))[Object.keys(JSON.parse(readFileSync(installsFile, 'utf8')))[0]].pid, child.pid, 'the running install is recorded')
+  const other = mkdtempSync(join(tmpdir(), 'hkb-deps-other-')); t.after(() => rmSync(other, { recursive: true, force: true }))
+  writeFileSync(join(other, 'package-lock.json'), '{}')
+  let otherCalls = 0
+  const otherInstall = () => { otherCalls++; return Promise.resolve() }
+  assert.match(startDependencyInstall({ folder: other, tasksDir: f.folder, install: otherInstall, free: () => 20, now: t0 + 5 * min }), /queued behind another install/)
+  assert.equal(f.hold({ install, now: t0 + 19 * min }), `installing dependencies in ${f.folder}`, 'an allowed wait while under the timeout')
+  assert.match(f.hold({ install, now: t0 + 21 * min }), /^installing dependencies in .*timed out after 20 min.*; retrying at /)
+  await exited // the whole process tree was killed
+  assert.equal(startDependencyInstall({ folder: other, tasksDir: f.folder, install: otherInstall, free: () => 20, now: t0 + 21 * min }), `installing dependencies in ${other}`)
+  await tick()
+  assert.equal(otherCalls, 1, 'other installs proceed after the timeout')
+})
+
+test('after a board restart, an install still running in that folder is waited for, never doubled', async t => {
+  const f = fixture(t)
+  const { child, exited } = sleeper(t)
+  // What the previous board process recorded before it was killed; its npm is still running.
+  writeFileSync(installsFile, JSON.stringify({ previous: { folder: f.folder, pid: child.pid, startedAt: Date.now() } }))
+  assert.match(f.hold(), /^installing dependencies in .*started before the board restarted/)
+  assert.deepEqual(f.calls, [], 'no second npm ci in the same folder')
+  child.kill(); await exited
+  assert.equal(f.hold(), `installing dependencies in ${f.folder}`)
+  await tick()
+  assert.deepEqual(f.calls, ['npm ci --no-audit --no-fund'])
 })

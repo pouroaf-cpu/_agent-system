@@ -9,7 +9,8 @@ import { cardFiles, findCard, readBoard } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
-import { isTransient, nextRetry, retryHold, inBackoff } from './transient.mjs'
+import { isTransient, nextRetry, retryHold, inBackoff, killTree } from './transient.mjs'
+import { fileURLToPath } from 'node:url'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
 const lockPath = (tasksDir) => join(tasksDir, '.board-integration.lock')
@@ -228,14 +229,34 @@ export function prepareWorktreeEnvironment(entry) {
 }
 
 export const freeGb = (path) => { const s = statfsSync(path); return s.bavail * s.bsize / 1e9 }
-const installs = new Map() // folder -> { running, failures, error }
+const installs = new Map() // folder -> { running, startedAt, pid, failures, error, retry }
+export const INSTALL_TIMEOUT_MS = 20 * 60000
 
-function runInstall(folder, command, logPath) {
+// A restart kills the board with Stop-Process, but its `shell: true` install keeps running
+// on Windows. Running installs are recorded beside the board config so the new process
+// waits for them instead of starting a second npm ci in the same folder.
+const installsPath = () => join(dirname(process.env.KANBAN_CONFIG || fileURLToPath(new URL('../board.config.json', import.meta.url))), '.dependency-installs.json')
+const pidAlive = pid => { try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' } }
+// ponytail: a PID Windows reuses within the timeout reads as a live install; the timeout bounds that wait
+function recordedInstalls(now) {
+  let all = {}
+  try { all = JSON.parse(readFileSync(installsPath(), 'utf8')) } catch { /* none, or torn: nothing to wait for */ }
+  return Object.fromEntries(Object.entries(all).filter(([, r]) => now - r.startedAt < INSTALL_TIMEOUT_MS && pidAlive(r.pid)))
+}
+function recordInstall(key, record) {
+  const all = recordedInstalls(Date.now())
+  if (record) all[key] = record
+  else delete all[key]
+  writeFileSync(installsPath(), JSON.stringify(all, null, 2))
+}
+
+function runInstall(folder, command, logPath, onStart) {
   return new Promise((done, fail) => {
     const out = openSync(logPath, 'a')
     let finished = false
     const finish = (err) => { if (finished) return; finished = true; closeSync(out); err ? fail(err) : done() }
     const child = spawn(command, { cwd: folder, shell: true, windowsHide: true, stdio: ['ignore', out, out] })
+    if (child.pid) onStart?.(child.pid)
     child.on('error', finish)
     child.on('close', code => finish(code === 0 ? null : new Error(`${command} exited with code ${code}; see ${logPath}`)))
   })
@@ -250,6 +271,13 @@ const installCommand = folder => existsSync(join(folder, 'pnpm-lock.yaml')) ? 'p
 // lockfile says how to install. Two failures hold for Owner with the reason; a transient
 // one (ENOTEMPTY/EPERM from a locked file, a timeout) backs off instead (I246, I248).
 export function startDependencyInstall({ folder, tasksDir, install = runInstall, free = freeGb, minFreeGb = 5, now = Date.now() }) {
+  // A hung install would hold the board-wide slot forever: past the timeout its process
+  // tree is killed and it retries as a transient failure.
+  for (const [hung, run] of installs) {
+    if (!run.running || now - run.startedAt < INSTALL_TIMEOUT_MS) continue
+    if (run.pid) { killTree(run.pid); recordInstall(hung, null) }
+    installs.set(hung, { failures: run.failures, error: `install timed out after ${INSTALL_TIMEOUT_MS / 60000} min and was stopped`, retry: nextRetry(run.retry, now) })
+  }
   const key = norm(folder), state = installs.get(key) || { failures: 0 }
   const waiting = `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
   if (state.running) return waiting
@@ -259,6 +287,9 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   // One install at a time, board-wide: parallel `npm ci` runs (about 1.5 GB each) on a
   // loaded machine crashed Injectbuddy I246's install three times in two minutes.
   if ([...installs.values()].some(other => other.running)) return `installing dependencies in ${folder} (queued behind another install)`
+  const survivors = Object.values(recordedInstalls(now))
+  if (survivors.some(r => norm(r.folder) === key)) return `installing dependencies in ${folder} (started before the board restarted; waiting for it to finish)`
+  if (survivors.length) return `installing dependencies in ${folder} (queued behind another install)`
   const command = installCommand(folder)
   if (!command) return null
   const gb = free(folder)
@@ -268,13 +299,18 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   try { if (lstatSync(modules).isSymbolicLink()) unlinkSync(modules) } catch (err) { if (err.code !== 'ENOENT') throw err }
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const logPath = join(tasksDir, '.evidence', `dependency-install-${Date.now()}.log`)
-  installs.set(key, { ...state, running: true })
-  Promise.resolve().then(() => install(folder, command, logPath)).then(
-    () => installs.delete(key),
-    err => {
-      const error = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)
-      installs.set(key, isTransient(error) ? { failures: state.failures, error, retry: nextRetry(state.retry, Date.now()) } : { failures: state.failures + 1, error })
-    })
+  const run = { ...state, running: true, startedAt: now }
+  installs.set(key, run)
+  // Only this run may settle its slot: a hung run already expired above must not overwrite a newer one.
+  const settle = (err) => {
+    if (installs.get(key) !== run) return
+    if (run.pid) recordInstall(key, null)
+    if (!err) return installs.delete(key)
+    const error = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)
+    installs.set(key, isTransient(error) ? { failures: state.failures, error, retry: nextRetry(state.retry, Date.now()) } : { failures: state.failures + 1, error })
+  }
+  Promise.resolve().then(() => install(folder, command, logPath, pid => { run.pid = pid; recordInstall(key, { folder, pid, startedAt: Date.now() }) }))
+    .then(() => settle(null), settle)
   return waiting
 }
 
