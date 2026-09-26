@@ -477,32 +477,6 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   return { git: true, workspacePath, cwd: workspacePath, entry, created: true }
 }
 
-// ponytail: 30s memo so one poll's many overlap checks run git once per worktree.
-const emptyCheckouts = new Map()
-function holdsNoWork(entry) {
-  const hit = emptyCheckouts.get(entry.worktreePath)
-  if (hit && Date.now() - hit.at < 30_000) return hit.empty
-  let empty = false
-  try { empty = existsSync(entry.worktreePath) && clean(entry.worktreePath) && git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() === entry.baseCommit } catch { /* unknown keeps the lock */ }
-  emptyCheckouts.set(entry.worktreePath, { at: Date.now(), empty })
-  return empty
-}
-
-// What a waiting card's saved work actually touched (committed since its base, plus
-// dirty files), as integration-checkout paths; null when unknown (keeps the full lock).
-const savedWork = new Map()
-function savedWorkFiles(entry) {
-  const hit = savedWork.get(entry.worktreePath)
-  if (hit && Date.now() - hit.at < 30_000) return hit.files
-  let files = null
-  try {
-    const committed = git(entry.worktreePath, ['diff', '--name-only', '-z', '--no-renames', `${entry.baseCommit}..HEAD`]).stdout.split('\0')
-    files = [...committed, ...semanticDirtyFiles(entry.worktreePath)].filter(Boolean).map(f => norm(resolve(entry.repoRoot || entry.integrationWorkspace, f)))
-  } catch { /* unknown keeps the full lock */ }
-  savedWork.set(entry.worktreePath, { at: Date.now(), files })
-  return files
-}
-
 export function overlapHoldReason({ tasksDir, card, projectPath }) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   if (!candidate.size) return 'card not ready — no exact files listed'
@@ -517,27 +491,11 @@ export function overlapHoldReason({ tasksDir, card, projectPath }) {
     try { live = findCard(tasksDir, id) } catch { /* Preserve saved locks for removed or ambiguous cards. */ }
     // An archived card is closed: its preserved worktree must never block live cards.
     if (live?.column === 'archive') continue
-    // A card in Pou or Owner waits on the operator or the Kanban Manager, often for hours: its saved work stays on its
-    // branch and is rebased when it resumes, but it must not starve every card behind it
-    // (Injectbuddy I164/I169 held next.config.ts and package.json for 7 queued cards overnight).
-    if (['pou', 'owner'].includes(live?.column)) continue
-    // Back before Working with a clean checkout at its base, a card has no work to
-    // protect (Tradeflow T-36's empty worktree held 14 queued cards).
-    if (live && ['planning', 'planned', 'queue', 'pou', 'owner'].includes(live.column) && holdsNoWork(entry)) continue
-    // Two cards off the build lanes, each with saved work on a shared file, would wait
-    // on each other forever (Tradeflow T-38 and TF56): the older worktree goes first.
-    const mine = registry[card.id.toUpperCase()]
-    if (live && ['planning', 'planned', 'queue', 'pou', 'owner'].includes(live.column) && mine?.createdAt && entry.createdAt && mine.createdAt < entry.createdAt) continue
-    // Waiting off the build lanes, only the saved work needs protecting, not every file the
-    // plan names (Injectbuddy I184 locked 45 files for 24 queued cards; 2 had changed).
-    if (live && ['planning', 'planned', 'queue'].includes(live.column)) {
-      const saved = savedWorkFiles(entry)
-      if (saved) {
-        const hit = saved.find((file) => candidate.has(file))
-        if (hit) return `files busy, held by ${id} — ${slash(relative(resolve(projectPath), hit))}`
-        continue
-      }
-    }
+    // A card that is not running holds no locks: its saved work stays on its branch and is
+    // rebased at integration, and a real conflict goes back to a Builder once. Locked, one
+    // waiting card starved every card behind it (Injectbuddy I164/I169 in Owner overnight;
+    // I184 in Queue held 34 cards).
+    if (['pou', 'owner', 'planning', 'planned', 'queue'].includes(live?.column)) continue
     // Preserve locks on existing changes even if a correction narrows the card.
     const files =[...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })

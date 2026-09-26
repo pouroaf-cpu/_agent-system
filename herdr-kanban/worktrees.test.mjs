@@ -114,21 +114,6 @@ test('an automatic move to Owner sends no alert; a board move to Pou alerts and 
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('a queued card with saved work locks only the files it changed (Injectbuddy I184)', () => {
-  const f = fixture()
-  try {
-    writeFileSync(join(f.integration, 'other.js'), 'other\n')
-    git(f.integration, 'add', 'other.js'); git(f.integration, 'commit', '-m', 'other')
-    const first = f.addCard('T-1')
-    writeFileSync(first.path, readFileSync(first.path, 'utf8').replace('- `app.js` — change', '- `app.js` — change\n- `other.js` — change'))
-    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: findCard(f.tasks, 'T-1'), gitSettings: f.settings })
-    writeFileSync(join(prepared.workspacePath, 'app.js'), 'saved work\n')
-    const onOther = f.addCard('T-2', 'other.js'), onApp = f.addCard('T-3')
-    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: onOther, projectPath: f.integration }), null)
-    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: onApp, projectPath: f.integration }), /held by T-1 — app\.js/)
-  } finally { rmSync(f.root, { recursive: true, force: true }) }
-})
-
 test('an integration conflict aborts cleanly and preserves the card worktree', () => {
   const f = fixture()
   try {
@@ -566,17 +551,34 @@ test('a build-regenerated tracked file outside the card holds nothing; a dirty c
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('two queued cards with saved work on a shared file: the older worktree goes first', () => {
+// Injectbuddy I184 waited in Queue for hours while its saved work held 34 cards.
+test('a card waiting in Queue, Planned or Planning holds no file locks; its saved work stays on its branch (Injectbuddy I184)', () => {
   const f = fixture()
   try {
-    const older = f.addCard('T-1'), younger = f.addCard('T-2')
-    for (const card of [older, younger]) {
+    const [wt1] = [f.addCard('T-1'), f.addCard('T-2')].map((card) => {
       const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
-      writeFileSync(join(wt, 'app.js'), `${card.id}\n`); git(wt, 'commit', '-am', `${card.id} work`)
+      writeFileSync(join(wt, 'app.js'), `${card.id}
+`); git(wt, 'commit', '-am', `${card.id} work`)
+      return wt
+    })
+    const hold = (id) => overlapHoldReason({ tasksDir: f.tasks, card: findCard(f.tasks, id), projectPath: f.integration })
+    // Neither waiting card holds the other (Tradeflow T-38 and TF56 each held the other forever).
+    for (const column of ['planning', 'planned', 'queue']) {
+      moveCard(f.tasks, 'T-1', column)
+      assert.equal(hold('T-2'), null, column)
+      assert.equal(hold('T-1'), null, column)
     }
-    // Tradeflow T-38 and TF56 each held the other forever.
-    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: older, projectPath: f.integration }), null)
-    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: younger, projectPath: f.integration }), /held by T-1/)
+    // Running, a card locks its files again.
+    moveCard(f.tasks, 'T-1', 'working')
+    assert.match(hold('T-2'), /held by T-1 — app.js/)
+    // T-2 lands first; T-1's saved work is kept and returned as a conflict, never lost.
+    moveCard(f.tasks, 'T-1', 'queue')
+    f.complete('T-2')
+    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === 'T-2').status, 'integrated')
+    prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: moveCard(f.tasks, 'T-1', 'working'), gitSettings: f.settings })
+    f.complete('T-1')
+    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === 'T-1').status, 'conflict')
+    assert.equal(git(wt1, 'show', 'HEAD:app.js'), 'T-1')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
