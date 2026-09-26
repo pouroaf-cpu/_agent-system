@@ -12,6 +12,7 @@ import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
+import { releaseWaiting, finishRelease } from './lib/release.mjs'
 import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './lib/card-run.mjs'
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
@@ -278,6 +279,7 @@ function boardPayload(project) {
   return {
     project,
     control: controlState(project, CONFIG_PATH),
+    release: controlState(project, CONFIG_PATH).release ?? null, // { startedAt }: why a project is paused for a release
     cardRuns: readCardRuns().filter(r => r.project === project),
     cardRunEligibility: Object.fromEntries(Object.values(board).flat().map(card => [card.id, cardRunEligibility({ project, tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), card, board, agents: cached.agents, known: cached.herdrUp })])),
     plannerRecoveryCards: Object.entries(readCardPlanners(tasksDirOf(project))).filter(([, o]) => o.lifecycle === 'retired' && o.recoveryReady && o.reconciliationHistoryId).map(([id]) => id),
@@ -404,7 +406,9 @@ async function pollProject(project) {
       return
     }
     // Observe usage/results during Pause, but leave assignments and recovery intact.
-    if (controlState(project, CONFIG_PATH).paused) { broadcastBoard(project); return }
+    // A release pause drains instead: running Builders finish and their cards integrate; nothing new starts.
+    const control = controlState(project, CONFIG_PATH)
+    if (control.paused && !control.release) { broadcastBoard(project); return }
     // Pushover alert for every card that newly lands in Owner (one attempt each).
     alertOwnerCards({ project, tasksDir }).then(ids => { if (ids.length) activity(project, ids.join(','), 'owner-alert', 'Pushover sent') })
       .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
@@ -857,6 +861,37 @@ const handleRequest = async (req, res) => {
       Object.assign(config, setProjectPaused(selected, paused, CONFIG_PATH))
       broadcastBoard(selected)
       return json(res, 200, { ok: true, control: controlState(selected, CONFIG_PATH) })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  // A project chat's release: start pauses and reports readiness, finish fast-forwards the
+  // integration checkout to the released commit and unpauses, abort just unpauses.
+  if (req.method === 'POST' && url.pathname.startsWith('/api/release/')) {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const { project: p, commit } = JSON.parse(body)
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      const action = url.pathname.slice('/api/release/'.length)
+      const active = controlState(p, CONFIG_PATH).release
+      if (action === 'start') {
+        if (!active) Object.assign(config, setProjectPaused(p, true, CONFIG_PATH, { release: { startedAt: new Date().toISOString() } }))
+        broadcastBoard(p)
+        const { agents, herdrUp } = await pollAgents(p)
+        const waiting = releaseWaiting({ tasksDir: tasksDirOf(p), agents, herdrUp, integrating: reconciliationPolls.has(p) })
+        return json(res, 200, { ok: true, ready: !waiting.length, waiting })
+      }
+      if (action !== 'finish' && action !== 'abort') return json(res, 404, { ok: false, error: 'Unknown release action' })
+      if (!active) throw new Error(`No release in progress for ${p}; call /api/release/start first`)
+      let integration
+      if (action === 'finish') {
+        if (reconciliationPolls.has(p)) throw new Error('The board is integrating right now; try again in a few seconds')
+        const settings = projectSettingsOf(p)
+        integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch })
+      }
+      Object.assign(config, setProjectPaused(p, false, CONFIG_PATH))
+      broadcastBoard(p)
+      return json(res, 200, { ok: true, ...(integration && { integration }), control: controlState(p, CONFIG_PATH) })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 

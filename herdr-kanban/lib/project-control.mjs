@@ -24,7 +24,8 @@ export function assertPromptAllowed(project, boundary) {
   if (allowCardRunPrompt(project, boundary)) return
   if (controlState(project).paused) throw Object.assign(new Error(`Project ${project} is paused; assignment retained pending Start`), { paused: true, preservePane: true })
 }
-export function setProjectPaused(project, paused, path = configPath()) {
+// `extra` rides on the control (a release marker); a plain Pause keeps an active release, Start ends it.
+export function setProjectPaused(project, paused, path = configPath(), extra = {}) {
   const config = JSON.parse(readFileSync(path, 'utf8'))
   if (!config.projects.includes(project) || typeof paused !== 'boolean') throw new Error('Known project and boolean paused required')
   stopCardRun(project, null, paused ? 'Paused by operator' : 'Project control changed; explicit authorization cancelled')
@@ -34,7 +35,8 @@ export function setProjectPaused(project, paused, path = configPath()) {
     for (const name of config.projects) config.projectControls[name] = { ...config.projectControls[name], paused: true }
     if (!paused) config.maxConcurrentAgents = config.resumeMaxConcurrentAgents || 10
   }
-  config.projectControls[project] = { paused, changedAt: new Date().toISOString() }
+  const release = paused ? config.projectControls[project]?.release : undefined
+  config.projectControls[project] = { paused, changedAt: new Date().toISOString(), ...(release && { release }), ...extra }
   writeFileSync(path + '.tmp', JSON.stringify(config, null, 2) + '\n')
   renameSync(path + '.tmp', path)
   return config

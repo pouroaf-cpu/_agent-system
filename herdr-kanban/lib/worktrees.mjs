@@ -70,7 +70,7 @@ function operationInProgress(cwd) {
   return ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer'].find(name => existsSync(join(dir, name)))
 }
 
-const clean = (cwd) => !operationInProgress(cwd) && semanticDirtyFiles(cwd).length === 0
+export const clean = (cwd) => !operationInProgress(cwd) && semanticDirtyFiles(cwd).length === 0
 
 // Agent tool output (Playwright MCP, Impeccable) lands in whatever checkout an agent
 // runs from. Untracked there, it made the Injectbuddy integration checkout "dirty" and
