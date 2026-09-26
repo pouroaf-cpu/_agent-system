@@ -19,9 +19,9 @@ import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-his
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
 const busy = new Set()
+const lastCorrection = text => text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1).split(/\*\*Needs you\*\*/)[0].trim()
 export function correctionFingerprint(text) {
-  const last = text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1)
-  return createHash('sha256').update(last.split(/\*\*Needs you\*\*/)[0].replace(/\d{4}-\d\d-\d\dT[^\s]+/g, '').trim()).digest('hex')
+  return createHash('sha256').update(lastCorrection(text).replace(/\d{4}-\d\d-\d\dT[^\s]+/g, '').trim()).digest('hex')
 }
 
 export function requestPlannerCorrection(dir, cardId) {
@@ -274,7 +274,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       // Every fresh Issues transition starts the same bounded correction cycle.
       if (card.column === 'issues' && owner) {
         owner.correctionRounds = (owner.correctionRounds || 0) + 1
-        const fingerprint = correctionFingerprint(readFileSync(card.path, 'utf8'))
+        const text = readFileSync(card.path, 'utf8'), fingerprint = correctionFingerprint(text)
         owner.sameFailureCount = owner.failureFingerprint === fingerprint ? (owner.sameFailureCount || 0) + 1 : 1
         owner.failureFingerprint = fingerprint
         owner.submitted = false
@@ -285,6 +285,13 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         delete owner.handoffRetried
         if (!plannerHold) delete owner.noHandoffCount // a new correction round
         save(tasksDir, owners)
+        // The same failure a third time in a row is the operator's question: another Planner
+        // only repeats it (I152/I184 ran 25 each; throughput audit 2026-09-26 F7).
+        if (owner.sameFailureCount >= 3) {
+          const moved = moveCard(tasksDir, card.id, 'owner')
+          writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} failed the same way ${owner.sameFailureCount} times in a row, so the board stopped re-planning it. The repeated blocker:\n\n${lastCorrection(text).slice(-1500)}\n\nHow should it be resolved (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.`)
+          continue
+        }
         // A Planner going quiet is operational, not a failed plan: no failed return.
         card = moveCard(tasksDir, card.id, 'planning', { intake: plannerHold })
         if (['pou', 'owner'].includes(card.column)) continue

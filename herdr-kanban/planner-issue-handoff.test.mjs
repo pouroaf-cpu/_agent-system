@@ -109,3 +109,55 @@ test('the plan check accepts text files such as public/llms.txt', async () => {
   // Injectbuddy I168: 25 Planners could never hand off a card that edits llms.txt.
   assert.doesNotThrow(() => validatePlan(plan))
 })
+
+// Injectbuddy I267 (2026-09-26) looped six Planners: each tried `hkb move`, the plan check
+// refused it, but the Planner-issue count had already been reset before the refused move.
+test('a refused plan handoff does not reset the Planner blocker count', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planner-cap-refused-'))
+  try {
+    const card = createCard(dir, { title: 'Hard plan', brief: 'x' })
+    const hkb = (n, ...args) => {
+      const owners = readCardPlanners(dir)
+      owners[card.id] = { ...(owners[card.id] || {}), assignmentId: `a${n}`, lifecycle: 'active', paneId: `p${n}`, submitted: true, revokedPaneIds: [] }
+      saveCardPlanners(dir, owners)
+      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8' })
+    }
+    for (const n of [1, 2]) {
+      assert.notEqual(hkb(n, 'move', card.id, 'planned').status, 0, 'the empty plan is refused')
+      assert.equal(hkb(n, 'issue', card.id, `[planning] parser rejects the table, attempt ${n}`).status, 0)
+      assert.equal(findCard(dir, card.id).column, 'planning')
+    }
+    assert.notEqual(hkb(3, 'move', card.id, 'planned').status, 0)
+    assert.equal(hkb(3, 'issue', card.id, '[planning] parser rejects the table, attempt 3').status, 0)
+    assert.equal(findCard(dir, card.id).column, 'owner')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// Throughput audit 2026-09-26 F7: the same failure a third time in a row only added a
+// "Diagnostic recovery" note and launched another Planner.
+test('the third identical failure in Issues goes to Owner with the blocker, not to another Planner', async () => {
+  const { appendFileSync } = await import('node:fs')
+  const { moveCard } = await import('./lib/cards.mjs')
+  const dir = mkdtempSync(join(tmpdir(), 'planner-same-failure-'))
+  try {
+    const card = createCard(dir, { title: 'Repeats', brief: 'x' })
+    let panes = 0, starts = 0
+    const agents = []
+    const io = {
+      agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+      tabCreate: async () => ({ root_pane: { pane_id: `p${++panes}` } }),
+      agentStart: async ({ name, paneId }) => { starts++; agents.splice(0, agents.length, { name, pane_id: paneId, agent_status: 'idle' }) },
+      deliver: async () => {}, paneClose: async () => {}, paneRead: async () => '', recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    }
+    const run = () => runCardPlanner({ project: 'P', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-5.5', io })
+    await run()
+    for (const round of [1, 2, 3]) {
+      appendFileSync(moveCard(dir, card.id, 'issues').path, `\n\n**Kicked back** 2026-09-26T0${round}:00:00Z\n\nAC1 lacks a verified isolated 390px check.\n`)
+      await run()
+    }
+    const moved = findCard(dir, card.id)
+    assert.equal(moved.column, 'owner')
+    assert.match(moved.ask?.text || '', /same way 3 times[\s\S]*AC1 lacks a verified isolated 390px check/)
+    assert.equal(starts, 3, 'the first plan and two corrections; no Planner for the third repeat')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

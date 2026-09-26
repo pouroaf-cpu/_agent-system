@@ -218,7 +218,6 @@ try {
       if (plannerIssues >= 3) target = 'owner'
     }
   }
-  if (verb === 'move' && current.column === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null })
   if (verb === 'done' && current.cardOwned && ['working', 'issues'].includes(current.column)) {
     const commitError = handoffCommitError(tasksDir, current)
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
@@ -242,6 +241,9 @@ try {
   const check = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
+  // Only a plan the check accepted clears the blocker count: resetting it before a refused
+  // move let Injectbuddy I267 loop six Planners past the three-in-a-row cap (2026-09-26).
+  if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null })
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
   // a fresh Planner. Left "submitted" it was counted as a no-handoff and sent to Owner
