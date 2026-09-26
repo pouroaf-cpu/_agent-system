@@ -38,7 +38,7 @@ const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mj
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -391,6 +391,10 @@ async function pollProject(project) {
     // Pushover alert for every card that newly lands in Owner (one attempt each).
     alertOwnerCards({ project, tasksDir }).then(ids => { if (ids.length) activity(project, ids.join(','), 'owner-alert', 'Pushover sent') })
       .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
+    // Before the stall check, so a reviewer slot freed here counts.
+    try {
+      for (const claim of await reconcileReviewers({ reviewRoot: REVIEW_ROOT, project, tasksDir, agents })) activity(project, claim.cards.join(',') || '-', 'cleanup', `reviewer claim ${claim.paneId || claim.id} retired: ${claim.closeReason}`)
+    } catch (err) { if (!err.busy) schedulerActivity(project, `review ownership unavailable: ${err.message}`) }
     // Safety net first, so a failure later in this poll cannot hide a stall.
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
       try {

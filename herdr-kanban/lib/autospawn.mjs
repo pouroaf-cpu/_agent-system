@@ -26,7 +26,7 @@ import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.
 import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
-import { syncReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
+import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
 import { recoveryState } from './recovery.mjs'
 
 // A Builder that disappears or ends without hkb done/issue leaves Working
@@ -633,6 +633,19 @@ const reviewing = new Set()
 export const reviewerBusy = (project, agents) =>
   reviewing.has(project) || agents.some((a) => isReviewerAgent(a) && a.agent_status !== 'done')
 const busyError = () => Object.assign(new Error('a reviewer is already running'), { busy: true })
+
+// Every poll, not only when review work exists: a reviewer that vanished or never took its
+// prompt frees its board-wide slot, and its idle pane is closed (an unowned reviewer pane
+// holds verdict routing). This project's inventory reconciles only this project's claims.
+export async function reconcileReviewers({ reviewRoot, project, tasksDir, agents, now = Date.now(), close = paneClose }) {
+  const open = new Set(readReviewClaims(reviewRoot).filter(c => !c.closedAt).map(c => c.id))
+  syncReviewClaims(reviewRoot, [{ project, tasksDir, known: true, agents }], now)
+  const retired = readReviewClaims(reviewRoot).filter(c => c.closedAt && open.has(c.id))
+  for (const claim of retired) {
+    if (agents.some(a => a.pane_id === claim.paneId && a.agent_status === 'idle')) await close(claim.paneId, sessionOf(project)).catch(() => {})
+  }
+  return retired
+}
 
 export async function autoReview({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, agents, log, inventory, assignmentForCard, plan = computeReviewPlan, spawn = spawnReviewer }) {
   if (!plan({ tasksDir }).batches.length) return null

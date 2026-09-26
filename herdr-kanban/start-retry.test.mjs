@@ -18,7 +18,7 @@ mock.module('./lib/herdr.mjs', { namedExports: {
 } })
 const ledger = { failed: [], uncertain: [] }
 mock.module('./lib/review-claims.mjs', { namedExports: {
-  syncReviewClaims: () => [], reserveReview: () => ({ id: 'c1' }), prepareReviewSnapshot: (root, projectPath) => ({ path: projectPath }),
+  syncReviewClaims: () => [], readReviewClaims: () => [], reserveReview: () => ({ id: 'c1' }), prepareReviewSnapshot: (root, projectPath) => ({ path: projectPath }),
   updateReviewClaim: (root, id, patch) => { if (patch.phase === 'uncertain') ledger.uncertain.push(id) },
   failReviewClaim: (root, id) => { ledger.failed.push(id) }, assertReviewInputs: () => {}, snapshotContains: () => true, reviewClaimFor: () => null,
 } })

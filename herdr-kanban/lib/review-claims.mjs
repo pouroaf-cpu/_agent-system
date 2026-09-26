@@ -18,7 +18,7 @@ export function readReviewClaims(root) {
   if (!existsSync(file(root))) return []
   const data = JSON.parse(readFileSync(file(root), 'utf8'))
   if (data.version !== 1 || !Array.isArray(data.claims)) throw new Error('Invalid reviewer claims; refusing dispatch')
-  for (const c of data.claims) if (typeof c.id !== 'string' || !c.id || typeof c.project !== 'string' || typeof c.tasksDir !== 'string' || !c.tasksDir || !Array.isArray(c.cards) || c.cards.some(id => !isCardId(id)) || new Set(c.cards).size !== c.cards.length || !Number.isFinite(c.createdAt) || (c.paneId != null && typeof c.paneId !== 'string') || (c.phase && !['starting', 'running', 'uncertain'].includes(c.phase)) || ['closedAt', 'doneSince', 'lastSeen'].some(k => c[k] != null && !Number.isFinite(c[k]))) throw new Error('Invalid reviewer claim shape; refusing dispatch')
+  for (const c of data.claims) if (typeof c.id !== 'string' || !c.id || typeof c.project !== 'string' || typeof c.tasksDir !== 'string' || !c.tasksDir || !Array.isArray(c.cards) || c.cards.some(id => !isCardId(id)) || new Set(c.cards).size !== c.cards.length || !Number.isFinite(c.createdAt) || (c.paneId != null && typeof c.paneId !== 'string') || (c.phase && !['starting', 'running', 'uncertain'].includes(c.phase)) || ['closedAt', 'doneSince', 'idleSince', 'lastSeen'].some(k => c[k] != null && !Number.isFinite(c[k]))) throw new Error('Invalid reviewer claim shape; refusing dispatch')
   if (new Set(data.claims.map(c => c.id)).size !== data.claims.length) throw new Error('Duplicate reviewer claim ids')
   return data.claims
 }
@@ -76,6 +76,13 @@ function reconcile(claims, inventory, now) {
         claim.doneSince ??= now
         if (now - claim.doneSince >= 120000) retire(claim, now, 'HERDR reported done without a complete handoff')
       } else delete claim.doneSince
+      // An uncertain delivery that started late is a running review; one whose prompt never
+      // took leaves the pane idle, and would hold a board-wide slot forever.
+      if (claim.phase === 'uncertain' && agent.agent_status === 'working') claim.phase = 'running'
+      if (claim.phase === 'uncertain' && agent.agent_status === 'idle') {
+        claim.idleSince ??= now
+        if (now - claim.idleSince >= 120000) retire(claim, now, 'the reviewer prompt never started (delivery uncertain, pane idle)')
+      } else delete claim.idleSince
       claim.lastSeen = now
     }
     for (const claim of claims.filter(c => active(c) && c.project === project.project)) {

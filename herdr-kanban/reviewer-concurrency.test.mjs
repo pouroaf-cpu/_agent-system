@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { reserveReview, updateReviewClaim, syncReviewClaims, readReviewClaims, assertReviewHandoff, busyReviewCards, prepareReviewSnapshot, failReviewClaim } from './lib/review-claims.mjs'
 import { saveReviewGroups, computeReviewPlan } from './lib/review-plan.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
-import { routeReviewVerdicts } from './lib/autospawn.mjs'
+import { routeReviewVerdicts, reconcileReviewers } from './lib/autospawn.mjs'
 import { readCardPlanners } from './lib/card-planner.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 
@@ -105,6 +105,30 @@ test('per-card verdicts route independently and preserve original Planner', t =>
   assert.equal(findCard(f.tasks, 'T-2').column, 'review')
   routeReviewVerdicts(f.tasks)
   assert.equal(findCard(f.tasks, 'T-2').column, 'completed')
+})
+test('an uncertain reviewer left idle is retired and its pane closed; one seen working becomes running (audit 2026-09-26 #12)', async t => {
+  const f = fixture(t); f.card('T-1'); f.card('T-2')
+  const a = f.reserve(['T-1'], 'one', 1000), b = f.reserve(['T-2'], 'one', 1000)
+  updateReviewClaim(f.root, a.id, { paneId: 'a', phase: 'uncertain' })
+  updateReviewClaim(f.root, b.id, { paneId: 'b', phase: 'uncertain' })
+  const agents = [{ name: 'r-t-1', pane_id: 'a', agent_status: 'idle' }, { name: 'r-t-2', pane_id: 'b', agent_status: 'working' }]
+  const closed = []
+  const poll = now => reconcileReviewers({ reviewRoot: f.root, project: 'one', tasksDir: f.tasks, agents, now, close: async pane => closed.push(pane) })
+  await poll(10000)
+  assert.deepEqual(readReviewClaims(f.root).map(c => [c.paneId, c.phase, !!c.closedAt]), [['a', 'uncertain', false], ['b', 'running', false]])
+  await poll(10000 + 180000)
+  assert.deepEqual(readReviewClaims(f.root).filter(c => !c.closedAt).map(c => c.paneId), ['b'], 'the idle claim frees its slot')
+  assert.deepEqual(closed, ['a'])
+  assert.match(readWorkflow(f.tasks)['T-1'].operational.reason, /never started/)
+  await poll(10000 + 240000)
+  assert.deepEqual(closed, ['a'], 'a retired pane is closed once')
+})
+test('a claim whose pane is gone is retired on a poll with no review work (audit 2026-09-26 #12)', async t => {
+  const f = fixture(t)
+  const a = f.reserve(['T-9'], 'one', 1000)
+  updateReviewClaim(f.root, a.id, { paneId: 'lost', phase: 'running' })
+  await reconcileReviewers({ reviewRoot: f.root, project: 'one', tasksDir: f.tasks, agents: [], now: 200000, close: async () => {} })
+  assert.equal(readReviewClaims(f.root).filter(c => !c.closedAt).length, 0)
 })
 test('isolated snapshots pin committed HEAD and separate build output; non-Git is report-only', t => {
   const f = fixture(t); const repo = join(f.root, 'repo'); mkdirSync(repo)
