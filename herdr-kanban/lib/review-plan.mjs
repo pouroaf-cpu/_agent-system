@@ -8,7 +8,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
-import { readBoard, cardFiles } from './cards.mjs'
+import { readBoard, cardFiles, filesOverlap } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 import { isCardId } from './ids.mjs'
 export { cardFiles } from './cards.mjs'
@@ -104,15 +104,11 @@ function groupByFiles(cardIds, filesOf) {
     if (ra !== rb) parent.set(ra, rb)
   }
 
-  const fileToCards = new Map()
-  for (const id of cardIds) {
-    for (const f of filesOf.get(id)) {
-      if (!fileToCards.has(f)) fileToCards.set(f, [])
-      fileToCards.get(f).push(id)
+  // Pairwise, so a generated-files glob groups with the cards listing its matches.
+  for (let i = 0; i < cardIds.length; i++) {
+    for (let j = i + 1; j < cardIds.length; j++) {
+      if (filesOf.get(cardIds[i]).some((f) => filesOf.get(cardIds[j]).some((g) => filesOverlap(f, g)))) union(cardIds[i], cardIds[j])
     }
-  }
-  for (const ids of fileToCards.values()) {
-    for (let i = 1; i < ids.length; i++) union(ids[0], ids[i])
   }
 
   const groups = new Map()
@@ -165,7 +161,7 @@ export function computeReviewPlan({ tasksDir, now = Date.now(), claimedIds = [] 
   const active = []
   for (const c of reviewCards) {
     const files = filesOf.get(c.id)
-    const holder = holders.find((h) => h.files.some((f) => files.includes(f)))
+    const holder = holders.find((h) => h.files.some((f) => files.some((g) => filesOverlap(f, g))))
     if (holder) {
       heldBack.push({
         card: c.id,

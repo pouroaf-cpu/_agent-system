@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync
 import { renameSync } from './fs-retry.mjs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { cardFiles, findCard, readBoard } from './cards.mjs'
+import { cardFiles, findCard, readBoard, filesOverlap } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
@@ -173,7 +173,7 @@ export function integrationStartHoldReason({ repoRoot, workspace = repoRoot, car
   if (!files.length) return 'card not ready — no exact files listed'
   const dirty = semanticDirtyFiles(repoRoot).find(path => {
     const absolute = norm(resolve(repoRoot, path))
-    return files.some(file => file === absolute || file.startsWith(`${absolute}/`) || absolute.startsWith(`${file}/`))
+    return files.some(file => filesOverlap(file, absolute) || filesOverlap(file, `${absolute}/**`) || absolute.startsWith(`${file}/`))
   })
   return dirty ? `integration file has substantive changes: ${dirty}; preserved for reconciliation` : null
 }
@@ -516,7 +516,7 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
     // Preserve locks on existing changes even if a correction narrows the card.
     const files =[...new Set([...(entry.files || []), ...(live ? filesFor(live, entry.integrationWorkspace) : [])])]
     if (JSON.stringify(files) !== JSON.stringify(entry.files)) updateEntry(tasksDir, id, { files })
-    const overlap = files.find((file) => candidate.has(norm(file)))
+    const overlap = files.find((file) => [...candidate].some(c => filesOverlap(c, norm(file))))
     if (overlap) return `files busy, held by ${id} — ${slash(relative(resolve(projectPath), overlap))}`
   }
   return null
@@ -526,7 +526,7 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
 export function recordedOverlapBlockers(card, projectPath, registry) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
   return Object.entries(registry).filter(([id, entry]) => id !== card.id && entry.state !== 'integrated'
-    && (entry.files || []).some(file => candidate.has(norm(file)))).map(([id]) => id)
+    && (entry.files || []).some(file => [...candidate].some(c => filesOverlap(c, norm(file))))).map(([id]) => id)
 }
 
 function commitsAfter(entry) {
@@ -681,13 +681,13 @@ function validateCompleted(card, entry) {
   // Only the card commit is integrated, so uncommitted files outside the card's own
   // files never reach it and must not hold it: a Builder's evidence log (Injectbuddy
   // T-148) or build-regenerated tracked files like sitemaps (Tradeflow T-35).
-  const cardOwn = new Set(expectedRepoFiles(card, entry))
-  if (operationInProgress(entry.worktreePath) || semanticDirtyFiles(entry.worktreePath).some(f => cardOwn.has(slash(f)))) throw new Error('card worktree still has uncommitted changes')
+  const expected = expectedRepoFiles(card, entry)
+  const listed = (file) => expected.some(e => filesOverlap(e, file)) // a generated-files glob covers its matches
+  if (operationInProgress(entry.worktreePath) || semanticDirtyFiles(entry.worktreePath).some(f => listed(slash(f)))) throw new Error('card worktree still has uncommitted changes')
   const commits = commitsAfter(entry)
   if (commits.length !== 1) throw new Error(`expected exactly one card commit; found ${commits.length}`)
   const actual = commitFiles(entry, commits[0])
-  const expected = expectedRepoFiles(card, entry)
-  const outside = actual.filter((file) => !expected.includes(file))
+  const outside = actual.filter((file) => !listed(file))
   if (!actual.length || outside.length) {
     throw new Error(`commit must change only card-listed files: allowed [${expected.join(', ')}], got [${actual.join(', ')}]`)
   }
