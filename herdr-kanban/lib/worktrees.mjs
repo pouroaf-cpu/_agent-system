@@ -258,8 +258,17 @@ function runInstall(folder, command, logPath, onStart) {
     const child = spawn(command, { cwd: folder, shell: true, windowsHide: true, stdio: ['ignore', out, out] })
     if (child.pid) onStart?.(child.pid)
     child.on('error', finish)
-    child.on('close', code => finish(code === 0 ? null : new Error(`${command} exited with code ${code}; see ${logPath}`)))
+    child.on('close', code => finish(code === 0 ? null : installFailure(command, code, logPath)))
   })
+}
+
+// npm's exit code alone (4294963248) hides the cause. Name the file-lock errors from its log
+// so the transient backoff sees them: I266 went to Owner over EPERM on a .node file a running
+// next dev server had loaded (2026-09-26).
+export function installFailure(command, code, logPath) {
+  let why
+  try { why = readFileSync(logPath, 'utf8').slice(-20000).match(/\b(EPERM|EBUSY|ENOTEMPTY|ETIMEDOUT)\b/)?.[1] } catch { /* no log */ }
+  return new Error(`${command} exited with code ${code}${why ? ` (${why})` : ''}; see ${logPath}`)
 }
 
 const installCommand = folder => existsSync(join(folder, 'pnpm-lock.yaml')) ? 'pnpm install --frozen-lockfile'

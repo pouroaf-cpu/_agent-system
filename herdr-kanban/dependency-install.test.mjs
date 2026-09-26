@@ -106,3 +106,17 @@ test('after a board restart, an install still running in that folder is waited f
   await tick()
   assert.deepEqual(f.calls, ['npm ci --no-audit --no-fund'])
 })
+
+test('an install failure names the file-lock error from npm\'s log so the backoff treats it as transient (I266)', async () => {
+  const { installFailure } = await import('./lib/worktrees.mjs')
+  const { isTransient } = await import('./lib/transient.mjs')
+  const dir = mkdtempSync(join(tmpdir(), 'install-log-')), log = join(dir, 'install.log')
+  try {
+    writeFileSync(log, "npm error [Error: EPERM: operation not permitted, unlink 'x.node'] {\nnpm error   errno: -4048,\n")
+    const err = installFailure('npm ci', 4294963248, log)
+    assert.match(err.message, /\(EPERM\)/)
+    assert.ok(isTransient(err))
+    writeFileSync(log, 'npm error code ERESOLVE\n')
+    assert.ok(!isTransient(installFailure('npm ci', 1, log)))
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

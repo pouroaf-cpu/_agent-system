@@ -110,6 +110,9 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       // A recorded session that also belongs to another pane is stale: trust the live
       // agent at this board-named pane instead (Injectbuddy T-148).
       if (identity && runs.some(r => r.sessionId === identity && r.paneId !== paneId) && agent?.name === builder.name) identity = agent.agent_session?.value
+      // Claude runs record no session id at start (herdr learns it later), so every Claude-built
+      // card held here and went to Owner (Injectbuddy I265, 2026-09-26). Same trust as above.
+      if (!identity && agent?.name === builder.name) identity = agent.agent_session?.value
       const matches = a => a?.pane_id === paneId && a.name === builder.name && a.agent_session?.value === identity
       // The handoff already landed and the pane is gone (closed while the card sat in Owner,
       // Tradeflow T-38): there is nothing left to preserve or close, so it counts as retired.

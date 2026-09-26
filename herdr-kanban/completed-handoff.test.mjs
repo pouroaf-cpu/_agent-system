@@ -376,3 +376,19 @@ test('a finished Builder whose pane is already gone counts as retired, so the ca
   assert.equal(closed, 0)
   assert.equal(JSON.parse(readFileSync(join(tasksDir, '.workflow-state.json'), 'utf8'))['T-1'].builderRetired.note, 'pane already closed')
 })
+
+test('a Claude Builder with no recorded session is identified by its live board-named pane (I265)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-claude-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', commit: 'saved' } }))
+  writeFileSync(join(tasksDir, '.workflow-state.json'), JSON.stringify({ 'T-1': { completedStage: 'working', builder: { pane_id: 'p', name: 'b-t-1' } } }))
+  writeFileSync(join(tasksDir, '.request-usage.json'), JSON.stringify({ runs: { r: { paneId: 'p', role: 'builder', cardIds: ['T-1'], sessionId: null } } }))
+  let agent = { pane_id: 'p', name: 'b-t-1', agent_session: { value: 'claude-session' }, agent_status: 'done' }, integrated = 0
+  const io = { agentList: async () => agent ? [agent] : [], paneRead: async () => 'out', recordUsageFinish: async () => {},
+    paneClose: async () => { agent = null }, reconcile: () => { integrated++; return [{ id: 'T-1', status: 'integrated' }] } }
+  const [result] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
+  assert.doesNotMatch(result.reason || '', /identity/)
+  assert.equal(integrated, 1)
+})
