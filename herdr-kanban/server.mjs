@@ -36,7 +36,7 @@ const { isCardId } = await import('./lib/ids.mjs')
 const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
-const { checkStalls, laneTimes } = await import('./lib/stall-watchdog.mjs')
+const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
@@ -81,6 +81,7 @@ const finishedBindingSince = new Map()
 const orphanWorkingSince = new Map()
 const reconciliationPolls = new Set()
 const projectPolls = new Set()
+const actingPolls = new Set() // polls in progress that passed the stall watchdog's could-act gate
 const pollErrors = new Map()
 const FINISHED_BINDING_GRACE_MS = 2 * 60 * 1000
 
@@ -371,7 +372,11 @@ async function tick(project, agents) {
 // Runs on a fixed interval per project, independent of whether any browser is
 // connected — a card must still get spawned when the board is opened headless.
 async function pollProject(project) {
-  if (projectPolls.has(project)) return
+  if (projectPolls.has(project)) {
+    // A long poll (an integration check can run 10 minutes) is still the board acting.
+    if (actingPolls.has(project)) recordHealthyPoll(tasksDirOf(project))
+    return
+  }
   projectPolls.add(project)
   try {
     const tasksDir = tasksDirOf(project)
@@ -397,9 +402,10 @@ async function pollProject(project) {
     } catch (err) { if (!err.busy) schedulerActivity(project, `review ownership unavailable: ${err.message}`) }
     // Safety net first, so a failure later in this poll cannot hide a stall.
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
+      actingPolls.add(project)
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
-        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, holdsKnown: holdsReady.has(project),
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)
@@ -636,6 +642,7 @@ async function pollProject(project) {
     }
   } finally {
     projectPolls.delete(project)
+    actingPolls.delete(project)
   }
 }
 

@@ -4,7 +4,7 @@
 // Every detection is one line in TASKS/stalls.log so new stall types show up.
 // It never deletes or resets work: it only lifts a hold, asks for a fresh
 // Planner, or moves the card to Owner.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { readBoard, moveCard, columnByKey, waitingOnPrerequisites } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
@@ -49,12 +49,26 @@ export function laneTimes({ tasksDir, board, agents = [], claims = [], planners 
   return result
 }
 
+// Durable heartbeat of the last poll that could act (herdr up, not paused, agents allowed,
+// breaker closed). Returns when the latest gap in it ended: herdr down, host asleep, board
+// down or a global pause left no such poll, and that time is not a stall (audit 2026-09-26 F3).
+const GAP_MS = 2 * 60000
+export function recordHealthyPoll(tasksDir, now = Date.now()) {
+  const file = join(tasksDir, '.board-heartbeat.json')
+  let prev = {}
+  try { prev = JSON.parse(readFileSync(file, 'utf8')) } catch { /* first poll: no gap known */ }
+  const gapEndedAt = prev.at && now - ms(prev.at) > GAP_MS ? new Date(now).toISOString() : prev.gapEndedAt
+  writeFileSync(file, JSON.stringify({ at: new Date(now).toISOString(), gapEndedAt }))
+  return gapEndedAt
+}
+
 // The stall clock is durable so a board restart never resets it: the latest of the
 // card file changing, the card entering its lane, an agent starting or finishing on it
 // (usage runs, bindings), the last recovery, and the last time this watchdog saw an
 // agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
-// `resumedAt` (the project's last Pause/Start) restarts every clock: paused time is not a stall.
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, holdsKnown = true, resumedAt, now = Date.now() }) {
+// `resumedAt` (the project's last Pause/Start) and `gapEndedAt` (recordHealthyPoll) restart
+// every clock: time the board could not act is not a stall.
+export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, holdsKnown = true, resumedAt, gapEndedAt, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = openClaims(claims, tasksDir)
@@ -63,7 +77,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   const busy = id => !!bindings[id]?.spawning || mine.some(c => c.cards.includes(id) && c.phase === 'starting') ||
     boundAgents(id, ctx).some(b => b.agent.agent_status === 'working')
   const reset = id => { if (now - ms(workflow[id]?.stallResetAt) >= 60000) workflow[id] = updateWorkflow(tasksDir, id, { stallResetAt: new Date(now).toISOString() }) }
-  const sinceOf = card => Math.max(card.mtime, ms(resumedAt), laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
+  const sinceOf = card => Math.max(card.mtime, ms(resumedAt), ms(gapEndedAt), laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
     ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
     ...runs.filter(r => r.cardIds?.includes(card.id)).flatMap(r => [ms(r.start?.at), ms(r.finish?.at)]))
 

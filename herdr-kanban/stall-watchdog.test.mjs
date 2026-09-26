@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { checkStalls, laneTimes } from './lib/stall-watchdog.mjs'
+import { checkStalls, laneTimes, recordHealthyPoll } from './lib/stall-watchdog.mjs'
 import { findCard, readBoard } from './lib/cards.mjs'
 import { readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { readCardPlanners } from './lib/card-planner.mjs'
@@ -223,4 +223,21 @@ test('right after a restart, before holds are known, a queued card is not a stal
   put('archive', 'T-9')
   assert.deepEqual(checkStalls({ tasksDir: tasks, holdsKnown: false, now: T + 90 * MIN }), [])
   assert.equal(checkStalls({ tasksDir: tasks, now: T + 111 * MIN }).length, 1, 'once holds are known, an unexplained wait is a stall')
+})
+
+// Audit 2026-09-26 finding 3: herdr down, host asleep, board down or a global pause
+// leaves no poll that could act. That gap is not a stall (Tradeflow 2026-09-24: 18 cards to Owner).
+test('time the board could not act is not a stall; the clock restarts when polling resumes', t => {
+  const { tasks, put } = board(t)
+  put('queue', 'T-1')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'old' } } }))
+  const poll = m => checkStalls({ tasksDir: tasks, builderSlotsFree: 4, gapEndedAt: recordHealthyPoll(tasks, T + m * MIN), now: T + m * MIN })
+  assert.deepEqual(poll(5), [])
+  // No healthy poll from T+5 to T+185 (herdr down: pollProject returns before the watchdog).
+  assert.deepEqual(poll(185), [], 'the first poll after the gap is not a stall')
+  assert.equal(findCard(tasks, 'T-1').column, 'queue')
+  for (let m = 186; m < 205; m++) assert.deepEqual(poll(m), [], `still inside the fresh window at +${m}m`)
+  const [stall] = poll(205)
+  assert.equal(stall.action, 'moved to Owner', '20 minutes of healthy polling still escalates as before')
+  assert.match(stall.reason, /no change for 20m/)
 })
