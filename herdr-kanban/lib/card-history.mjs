@@ -151,7 +151,7 @@ export function writeCurrentFeedback(tasksDir, card, heading, note) {
 // operator only hears from Pou. I326's Planner question stayed in Planning and reached
 // the operator through the Planner's own session instead (2026-09-27). Projects without
 // a manager ask the Kanban Manager. Folders that are not board projects (tests) skip it.
-function askManager(tasksDir, card, note) {
+export function askManager(tasksDir, card, note) {
   try {
     const here = dirname(dirname(fileURLToPath(import.meta.url)))
     const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || join(here, 'board.config.json'), 'utf8'))

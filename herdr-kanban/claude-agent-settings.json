@@ -1,5 +1,10 @@
 {
   "env": {
     "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
+  },
+  "hooks": {
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/agent-stop-hook.mjs", "timeout": 30 }] }
+    ]
   }
 }

@@ -23,6 +23,7 @@ const LEGACY = [[/^kb-review-/, 'r'], [/^kb-plan-/, 'i'], [/^kb-planner-/, 'p'],
 export function agentRole(name = '') {
   return ROLE_NAME.exec(name)?.[1] ?? LEGACY.find(([rx]) => rx.test(name))?.[1] ?? null
 }
+export const agentCard = (name = '') => ROLE_NAME.exec(name)?.[2]?.toUpperCase() ?? null
 export const isBoardAgent = (agent) => (agent?.name || '').startsWith('kb-') || !!agentRole(agent?.name)
 export const isReviewerAgent = (agent) => ['r', 'a'].includes(agentRole(agent?.name))
 export const isSweeperAgent = (agent) => agentRole(agent?.name) === 'i'
