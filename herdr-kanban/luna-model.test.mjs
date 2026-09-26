@@ -6,6 +6,7 @@ import { assignmentFor, catalog, engineForAssignment, globalSettings, validateSe
 
 test('requested role defaults resolve to the right launch arguments', () => {
   const config = JSON.parse(readFileSync(new URL('./board.config.json', import.meta.url), 'utf8'))
+  delete config.agentSettings // role defaults come from the legacy fields, not the live board's saved choice
   assert.ok(catalog().claude.models.includes('claude-opus-5-5'))
   assert.ok(catalog().codex.models.includes('gpt-6-luna'))
   assert.ok(catalog().codex.models.includes('gpt-6-sol'))

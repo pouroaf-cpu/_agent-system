@@ -3,7 +3,7 @@
 // no-handoff, so I191, I221 and I240 reached Owner in minutes. A usage limit blocks that
 // engine on every project until it resets; its cards wait in their lanes.
 import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { renameSync } from './fs-retry.mjs'
 import { retryHold } from './transient.mjs'
 
@@ -40,7 +40,9 @@ export function usageLimit(screen, now = Date.now()) {
 
 export const engineKind = engine => (typeof engine === 'string' ? engine : engine?.kind) || 'claude'
 const label = kind => kind[0].toUpperCase() + kind.slice(1)
-const quotaPath = boardRoot => join(boardRoot, '.engine-quota.json')
+// Beside the config the server runs with: a test board (KANBAN_CONFIG in a temp dir) must not
+// inherit the live board's block, or its agents never start.
+const quotaPath = boardRoot => join(process.env.KANBAN_CONFIG ? dirname(process.env.KANBAN_CONFIG) : boardRoot, '.engine-quota.json')
 
 export function readQuota(boardRoot) {
   try { return boardRoot ? JSON.parse(readFileSync(quotaPath(boardRoot), 'utf8')) : {} } catch { return {} }

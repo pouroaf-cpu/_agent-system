@@ -2,6 +2,7 @@
 // models/engines fields as the fallback source for compatibility.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { findCard } from './cards.mjs'
+import { approvedManagedModel } from './herdr.mjs'
 
 export const STAGES = ['planning', 'working', 'review', 'issues', 'trivial']
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
@@ -44,12 +45,21 @@ export function globalSettings(config) {
   return Object.fromEntries(STAGES.map(stage => [stage, validateAssignment({ ...legacySetting(config, stage), ...saved[stage] }, `global ${stage}`)]))
 }
 
+// The launch guard (herdr.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
+// here too, or a saved setting only fails at agent start and sends cards to Owner (2026-09-26 I229).
+const ROLE = { planning: 'p', working: 'b', review: 'r', issues: 'i', trivial: 'b' }
+function assertLaunchable(stage, setting) {
+  const allowed = [approvedManagedModel(`${ROLE[stage]}-t-1`) ?? []].flat()
+  if (allowed.length && !allowed.includes(setting.model)) throw new Error(`${stage}: model ${setting.model} is not approved for board launches (allowed: ${allowed.join(', ')})`)
+  return setting
+}
+
 export function validateSettingsPatch(config, patch) {
   const current = globalSettings(config)
   const next = { ...current }
   for (const stage of STAGES) {
     if (patch?.[stage] === undefined) continue
-    next[stage] = validateAssignment({ ...current[stage], ...patch[stage] }, `global ${stage}`)
+    next[stage] = assertLaunchable(stage, validateAssignment({ ...current[stage], ...patch[stage] }, `global ${stage}`))
   }
   return next
 }
@@ -77,7 +87,7 @@ export function setCardOverride(tasksDir, cardId, stage, patch, config) {
   if (!STAGES.includes(stage)) throw new Error(`unsupported settings stage ${stage}`)
   const card = findCard(tasksDir, cardId)
   const current = card.agentSettings?.[stage] || {}
-  const next = validateAssignment({ ...assignmentFor(config, card, stage), ...current, ...patch }, `${card.id} ${stage}`)
+  const next = assertLaunchable(stage, validateAssignment({ ...assignmentFor(config, card, stage), ...current, ...patch }, `${card.id} ${stage}`))
   let text = readFileSync(card.path, 'utf8')
   for (const field of fields) {
     const marker = new RegExp(`^\\*\\*${labels[stage]} ${field}:\\*\\*[^\\n]*$`, 'im')
