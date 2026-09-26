@@ -13,7 +13,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
+import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
@@ -153,23 +153,6 @@ function duplicateIssueKey(card, board) {
   if (!card.issueKey) return null
   const hits = liveCards(board).filter((c) => c.issueKey && c.issueKey === card.issueKey)
   return hits.length > 1 ? hits.map((c) => `${c.id} in ${c.column}`).join(', ') : null
-}
-
-function cycleFor(card, board) {
-  const byId = new Map()
-  for (const c of liveCards(board)) {
-    if (!byId.has(c.id)) byId.set(c.id, c)
-    else byId.set(c.id, null)
-  }
-  const seen = new Set()
-  const visit = (id) => {
-    if (id === card.id) return true
-    if (seen.has(id)) return false
-    seen.add(id)
-    const next = byId.get(id)
-    return !!next && (next.blockedBy || []).some(visit)
-  }
-  return (card.blockedBy || []).some(visit)
 }
 
 function missionBuilds(board, mission) {

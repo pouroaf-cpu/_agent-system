@@ -29,7 +29,7 @@ const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
 const lanHost = process.env.KANBAN_LAN_HOST
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
-const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard } = await import('./lib/cards.mjs')
+const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard } = await import('./lib/cards.mjs')
 const { agentList, agentsForProject, isRunning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
@@ -41,7 +41,7 @@ const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
-const { busyReviewCards } = await import('./lib/review-claims.mjs')
+const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
@@ -948,12 +948,14 @@ const handleRequest = async (req, res) => {
       if (body.length > 60000) return json(res, 413, { error: 'Brief too large' })
     }
     try {
-      const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '' } = JSON.parse(body)
+      const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '', priority, blockedBy } = JSON.parse(body)
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       // Audits run off the board (Tradeflow TF49 was created here by mistake).
       if (audit) throw new Error('Audits do not go on the board: follow C:/Users/PFrew/Projects/_roles/AUDIT-REQUESTS.md (auditor agent, report in Projects/_audits)')
+      // Only API cards need ACs: internal creators (audit findings, fixtures) write their own briefs.
+      if (typeof brief === 'string' && brief.trim() && !/AC\d+:/.test(brief)) throw new Error('The brief needs at least one acceptance criterion line, e.g. "AC1: <observable outcome>"')
       const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''
-      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, prefix: config.cardPrefixes?.[p] })
+      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, priority, blockedBy, prefix: config.cardPrefixes?.[p] })
       broadcastBoard(p)
       return json(res, 201, { ok: true, card })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
@@ -986,6 +988,28 @@ const handleRequest = async (req, res) => {
       broadcastBoard(p)
       return json(res, 200, { ok: true, ...result })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  // Orchestrators maintain their own cards here: priority, blockers and dated notes.
+  if (req.method === 'POST' && url.pathname === '/api/card-update') {
+    let body = ''
+    for await (const chunk of req) {
+      body += chunk
+      if (body.length > 60000) return json(res, 413, { error: 'Update too large' })
+    }
+    try {
+      const { project: p, id, priority, addBlockedBy, removeBlockedBy, note } = JSON.parse(body)
+      if (!config.projects.includes(p)) throw new Error('Unknown project')
+      const tasksDir = tasksDirOf(p), current = findCard(tasksDir, id)
+      const lockBlockers = ['working', 'review', 'completed'].includes(current.column) && !!(readBindings(tasksDir)[current.id] || reviewClaimFor(REVIEW_ROOT, tasksDir, current.id))
+      const { card, changes } = updateCard(tasksDir, id, { priority, addBlockedBy, removeBlockedBy, note }, { lockBlockers })
+      activity(p, card.id, 'update', `${changes.join('; ')} (API)`)
+      json(res, 200, { ok: true, card, changes })
+      broadcastBoard(p)
+    } catch (err) {
+      json(res, 400, { ok: false, error: err.message })
+    }
+    return
   }
 
   if (req.method === 'POST' && url.pathname === '/api/move') {

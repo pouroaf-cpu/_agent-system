@@ -514,17 +514,102 @@ export function setPriority(tasksDir, cardId, priority) {
 
   const card = findCard(tasksDir, cardId)
   const text = readFileSync(card.path, 'utf8')
-
-  let next
-  if (PRIORITY.test(text)) {
-    next = text.replace(PRIORITY, `**Priority** ${n}/10`)
-  } else {
-    const heading = text.match(HEADING)
-    const line = `**Priority** ${n}/10`
-    next = heading ? text.replace(heading[0], `${heading[0]}\n\n${line}`) : `${line}\n\n${text}`
-  }
+  const next = withPriority(text, n)
   if (next !== text) writeFileSync(card.path, next)
   return { ...card, priority: n }
+}
+
+function withPriority(text, n) {
+  const line = `**Priority** ${n}/10`
+  if (PRIORITY.test(text)) return text.replace(PRIORITY, line)
+  const heading = text.match(HEADING)
+  return heading ? text.replace(heading[0], `${heading[0]}\n\n${line}`) : `${line}\n\n${text}`
+}
+
+// The header's Blocked-by line sits right under Priority (I270's format). An empty list removes it.
+function withBlockers(text, ids) {
+  const line = ids.length ? `**Blocked by:** ${ids.join(', ')}` : ''
+  if (/^\*\*Blocked by:\*\*/m.test(text)) return text.replace(/^\*\*Blocked by:\*\*[^\r\n]*(\r?\n)?/m, (_, eol) => line && line + (eol || ''))
+  if (!line) return text
+  const anchor = text.match(/^\*\*Priority\*\*[^\r\n]*/m) || text.match(/^\*\*Trivial:\*\*[^\r\n]*/m) || text.match(HEADING)
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  return anchor ? text.replace(anchor[0], `${anchor[0]}${eol}${line}`) : `${line}${eol}${eol}${text}`
+}
+
+function checkPriority(priority) {
+  if (!Number.isInteger(priority) || priority < 1 || priority > 10) throw new Error(`priority must be a whole number from 1 to 10, got: ${JSON.stringify(priority)}`)
+}
+
+function cardIds(ids, field) {
+  if (!Array.isArray(ids) || ids.some((b) => typeof b !== 'string' || !b.trim())) throw new Error(`${field} must be an array of card IDs`)
+  return [...new Set(ids.map((b) => b.trim().toUpperCase()))]
+}
+
+// New blockers must be cards in this project (any lane, archive included), not the card itself, and must not close a loop.
+function checkBlockers(board, id, ids, field) {
+  ids = cardIds(ids, field)
+  if (ids.includes(id)) throw new Error(`${id} cannot be blocked by itself`)
+  const known = new Set(Object.values(board).flat().map((c) => c.id))
+  const unknown = ids.filter((b) => !known.has(b))
+  if (unknown.length) throw new Error(`${field} names no card in this project: ${unknown.join(', ')}`)
+  if (cycleFor({ id, blockedBy: ids }, board)) throw new Error(`Blocking ${id} on ${ids.join(', ')} would make a dependency cycle`)
+  return ids
+}
+
+// A dependency cycle among live cards; an archived card has landed, so nothing waits on it.
+export function cycleFor(card, board) {
+  const byId = new Map()
+  for (const c of Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)) {
+    if (!byId.has(c.id)) byId.set(c.id, c)
+    else byId.set(c.id, null)
+  }
+  const seen = new Set()
+  const visit = (id) => {
+    if (id === card.id) return true
+    if (seen.has(id)) return false
+    seen.add(id)
+    const next = byId.get(id)
+    return !!next && (next.blockedBy || []).some(visit)
+  }
+  return (card.blockedBy || []).some(visit)
+}
+
+// POST /api/card-update: orchestrators maintain their own cards (priority, blockers,
+// dated decision notes) without hand-editing the file. The caller sets `lockBlockers`
+// while a live agent holds the card.
+export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], removeBlockedBy = [], note } = {}, { lockBlockers = false, now = new Date() } = {}) {
+  const card = findCard(tasksDir, cardId)
+  if (card.column === 'archive') throw new Error(`${card.id} is archived; archived cards cannot be updated`)
+  let text = readFileSync(card.path, 'utf8')
+  const changes = []
+  if (priority !== undefined) {
+    checkPriority(priority)
+    text = withPriority(text, priority)
+    changes.push(`priority ${priority}/10`)
+  }
+  const add = cardIds(addBlockedBy, 'addBlockedBy'), remove = cardIds(removeBlockedBy, 'removeBlockedBy')
+  if (add.length || remove.length) {
+    if (lockBlockers) throw new Error(`${card.id} has a live agent in ${card.column}; blocker changes are refused until it finishes (note and priority are still allowed)`)
+    checkBlockers(readBoard(tasksDir), card.id, add, 'addBlockedBy')
+    const next = [...new Set([...card.blockedBy, ...add])].filter((b) => !remove.includes(b))
+    text = withBlockers(text, next)
+    changes.push(`blocked by ${next.join(', ') || 'nothing'}`)
+  }
+  if (note !== undefined) {
+    const heading = typeof note?.heading === 'string' ? note.heading.trim() : ''
+    const body = typeof note?.text === 'string' ? note.text.trim() : ''
+    // Board markers (Review feedback, Needs you, Blocked by, ...) in a note would be read as card state.
+    if (!/^[A-Za-z][A-Za-z0-9 '-]{0,39}$/.test(heading) || /^(build attempt|review feedback|needs you|kicked back|spawn failed|parked|priority)$/i.test(heading)) throw new Error('note.heading must be a short plain label such as "Decision" or "Operator decision" (letters, digits, spaces; at most 40 characters)')
+    if (!body) throw new Error('note.text is required')
+    if (/\*\*|^\s*#/m.test(body)) throw new Error('note.text must be plain text: no ** bold markers or # headings (the board reads those as card fields)')
+    const eol = text.includes('\r\n') ? '\r\n' : '\n'
+    text = `${text.trimEnd()}${eol}${eol}**${heading}** ${now.toISOString()}${eol}${eol}${body.replace(/\r?\n/g, eol)}${eol}`
+    changes.push(`note: ${heading}`)
+  }
+  if (!changes.length) throw new Error('Nothing to update: send priority, addBlockedBy, removeBlockedBy or note')
+  writeFileSync(card.path, text)
+  appendHistory(tasksDir, card.id, { event: 'card-update', changes })
+  return { card: parseCard(card.path, card.column), changes }
 }
 
 // Toggle the auto-review marker by rewriting the one line in the card. The card
@@ -716,7 +801,7 @@ export function waitingOnPrerequisites(card, board, integrated = {}) {
 
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
 // one the project keeps issuing legacy T- ids.
-export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', now = new Date() }) {
+export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', priority, blockedBy, now = new Date() }) {
   if (typeof title !== 'string' || !title.trim() || title.length > 200 || /[\r\n]/.test(title)) throw new Error('A single-line title of at most 200 characters is required')
   if (typeof brief !== 'string' || !brief.trim() || brief.length > 50000) throw new Error('An approved brief of at most 50000 characters is required')
   if (typeof mission !== 'string' || /[\r\n]/.test(mission)) throw new Error('Invalid mission')
@@ -728,7 +813,10 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   if (audit && !AUDITS.includes(audit)) throw new Error(`Audit must be one of: ${AUDITS.join(', ')}`)
   if (audit === 'general' && !String(tools ?? '').trim()) tools = '- chrome-devtools (headless isolated browser: screenshots, DOM measurements, console and network)'
   if (audit && (typeof tools !== 'string' || !tools.trim())) throw new Error('Audit cards require exact tools/MCPs')
-  const id = nextCardId(prefix, Object.values(readBoard(tasksDir)).flat().map(c => c.id))
+  if (priority !== undefined) checkPriority(priority)
+  const board = readBoard(tasksDir)
+  const id = nextCardId(prefix, Object.values(board).flat().map(c => c.id))
+  if (blockedBy !== undefined) blockedBy = checkBlockers(board, id, blockedBy, 'blockedBy')
   const dir = join(tasksDir, audit ? 'review' : 'planning')
   mkdirSync(dir, { recursive: true })
   const path = join(dir, audit ? `${id}-audit-${audit}.md` : `${id}-approved-job.md`)
@@ -736,7 +824,10 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   // The project copy is a reference; creation always uses the board's canonical template.
   if (!audit) writeFileSync(join(tasksDir, 'TASK-TEMPLATE.md'), template)
   const values = { ID: id, TITLE: title.trim(), CREATED: now.toISOString(), CATEGORY: category, WORKSPACE: workspace, AUDIT: audit, TOOLS: tools.trim(), MISSION: mission ? `**Mission:** ${mission}` : '', BRIEF: brief.trim(), PROJECT_CONSTRAINTS: constraintsFor(tasksDir, category) }
-  writeFileSync(path, template.replace(/\{\{(ID|TITLE|CREATED|CATEGORY|WORKSPACE|AUDIT|TOOLS|MISSION|BRIEF|PROJECT_CONSTRAINTS)\}\}/g, (_, key) => values[key]), { flag: 'wx' })
+  let text = template.replace(/\{\{(ID|TITLE|CREATED|CATEGORY|WORKSPACE|AUDIT|TOOLS|MISSION|BRIEF|PROJECT_CONSTRAINTS)\}\}/g, (_, key) => values[key])
+  if (priority !== undefined) text = withPriority(text, priority)
+  if (blockedBy?.length) text = withBlockers(text, blockedBy)
+  writeFileSync(path, text, { flag: 'wx' })
   return parseCard(path, audit ? 'review' : 'planning')
 }
 
