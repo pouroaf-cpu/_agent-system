@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readFileSync, utimesSync } from 'node:fs'
+import { readFileSync, utimesSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
@@ -1633,13 +1633,17 @@ test('review verdict routing skips ambiguous duplicate live ids instead of archi
 
 const pollDirs = ['owner', 'planning', 'backlog', 'queue', 'working', 'issues', 'completed', 'review', 'archive']
 
-async function waitUntil(fn, label) {
-  const deadline = Date.now() + 5000
+// With `progress`, the 5s budget restarts whenever progress() changes: a chain of
+// stub herdr calls (one node process each, ~0.5s apiece under load) is slow, not stuck.
+async function waitUntil(fn, label, progress = () => 0) {
+  let deadline = Date.now() + 5000
+  let mark = progress()
   let last
   while (Date.now() < deadline) {
     last = await fn()
     if (last) return last
     await delay(50)
+    if (progress() !== mark) { mark = progress(); deadline = Date.now() + 5000 }
   }
   assert.fail(`${label} timed out; last=${JSON.stringify(last)}`)
 }
@@ -1658,28 +1662,30 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
   }
   writeFileSync(herdrState, JSON.stringify({ agents: resolvedAgents, panes: {}, events: [], nextPane: 1, nextTab: 1 }))
 
-  writeFileSync(join(root, 'agent'),
+  // Stubs save via tmp + rename: a plain write truncates first, so a concurrent reader
+  // (the test, or another stub) could parse an empty or half-written file.
+  const stateStub =
     `import { readFileSync, writeFileSync } from 'node:fs';\n` +
+    `import { renameSync } from ${JSON.stringify(new URL('./lib/fs-retry.mjs', import.meta.url).href)};\n` +
     `const statePath = ${JSON.stringify(herdrState)};\n` +
     `const state = JSON.parse(readFileSync(statePath, 'utf8'));\n` +
+    `const save = () => { const tmp = statePath + '.' + process.pid; writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, statePath) };\n`
+  writeFileSync(join(root, 'agent'), stateStub +
     `const args = process.argv.slice(2);\n` +
     `if (args[0] === 'list') console.log(JSON.stringify({ result: { agents: state.agents } }));\n` +
-    `else if (args[0] === 'start') { const name = args[1]; const pane = args[args.indexOf('--pane') + 1]; state.agents.push({ pane_id: pane, name, cwd: state.panes[pane]?.cwd || process.cwd(), agent_status: 'idle', workspace_id: 'wa' }); state.events.push(['agent start', name, pane]); writeFileSync(statePath, JSON.stringify(state)); console.log(JSON.stringify({ result: {} })); }\n` +
-    `else if (args[0] === 'prompt') { const target = args[1]; for (const a of state.agents) if (a.pane_id === target || a.name === target) a.agent_status = 'working'; state.events.push(['agent prompt', target]); writeFileSync(statePath, JSON.stringify(state)); console.log(JSON.stringify({ result: {} })); }\n` +
+    `else if (args[0] === 'start') { const name = args[1]; const pane = args[args.indexOf('--pane') + 1]; state.agents.push({ pane_id: pane, name, cwd: state.panes[pane]?.cwd || process.cwd(), agent_status: 'idle', workspace_id: 'wa' }); state.events.push(['agent start', name, pane]); save(); console.log(JSON.stringify({ result: {} })); }\n` +
+    `else if (args[0] === 'prompt') { const target = args[1]; for (const a of state.agents) if (a.pane_id === target || a.name === target) a.agent_status = 'working'; state.events.push(['agent prompt', target]); save(); console.log(JSON.stringify({ result: {} })); }\n` +
     `else console.log(JSON.stringify({ result: {} }));\n`)
   writeFileSync(join(root, 'workspace'),
     `if (process.argv[2] === 'list') console.log(JSON.stringify({ result: { workspaces: [{ label: 'agents', workspace_id: 'wa' }] } }));\n` +
     `else console.log(JSON.stringify({ result: { workspace: { workspace_id: 'wa' } } }));\n`)
-  writeFileSync(join(root, 'tab'),
-    `import { readFileSync, writeFileSync } from 'node:fs';\n` +
-    `const statePath = ${JSON.stringify(herdrState)};\n` +
-    `const state = JSON.parse(readFileSync(statePath, 'utf8'));\n` +
+  writeFileSync(join(root, 'tab'), stateStub +
     `const args = process.argv.slice(2);\n` +
     `const pane = 'w1:p' + state.nextPane++;\n` +
     `const tab = 'w1:t' + state.nextTab++;\n` +
     `state.panes[pane] = { cwd: args[args.indexOf('--cwd') + 1] || process.cwd() };\n` +
     `state.events.push(['tab create', pane]);\n` +
-    `writeFileSync(statePath, JSON.stringify(state));\n` +
+    `save();\n` +
     `console.log(JSON.stringify({ result: { root_pane: { pane_id: pane, tab_id: tab }, tab: { tab_id: tab } } }));\n`)
   writeFileSync(join(root, 'pane'),
     `const args = process.argv.slice(2);\n` +
@@ -1735,7 +1741,9 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
     rmSync(root, { recursive: true, force: true })
     throw err
   }
-  return { root, tasks, projectsRoot, configPath, port, stop, output: () => output, herdrState }
+  // Each tab create, agent start or prompt rewrites the state file: a spawn step done.
+  const spawnProgress = () => statSync(herdrState).mtimeMs
+  return { root, tasks, projectsRoot, configPath, port, stop, output: () => output, herdrState, spawnProgress }
 }
 
 async function restartPollServer(run, agents = []) {
@@ -1821,7 +1829,7 @@ test('running manager poll promotes Planned to Builder and Completed to independ
       return names.some((name) => name.startsWith('r-')) && names.some((name) => name === 'b-t-41')
         ? names
         : false
-    }, 'manager automatic agent starts')
+    }, 'manager automatic agent starts', run.spawnProgress)
     assert.equal(starts.filter((name) => name.startsWith('r-')).length, 1)
     assert.equal(starts.filter((name) => name === 'b-t-41').length, 1)
   } finally {
@@ -1941,7 +1949,7 @@ test('running server poll auto-starts one Lead Planner for Issues, then hkb retu
       const state = JSON.parse(readFileSync(run.herdrState, 'utf8'))
       const names = state.events.filter((e) => e[0] === 'agent start').map((e) => e[1])
       return names.filter((name) => name.startsWith('i-')).length === 1 ? names : false
-    }, 'Lead Planner start')
+    }, 'Lead Planner start', run.spawnProgress)
     assert.equal(starts.filter((name) => name.startsWith('i-')).length, 1)
     assert.match(readFileSync(findCard(run.tasks, 'T-50').path, 'utf8'), /Lead Planner accepted ownership/)
 
