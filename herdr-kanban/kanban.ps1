@@ -72,10 +72,11 @@ if ($alive) {
     # this script, so a scheduled task or an agent's shell took the board down with it
     # when that parent exited — silently, no crash, no error log. Win32_Process.Create
     # gives the server no parent job, so nothing else owns its lifetime.
+    # conhost --headless: a WMI-created console app otherwise opens a visible Windows Terminal window.
     $logOut = Join-Path $root 'server.log'
     $logErr = Join-Path $root 'server.err.log'
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine      = "cmd.exe /c $lanPrefix node server.mjs >> `"$logOut`" 2>> `"$logErr`""
+        CommandLine      = "conhost.exe --headless cmd.exe /c $lanPrefix node server.mjs >> `"$logOut`" 2>> `"$logErr`""
         CurrentDirectory = $root
     }
     if ($created.ReturnValue -ne 0) { Write-Warning "board: process create failed ($($created.ReturnValue))" }

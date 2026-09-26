@@ -51,7 +51,7 @@ try {
     $herdrState = Join-Path $root '.watchdog-herdr-outage'
     if (-not (Test-Herdr)) {
         $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-            CommandLine = "`"$herdr`" --session $session server"
+            CommandLine = "conhost.exe --headless `"$herdr`" --session $session server"
             CurrentDirectory = $root
         }
         $ready = $false
