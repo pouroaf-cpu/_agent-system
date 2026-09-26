@@ -11,6 +11,7 @@ import { readDelivery } from './delivery-state.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration } from './worktrees.mjs'
+import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
 
 // The Builder's recorded check (## Evidence "Check:"), re-run in the card's
 // rebased worktree before integration. Anything unrunnable counts as a failure.
@@ -18,7 +19,7 @@ export function runRecordedCheck(card, entry) {
   const evidence = readFileSync(card.path, 'utf8').replaceAll('**', '').match(/^## Evidence\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || ''
   const command = evidence.match(/^Check:\s*(.+)$/mi)?.[1]?.trim().replace(/^`+|`+$/g, '')
   if (!command) return Promise.resolve({ ok: false, output: 'no recorded Check: command on the card' })
-  return runShell(command, entry.workspacePath, 600000).then(r => ({ ok: r.ok, output: r.output.slice(-3000) }))
+  return runShell(command, entry.workspacePath, 600000).then(r => ({ ok: r.ok, timedOut: r.timedOut, output: r.output.slice(-3000) }))
 }
 
 // Runs a shell command; on timeout the whole process tree is killed (Windows
@@ -29,20 +30,26 @@ export function runShell(command, cwd, timeout) {
     let timedOut = false
     const child = execFile(shell, args, { cwd, windowsHide: true, maxBuffer: 64 << 20 }, (err, stdout, stderr) => {
       clearTimeout(timer)
-      done({ ok: !err && !timedOut, output: `${command}\n${stdout}${stderr}${timedOut ? `\ntimed out after ${timeout / 1000}s` : err && !stdout && !stderr ? err.message : ''}` })
+      done({ ok: !err && !timedOut, timedOut, output: `${command}\n${stdout}${stderr}${timedOut ? `\ntimed out after ${timeout / 1000}s` : err && !stdout && !stderr ? err.message : ''}` })
     })
-    const timer = setTimeout(() => {
-      timedOut = true
-      if (process.platform === 'win32') execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {})
-      else child.kill() // ponytail: sh grandchildren survive; use a process group if a POSIX board ever needs it
-    }, timeout)
+    const timer = setTimeout(() => { timedOut = true; killTree(child.pid) }, timeout)
   })
+}
+
+// A check that ran out of time under load is retried with backoff, never returned to the
+// Builder as a failure to fix. Null once the budget is spent: the caller fails it as today.
+function checkTimedOut(tasksDir, cardId, what, now) {
+  const retry = nextRetry(readWorkflow(tasksDir)[cardId]?.integrationRetry, now)
+  if (retry.exhausted) return null
+  const reason = retryHold(`${what} timed out (machine under load?)`, retry.nextAt)
+  updateWorkflow(tasksDir, cardId, { integrationRetry: { since: retry.since, tries: retry.tries, nextAt: retry.nextAt, reason } })
+  return { id: cardId, status: 'held', reason }
 }
 
 // Project integrationCheck (board.config.json projectSettings): the card commit,
 // rebased onto current master in its own worktree, must pass it before the pick.
 // Null means go ahead and integrate; otherwise the card went back.
-async function gateIntegration(tasksDir, card, command, io) {
+async function gateIntegration(tasksDir, card, command, io, now) {
   const up = io.rebase(tasksDir, card.id)
   if (!up) return null
   if (up.status === 'conflict') return returnIntegrationConflict(tasksDir, card.id, up)
@@ -53,6 +60,8 @@ async function gateIntegration(tasksDir, card, command, io) {
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
   writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}\n\n${check.output}\n`)
   appendHistory(tasksDir, card.id, { event: 'integration-check', ok: check.ok, command, commit: up.commit, evidence })
+  const timedOut = !check.ok && isTransient(check) && checkTimedOut(tasksDir, card.id, `integration check ${command}`, now)
+  if (timedOut) return timedOut
   if (!check.ok) return returnIntegrationConflict(tasksDir, card.id, { reason: `integration check ${command} failed on current master (full output: ${evidence})`, output: check.output.slice(-3000) })
   updateWorktree(tasksDir, card.id, { integrationChecked: up.commit })
   return null
@@ -75,11 +84,11 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
     : output ? `${summary}. Your worktree ${entry.worktreePath} is already rebased onto current master: fix the failures there, keep exactly one card commit, re-run the check, then hkb done.${log}`
     : `Integration conflict with master: ${summary}. Resolve it in your own worktree ${entry.worktreePath}: git rebase --onto ${target} ${entry.baseCommit}, fix ${files.join(', ') || 'the conflicting files'}, keep exactly one card commit, re-run your check, then hkb done.${diff}`)
   // Not an 'implementation' correction: that would demand the retired Builder pane back.
-  updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null })
+  updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null })
   return { id: cardId, status: 'returned', to, reason: summary }
 }
 
-export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck,
+export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(),
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees, runCheck: runRecordedCheck } }) {
   io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, ...io }
   const results = [], session = sessionOf(project)
@@ -135,7 +144,9 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     if (retired && (await io.agentList(session, { ensureSession: false })).some(a => a.pane_id === retired.paneId)) {
       results.push({ id: card.id, status: 'waiting-builder', reason: 'Waiting for retired Builder pane to close' }); continue
     }
-    const gated = integrationCheck && await gateIntegration(tasksDir, card, integrationCheck, io)
+    const pending = readWorkflow(tasksDir)[card.id]?.integrationRetry
+    if (pending?.nextAt > now) { results.push({ id: card.id, status: 'held', reason: pending.reason }); continue }
+    const gated = integrationCheck && await gateIntegration(tasksDir, card, integrationCheck, io, now)
     if (gated) { results.push(gated); continue }
     const batch = readWorktrees(tasksDir)[card.id]?.state === 'rebased' ? [{ id: card.id, status: 'rebased' }] : io.reconcile({ tasksDir, onlyIds: [card.id] })
     for (const result of batch) {
@@ -143,7 +154,10 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       if (result.status !== 'rebased') { results.push(result); continue }
       const check = await (io.runCheck ?? runRecordedCheck)(card, readWorktrees(tasksDir)[card.id])
       appendHistory(tasksDir, card.id, { event: 'rebase-check', ok: check.ok, output: check.output })
+      const timedOut = !check.ok && isTransient(check) && checkTimedOut(tasksDir, card.id, 'recorded check', now)
+      if (timedOut) { results.push(timedOut); continue }
       if (!check.ok) { results.push(returnIntegrationConflict(tasksDir, card.id, { reason: `rebased cleanly onto master, but the recorded check failed: ${check.output}` })); continue }
+      if (pending) updateWorkflow(tasksDir, card.id, { integrationRetry: null })
       updateWorktree(tasksDir, card.id, { state: 'ready', reason: null })
       results.push(...io.reconcile({ tasksDir, onlyIds: [card.id] }))
     }

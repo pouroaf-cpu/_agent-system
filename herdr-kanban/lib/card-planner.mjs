@@ -6,7 +6,7 @@ export { readCardPlanners } from './planner-state.mjs'
 import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
-import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, stagedInput, submitStaged } from './spawn.mjs'
+import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
 import { agentName, issuesSweeperPrompt } from './prompt.mjs'
 import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
@@ -14,7 +14,7 @@ import { recoveryState } from './recovery.mjs'
 import { controlState, assertPromptAllowed } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
-import { operationalHold, recordOperationalFailure, updateWorkflow } from './workflow-state.mjs'
+import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 const busy = new Set()
@@ -251,6 +251,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       const plannerHold = !!held && card.column === 'issues' && !!owner && PLANNER_NO_HANDOFF.test(held) && !cardRunContext()
       if (held && !plannerHold) continue
       if (checkWorkflowLimits(tasksDir, card.id, 'planner')) continue
+      if (startRetryHold(readWorkflow(tasksDir)[card.id], 'planner', now)) continue // a transient start failure backs off
       if (mission?.id && card.mission !== mission.id) continue
       if (plannerHold) {
         updateWorkflow(tasksDir, card.id, { operational: null })

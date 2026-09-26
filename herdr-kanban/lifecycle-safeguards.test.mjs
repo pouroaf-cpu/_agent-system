@@ -177,7 +177,9 @@ test('a Builder whose prompt never landed gets a fresh start, not a nudge', asyn
   assert.deepEqual(sent, [], 'no nudge into a pane whose prompt never ran')
   assert.deepEqual(closed, ['pane-6'])
   assert.equal(saved[0].status, 'failed')
-  assert.equal(readWorkflow(tasks)['T-6'].startFailure.count, 1)
+  // An unsubmitted prompt is machine load, not a strike: it backs off (I157, TF50).
+  const failure = readWorkflow(tasks)['T-6'].startFailure
+  assert.deepEqual([failure.count, failure.tries], [0, 1]); assert.ok(failure.nextAt > Date.now())
 })
 
 // Windows reuses PIDs quickly after a crash or forced restart. A lock whose PID now belongs to

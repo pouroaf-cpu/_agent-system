@@ -50,3 +50,17 @@ test('a failed install retries once, then holds for Owner with the reason', asyn
   assert.equal(f.hold(), `dependency install failed twice in ${f.folder}: ERESOLVE again`)
   assert.equal(f.calls.length, 2)
 })
+
+test('ENOTEMPTY install failures back off and retry instead of failing twice (I246, I248)', async t => {
+  const f = fixture(t)
+  const t0 = Date.now(), min = 60000
+  f.hold({ now: t0 }); await tick()
+  f.settle().fail(new Error('npm ci exited with code 1: ENOTEMPTY: directory not empty, rename')); await tick()
+  assert.match(f.hold({ now: t0 + 1000 }), /^installing dependencies in .*ENOTEMPTY.*; retrying at \d{4}-/)
+  assert.equal(f.calls.length, 1, 'waits for the backoff')
+  f.hold({ now: t0 + 2 * min }); await tick()
+  f.settle().fail(new Error('EPERM: operation not permitted, unlink')); await tick()
+  assert.match(f.hold({ now: t0 + 3 * min }), /^installing dependencies in .*EPERM.*; retrying at /)
+  assert.equal(f.calls.length, 2)
+  assert.match(f.hold({ now: t0 + 4 * 60 * min }), /^dependency install kept failing in .* for 3 hours: EPERM/)
+})

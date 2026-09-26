@@ -9,6 +9,7 @@ import { cardFiles, findCard, readBoard } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
+import { isTransient, nextRetry, retryHold, inBackoff } from './transient.mjs'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
 const lockPath = (tasksDir) => join(tasksDir, '.board-integration.lock')
@@ -246,12 +247,15 @@ const installCommand = folder => existsSync(join(folder, 'pnpm-lock.yaml')) ? 'p
 
 // One background install per folder, behind the 5 GB disk guard. Returns the hold
 // reason ("installing dependencies in ..." is an allowed wait), or null when no
-// lockfile says how to install. Two failures hold for Owner with the reason.
-export function startDependencyInstall({ folder, tasksDir, install = runInstall, free = freeGb, minFreeGb = 5 }) {
+// lockfile says how to install. Two failures hold for Owner with the reason; a transient
+// one (ENOTEMPTY/EPERM from a locked file, a timeout) backs off instead (I246, I248).
+export function startDependencyInstall({ folder, tasksDir, install = runInstall, free = freeGb, minFreeGb = 5, now = Date.now() }) {
   const key = norm(folder), state = installs.get(key) || { failures: 0 }
   const waiting = `installing dependencies in ${folder}${state.error ? ` (retry after: ${state.error})` : ''}`
   if (state.running) return waiting
   if (state.failures >= 2) return `dependency install failed twice in ${folder}: ${state.error}`
+  if (state.retry && !inBackoff(state.retry, now)) return `dependency install kept failing in ${folder} for 3 hours: ${state.error}`
+  if (state.retry?.nextAt > now) return retryHold(`installing dependencies in ${folder} (last try failed: ${state.error})`, state.retry.nextAt)
   // One install at a time, board-wide: parallel `npm ci` runs (about 1.5 GB each) on a
   // loaded machine crashed Injectbuddy I246's install three times in two minutes.
   if ([...installs.values()].some(other => other.running)) return `installing dependencies in ${folder} (queued behind another install)`
@@ -267,7 +271,10 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   installs.set(key, { ...state, running: true })
   Promise.resolve().then(() => install(folder, command, logPath)).then(
     () => installs.delete(key),
-    err => installs.set(key, { failures: state.failures + 1, error: String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300) }))
+    err => {
+      const error = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)
+      installs.set(key, isTransient(error) ? { failures: state.failures, error, retry: nextRetry(state.retry, Date.now()) } : { failures: state.failures + 1, error })
+    })
   return waiting
 }
 
@@ -282,22 +289,23 @@ function installedIn(folder, root) {
   return Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).every(name => existsSync(join(root, 'node_modules', name, 'package.json')))
 }
 
-export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5 }) {
+export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5, now = Date.now() }) {
   try {
+    const opts = { tasksDir, install, free, minFreeGb, now }
     const entry = readWorktrees(tasksDir)[card.id.toUpperCase()]
     const own = entry?.workspacePath && installs.get(norm(entry.workspacePath))
-    if (own?.running || own?.failures >= 2) return startDependencyInstall({ folder: entry.workspacePath, tasksDir })
+    if (own?.running || own?.failures >= 2 || own?.retry) return startDependencyInstall({ folder: entry.workspacePath, ...opts })
     const folder = resolve(gitSettings?.integrationPath || projectPath, card.workspace || '.')
     if (!existsSync(join(folder, 'package.json'))) return null
     const state = installs.get(norm(folder)) || { failures: 0 }
-    if (state.running || state.failures >= 2) return startDependencyInstall({ folder, tasksDir })
+    if (state.running || state.failures >= 2 || state.retry) return startDependencyInstall({ folder, ...opts })
     if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
     if (!state.failures && installedIn(folder, folder)) return null
     if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
     if (!state.failures && installedIn(folder, dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()))) return null
     const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
     if (!Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) return null
-    return startDependencyInstall({ folder, tasksDir, install, free, minFreeGb })
+    return startDependencyInstall({ folder, ...opts })
   } catch {
     return null // the spawn path reports the dependency problem as before
   }

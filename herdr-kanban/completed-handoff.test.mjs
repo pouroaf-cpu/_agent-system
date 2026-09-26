@@ -317,6 +317,35 @@ test('integration conflicts never loop: one Builder resolution, then Owner; a cl
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, false)
 })
 
+test('a timed-out integration or recorded check backs off without counting as a conflict; a real failure still returns', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'check-timeout-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  for (const id of ['T-1', 'T-2']) writeFileSync(join(tasksDir, 'completed', `${id}.md`), `# ${id} — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n`)
+  const entry = (id, state) => ({ cardId: id, state, worktreePath: root, workspacePath: root, baseCommit: 'b0' })
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry('T-1', 'building'), 'T-2': entry('T-2', 'rebased') }))
+  const t0 = Date.now(), min = 60000
+  let checks = 0, result = { ok: false, timedOut: true, output: 'npm test\ntimed out after 300s' }
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit: 'c1' }),
+    runIntegrationCheck: async () => { checks++; return result }, runCheck: async () => { checks++; return result },
+    reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const run = (id, now) => reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: [id], integrationCheck: 'npm test', io, now })
+  const [held] = await run('T-1', t0)
+  assert.equal(held.status, 'held'); assert.match(held.reason, /integration check npm test timed out.*; retrying at \d{4}-/)
+  const [recorded] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-2'], io, now: t0 })
+  assert.match(recorded.reason, /recorded check timed out.*; retrying at /)
+  const registry = () => JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))
+  assert.equal(registry()['T-1'].conflictFailures, undefined); assert.equal(registry()['T-2'].conflictFailures, undefined)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+  checks = 0
+  assert.equal((await run('T-1', t0 + 30000))[0].status, 'held'); assert.equal(checks, 0, 'no rerun before the retry time')
+  // A genuine failure (tsc error) still goes back to the Builder as today.
+  result = { ok: false, output: 'error TS2322: Type string is not assignable to type number' }
+  const [returned] = await run('T-1', t0 + 2 * min)
+  assert.deepEqual([returned.status, returned.to], ['returned', 'queue'])
+  assert.equal(registry()['T-1'].conflictFailures, 1)
+})
+
 test('a replacement Builder recorded with the previous pane session is still retired', async t => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-replaced-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))

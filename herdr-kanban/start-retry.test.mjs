@@ -81,12 +81,12 @@ test('a paste still unsubmitted after three Enters is a failed start, not a pres
 test('recordStartFailure: first failure waits for the retry, second in a row for the same role asks Owner', () => {
   const tasks = project()
   mkdirSync(join(tasks, 'review')); writeFileSync(join(tasks, 'review', 'T-1.md'), '# T-1 — task\n' + plan)
-  assert.equal(recordStartFailure(tasks, 'T-1', 'builder', 'timeout'), null)
+  assert.equal(recordStartFailure(tasks, 'T-1', 'builder', 'agent quit at start'), null)
   assert.equal(recordStartFailure(tasks, 'T-1', 'reviewer', 'busy'), null, 'another role starts its own count')
   const moved = recordStartFailure(tasks, 'T-1', 'reviewer', 'agent_pane_busy')
   assert.equal(moved.column, 'owner')
   assert.match(readFileSync(moved.path, 'utf8'), /Needs you: The Reviewer for T-1 failed to start twice in a row \(last error: agent_pane_busy\)[\s\S]*Should the board try again\? Drag it back to Review/)
-  assert.deepEqual(events(tasks, 'T-1').map(e => [e.role, e.count, e.reason]), [['builder', 1, 'timeout'], ['reviewer', 1, 'busy'], ['reviewer', 2, 'agent_pane_busy']])
+  assert.deepEqual(events(tasks, 'T-1').map(e => [e.role, e.count, e.reason]), [['builder', 1, 'agent quit at start'], ['reviewer', 1, 'busy'], ['reviewer', 2, 'agent_pane_busy']])
   operatorRetry(tasks, 'T-1', 'review')
   assert.equal(readWorkflow(tasks)['T-1'].startFailure, null, 'dragging it back restarts the count')
 })
@@ -130,7 +130,7 @@ test('Builder: a failed start returns the card to Queue without a hold, retries 
   const tasks = project()
   mkdirSync(join(tasks, 'queue')); writeFileSync(join(tasks, 'queue', 'T-1.md'), '# T-1 — task\n' + plan)
   let calls = 0
-  const spawn = async () => { calls++; throw Object.assign(new Error('agent start failed: timed out after 240000ms'), { startFailed: true }) }
+  const spawn = async () => { calls++; throw Object.assign(new Error('agent start failed: agent_pane_busy: agent target pane p is not an available shell'), { startFailed: true }) }
   const args = { project: 'BuilderRetry', projectPath: join(tasks, '..'), tasksDir: tasks, max: 2, agents: [], spawn }
   await autoSpawn(args)
   assert.equal(findCard(tasks, 'T-1').column, 'queue')
@@ -140,6 +140,26 @@ test('Builder: a failed start returns the card to Queue without a hold, retries 
   assert.equal(calls, 2)
   assert.equal(findCard(tasks, 'T-1').column, 'owner')
   assert.match(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), /The Builder for T-1 failed to start twice in a row[\s\S]*Drag it back to Queue/)
+})
+
+test('transient start failures (unsubmitted prompt, start timeout) back off with a visible retry time, Owner only after the budget (I157, TF50)', async () => {
+  const { checkStalls } = await import('./lib/stall-watchdog.mjs')
+  const tasks = project()
+  mkdirSync(join(tasks, 'queue')); writeFileSync(join(tasks, 'queue', 'T-1.md'), '# T-1 — task\n' + plan)
+  const t0 = Date.now(), min = 60000
+  assert.equal(recordStartFailure(tasks, 'T-1', 'builder', 'Builder prompt was never submitted', t0), null)
+  assert.equal(recordStartFailure(tasks, 'T-1', 'builder', 'agent start failed: timed out after 240000ms', t0 + 2 * min), null)
+  assert.equal(findCard(tasks, 'T-1').column, 'queue')
+  assert.equal(readWorkflow(tasks)['T-1'].startFailure.nextAt, t0 + 7 * min, 'second backoff step is 5 minutes')
+  let calls = 0
+  await autoSpawn({ project: 'Backoff', projectPath: join(tasks, '..'), tasksDir: tasks, max: 2, agents: [], spawn: async () => { calls++; return {} }, now: t0 + 3 * min })
+  assert.equal(calls, 0, 'no start before the retry time')
+  assert.equal(findCard(tasks, 'T-1').column, 'queue')
+  assert.match(holdsFor('Backoff')['T-1'], /^Builder start failed \(agent start failed: timed out after 240000ms\); retrying at \d{4}-/)
+  assert.deepEqual(checkStalls({ tasksDir: tasks, holds: holdsFor('Backoff'), minutes: 1, now: t0 + 30 * min }), [], 'a backoff is a wait, not a stall')
+  const moved = recordStartFailure(tasks, 'T-1', 'builder', 'Builder prompt was never submitted', t0 + 3 * 60 * min)
+  assert.equal(moved.column, 'owner')
+  assert.match(readFileSync(moved.path, 'utf8'), /Needs you: The Builder for T-1 kept failing to start for 3 hours/)
 })
 
 test('Reviewer: a failed start closes the pane, releases the claim and retries; the second failure asks Owner', async () => {

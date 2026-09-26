@@ -15,7 +15,8 @@ import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
-import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure } from './spawn.mjs'
+import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
+import { isRetryHold } from './transient.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
@@ -182,6 +183,8 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
   }
   if (cycleFor(card, board)) return 'dependency cycle detected'
   if (coolingDown(tasksDir, card.id, now)) return 'cooling down after failed spawn'
+  const backoff = tasksDir && startRetryHold(readWorkflow(tasksDir)[card.id], 'builder', now)
+  if (backoff) return backoff
   const unmet = unmetBlockers(card, board, tasksDir ? readWorktrees(tasksDir) : {})
   if (unmet.length) return `waiting for unique integrated or archived prerequisite ${unmet.join(', ')}`
   const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath })
@@ -294,7 +297,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
       const operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
-        || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings })
+        || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings, now })
         || (slots <= 0 ? 'slots full' : null)
         || dependencyInstallHold({ card: freshCard, projectPath, tasksDir, gitSettings })
       if (hold) {
@@ -316,7 +319,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         const allowedFileWait = !!fileHolder && fileHolder !== freshCard.id && liveCards(fresh).some(c => c.id === fileHolder)
         const transient = ['slots full', 'cooling down after failed spawn'].includes(hold)
         const workflow = readWorkflow(tasksDir)[freshCard.id] || {}
-        if (allowedDependencyWait || allowedFileWait || hold.startsWith('installing dependencies in ')) {
+        if (allowedDependencyWait || allowedFileWait || hold.startsWith('installing dependencies in ') || isRetryHold(hold)) {
           held[freshCard.id] = hold
           delete workflow.queueHoldSince
           updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
@@ -400,7 +403,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         unbind(tasksDir, moved.id)   // the provisional claim dies with the pane
         moveCard(tasksDir, moved.id, 'queue')
         if (!err.startFailed) held[moved.id] = `Operational recovery held: ${err.message}`
-        else if (!recordStartFailure(tasksDir, moved.id, 'builder', err.message)) held[moved.id] = `Builder start failed; retrying once with a fresh tab: ${err.message}`
+        else if (!recordStartFailure(tasksDir, moved.id, 'builder', err.message, now)) held[moved.id] = startRetryHold(readWorkflow(tasksDir)[moved.id], 'builder', now) || `Builder start failed; retrying once with a fresh tab: ${err.message}`
         onChange?.()
         continue
       }
@@ -686,7 +689,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     assignedCards = cards
     assertCardRunSelection(project, cards.map(c => c.id), 'reviewer')
     for (const card of cards) {
-      const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer')
+      const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer') || startRetryHold(readWorkflow(tasksDir)[card.id], 'reviewer')
       if (limit) throw Object.assign(new Error(limit), { busy: true })
       const held = operationalHold(tasksDir, card, projectPath)
       if (held) throw Object.assign(new Error(`Review recovery held: ${held}`), { busy: true })

@@ -17,6 +17,7 @@ import { dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { assertGuardActive, assertRestrictedRuntimeVerified } from './builder-guard.mjs'
 import { activityLog } from './activity.mjs'
+import { isTransient, nextRetry, retryHold } from './transient.mjs'
 
 // A prompt that never leaves the input box is the failure this guards against, so
 // the check is "did the agent start working", not "did the CLI return 0". One
@@ -167,17 +168,28 @@ export async function resumeDeliveries(session) {
 // second failure in a row for the same card and role asks the operator. Returns the
 // card moved to Owner, or null when the retry is still to come.
 export const startFailed = (err) => Object.assign(err, { startFailed: !err.paused && !err.preservePane && !cardRunContext() })
-export function recordStartFailure(tasksDir, cardId, role, reason) {
+// A transient failure (start timeout or unsubmitted prompt under load, I157/TF50) does not
+// count: it backs off (1, 5, 15, 60 min) and asks Owner only once the 3-hour budget is spent.
+export function recordStartFailure(tasksDir, cardId, role, reason, now = Date.now()) {
   const card = findCard(tasksDir, cardId)
   const prior = readWorkflow(tasksDir)[card.id]?.startFailure
-  const count = prior?.role === role ? prior.count + 1 : 1
-  appendHistory(tasksDir, card.id, { event: 'start-failed', stage: card.column, role, reason, count })
-  updateWorkflow(tasksDir, card.id, { startFailure: { role, count, reason, at: new Date().toISOString() } })
-  if (count < 2 || ['pou', 'owner'].includes(card.column)) return null
+  const same = prior?.role === role
+  const retry = isTransient(reason) && nextRetry(same && prior.since ? prior : null, now)
+  const count = retry ? (same ? prior.count : 0) : same ? prior.count + 1 : 1
+  appendHistory(tasksDir, card.id, { event: 'start-failed', stage: card.column, role, reason, count, ...(retry && { nextAt: new Date(retry.nextAt).toISOString() }) })
+  updateWorkflow(tasksDir, card.id, { startFailure: { role, count, reason, at: new Date(now).toISOString(), ...(retry && { since: retry.since, tries: retry.tries, nextAt: retry.nextAt }) } })
+  if ((retry ? !retry.exhausted : count < 2) || ['pou', 'owner'].includes(card.column)) return null
   const lane = columnByKey(card.column).label
   const moved = moveCard(tasksDir, card.id, 'owner')
-  writeCurrentFeedback(tasksDir, moved, 'Needs you', `The ${role[0].toUpperCase() + role.slice(1)} for ${card.id} failed to start twice in a row (last error: ${String(reason).replace(/\s+/g, ' ').slice(0, 300)}). All work is preserved. Should the board try again? Drag it back to ${lane} to retry.`)
+  const who = `The ${role[0].toUpperCase() + role.slice(1)} for ${card.id}`, last = String(reason).replace(/\s+/g, ' ').slice(0, 300)
+  writeCurrentFeedback(tasksDir, moved, 'Needs you', `${retry ? `${who} kept failing to start for 3 hours (${retry.tries} tries; last error: ${last})` : `${who} failed to start twice in a row (last error: ${last})`}. All work is preserved. Should the board try again? Drag it back to ${lane} to retry.`)
   return moved
+}
+// The visible hold while a role's start backs off, or null when it may start now.
+export function startRetryHold(saved, role, now = Date.now()) {
+  const failure = saved?.startFailure
+  if (failure?.role !== role || !(failure.nextAt > now)) return null
+  return retryHold(`${role[0].toUpperCase() + role.slice(1)} start failed (${String(failure.reason).replace(/\s+/g, ' ').slice(0, 200)})`, failure.nextAt)
 }
 
 // Claude Code can take minutes to reach an interactive prompt on a machine with

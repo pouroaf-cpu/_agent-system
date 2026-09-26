@@ -18,6 +18,7 @@ import { readWorktrees } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { CARD_ID } from './ids.mjs'
+import { isRetryHold, inBackoff } from './transient.mjs'
 
 const oneLine = (s, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max)
 const ms = at => Date.parse(at || '') || 0
@@ -79,6 +80,8 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // card. Only the stuck prerequisite is escalated, never the cards queued behind it.
   const allowedWait = (card) => {
     if (paused) return true // low-disk pause: nothing may start, so nothing is stuck
+    // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
+    if (isRetryHold(holds[card.id]) || inBackoff(workflow[card.id]?.startFailure, now)) return true
     if (card.column === 'queue') {
       if (builderSlotsFree <= 0) return true
       // Before the first scheduler pass after a restart the file-lock holds are unknown
