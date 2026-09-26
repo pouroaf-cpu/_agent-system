@@ -10,7 +10,7 @@ const dir = import.meta.dirname
 const files = process.argv.slice(2).length ? process.argv.slice(2)
   : readdirSync(dir).filter(f => f === 'test.mjs' || f.endsWith('.test.mjs')).sort()
 const args = ['--test', '--test-isolation=none', '--experimental-test-module-mocks', '--test-timeout=60000']
-const SLOW = { 'worktrees.test.mjs': 180000, 'test.mjs': 120000 } // test.mjs: ~35s alone, over 60s while agents build
+const SLOW = { 'worktrees.test.mjs': 180000, 'test.mjs': 120000, 'watchdog-herdr.test.mjs': 150000 } // test.mjs: ~35s alone, over 60s while agents build
 const limit = file => SLOW[file] ?? 60000
 const run = file => new Promise(done => execFile(process.execPath, [...args, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20 },
   (err, stdout, stderr) => done({ file, err, out: `${stdout}${stderr}` })))
