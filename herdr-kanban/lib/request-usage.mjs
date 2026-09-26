@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 
-const CODEX_HOME = process.env.CODEX_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.codex')
+const HOME = process.env.USERPROFILE || process.env.HOME || ''
+const CODEX_HOME = process.env.CODEX_HOME || join(HOME, '.codex')
+const CLAUDE_PROJECTS = join(process.env.CLAUDE_CONFIG_DIR || join(HOME, '.claude'), 'projects')
 const ZERO = { input: 0, cachedInput: 0, uncachedInput: 0, output: 0, reasoningOutput: 0, total: 0 }
 
 const file = (tasksDir) => join(tasksDir, '.request-usage.json')
@@ -29,21 +31,30 @@ export function agentSessionId(agentOrSession) {
   if (!agentOrSession) return null
   if (typeof agentOrSession === 'string') return agentOrSession
   const s = agentOrSession.agent_session || agentOrSession.session || agentOrSession
-  return s?.agent === 'codex' || s?.source === 'herdr:codex' ? s.value || null : null
+  return ['codex', 'claude'].includes(s?.agent) || ['herdr:codex', 'herdr:claude'].includes(s?.source) ? s.value || null : null
 }
 
+// `root` (tests) holds both layouts; live, Claude and Codex keep their own homes.
 const sessionPaths = new Map()
-// Every poll asks for every unfinished run. A miss (a Claude session id, or a session killed
-// before it wrote a file) walked all 1,454 Codex session files each time and pinned the CPU,
-// so the watchdog saw the board as down (2026-09-26). Misses are remembered for a minute.
+// Every poll asks for every unfinished run. A miss (a session killed before it wrote a file)
+// walked all 1,454 Codex session files each time and pinned the CPU, so the watchdog saw the
+// board as down (2026-09-26). Misses are remembered for a minute.
 const sessionMisses = new Map() // cacheKey -> checkedAt
-function sessionFile(sessionId, root = CODEX_HOME) {
+function sessionFile(sessionId, root) {
   const cacheKey = `${root}:${sessionId}`
   if (sessionPaths.has(cacheKey) && existsSync(sessionPaths.get(cacheKey))) return sessionPaths.get(cacheKey)
-  if (!sessionId || !existsSync(root)) return null
+  if (!sessionId) return null
   if (Date.now() - (sessionMisses.get(cacheKey) ?? -Infinity) < 60000) return null
   sessionMisses.set(cacheKey, Date.now())
-  const stack = [existsSync(join(root, 'sessions')) ? join(root, 'sessions') : root]
+  // Claude: <projects>/<slug of the working folder>/<sessionId>.jsonl
+  const claude = root || CLAUDE_PROJECTS
+  if (existsSync(claude)) for (const e of readdirSync(claude, { withFileTypes: true })) {
+    const p = join(claude, e.name, `${sessionId}.jsonl`)
+    if (e.isDirectory() && existsSync(p)) { sessionPaths.set(cacheKey, p); sessionMisses.delete(cacheKey); return p }
+  }
+  const codex = root || CODEX_HOME
+  if (!existsSync(codex)) return null
+  const stack = [existsSync(join(codex, 'sessions')) ? join(codex, 'sessions') : codex]
   while (stack.length) {
     const dir = stack.pop()
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -64,32 +75,45 @@ const countersFrom = (u = {}) => ({
   total: Number(u.total_tokens) || 0,
 })
 
-// Parsed once per file version: finished and abandoned Codex sessions reach several MB and
-// were re-parsed on every poll.
-const parsedSessions = new Map() // path -> { key, rows }
-function sessionEvents(sessionId, { root = CODEX_HOME } = {}) {
-  const path = sessionFile(sessionId, root)
-  if (!path) return []
-  let key
-  try { const s = statSync(path); key = `${s.size}:${s.mtimeMs}` } catch { return [] }
-  const hit = parsedSessions.get(path)
-  if (hit?.key === key) return hit.rows
-  const rows = parseSession(path)
-  parsedSessions.set(path, { key, rows })
-  return rows
+// Claude logs per-message usage; cache reads and writes are input on top of input_tokens.
+const claudeCounters = (u) => {
+  const cachedInput = Number(u.cache_read_input_tokens) || 0
+  const input = (Number(u.input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0) + cachedInput
+  const output = Number(u.output_tokens) || 0
+  return { input, cachedInput, uncachedInput: input - cachedInput, output, reasoningOutput: Number(u.output_tokens_details?.thinking_tokens) || 0, total: input + output }
 }
 
-function parseSession(path) {
+// Every poll reads every open run's session; a file is parsed again only once it changes.
+// ponytail: never evicted, one small entry per session file the board process has read.
+const parsed = new Map()
+function sessionEvents(sessionId, { root } = {}) {
+  const path = sessionFile(sessionId, root)
+  if (!path) return []
+  const { size, mtimeMs } = statSync(path)
+  const hit = parsed.get(path)
+  if (hit?.size === size && hit.mtimeMs === mtimeMs) return hit.rows
   const rows = []
   let sequence = 0
+  let firstAt = null
+  let claude = null // { messages: id -> counters, sum }; a streamed message repeats its id with growing usage
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
     if (!line.trim()) continue
     try {
       const row = JSON.parse(line)
       const ordinal = Number.isFinite(Number(row.ordinal)) ? Number(row.ordinal) : sequence
       sequence++
+      firstAt ??= row.timestamp ?? null
       const type = row.payload?.type || row.type
-      if (type === 'token_count') {
+      if (row.type === 'assistant' && row.message?.usage) {
+        claude ??= { messages: new Map(), sum: { ...ZERO } }
+        const id = row.message.id ?? row.uuid
+        const next = claudeCounters(row.message.usage), prev = claude.messages.get(id)
+        for (const k of Object.keys(ZERO)) claude.sum[k] += next[k] - (prev?.[k] ?? 0)
+        claude.messages.set(id, next)
+        rows.push({ kind: 'token_count', file: path, timestamp: row.timestamp, ordinal, counters: { ...claude.sum } })
+      } else if (row.type === 'user' && !row.toolUseResult && !row.isMeta) {
+        rows.push({ kind: 'user', timestamp: row.timestamp, ordinal })
+      } else if (type === 'token_count') {
         const usage = row.payload?.info?.total_token_usage
         if (usage) rows.push({ kind: 'token_count', file: path, timestamp: row.timestamp, ordinal, counters: countersFrom(usage) })
       } else if (row.type === 'session_meta') {
@@ -103,23 +127,27 @@ function parseSession(path) {
       }
     } catch {}
   }
-  return rows.sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0))
+  // Ordinal -1 keeps it first: callers test events[0]?.claude.
+  if (claude) rows.push({ kind: 'session_meta', claude: true, file: path, timestamp: firstAt, ordinal: -1 })
+  rows.sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0))
+  parsed.set(path, { size, mtimeMs, rows })
+  return rows
 }
 
-export function tokenSnapshots(sessionId, { root = CODEX_HOME } = {}) {
+export function tokenSnapshots(sessionId, { root } = {}) {
   return sessionEvents(sessionId, { root }).filter((r) => r.kind === 'token_count')
 }
 
-export function latestTokenSnapshot(sessionId, { root = CODEX_HOME, beforeOrdinal = Infinity } = {}) {
+export function latestTokenSnapshot(sessionId, { root, beforeOrdinal = Infinity } = {}) {
   const rows = tokenSnapshots(sessionId, { root }).filter((r) => (r.ordinal ?? 0) <= beforeOrdinal)
   return rows.at(-1) ?? { file: sessionFile(sessionId, root), timestamp: null, ordinal: null, counters: null, missing: true }
 }
 
-function latestEventOrdinal(sessionId, { root = CODEX_HOME } = {}) {
+function latestEventOrdinal(sessionId, { root } = {}) {
   return sessionEvents(sessionId, { root }).at(-1)?.ordinal ?? null
 }
 
-function completionSnapshot(sessionId, startOrdinal, { root = CODEX_HOME } = {}) {
+function completionSnapshot(sessionId, startOrdinal, { root } = {}) {
   const events = sessionEvents(sessionId, { root })
   const boundary = events.find((r) => r.kind === 'task_complete' && (r.ordinal ?? 0) > (startOrdinal ?? -1))
   if (!boundary) return null
@@ -232,6 +260,13 @@ function closeRun(run, finish, status, at) {
 function tryCompleteRun(run, { root, now = new Date() } = {}) {
   const finishSession = run.sessionId
   if (!finishSession) return closeRun(run, { counters: null, missing: true }, run.status || 'unknown_session', now.toISOString())
+  // Claude logs no end-of-task marker: the board's finish is the end, and the session
+  // may only have been learned now.
+  const events = sessionEvents(finishSession, { root })
+  if (events[0]?.claude) {
+    if (!run.start?.counters || run.start.missing) run.start = startBefore(run.start.at, events)
+    return closeRun(run, events.filter((e) => e.kind === 'token_count').at(-1), 'complete', now.toISOString())
+  }
   const finish = completionSnapshot(finishSession, run.start?.cursorOrdinal ?? run.start?.ordinal, { root })
   if (!finish) {
     run.status = 'pending_final'
@@ -313,6 +348,13 @@ export function usageSummary(tasksDir, { root } = {}) {
   return Object.values(out).sort((a, b) => a.requestId.localeCompare(b.requestId))
 }
 
+// The session's usage up to the run's start is its baseline; none logged by then is zero.
+function startBefore(at, events) {
+  const before = events.filter(e => Date.parse(e.timestamp) <= Date.parse(at))
+  const baseline = before.filter(e => e.kind === 'token_count').at(-1)
+  return { at, ...(baseline || { counters: { ...ZERO }, ordinal: -1 }), cursorOrdinal: before.at(-1)?.ordinal ?? -1, recovered: true }
+}
+
 // Identity may arrive after boot. Recover the baseline at assignment time, never at recovery time.
 export function reconcileUsage(tasksDir, agents, { root } = {}) {
   const all = readUsage(tasksDir)
@@ -331,13 +373,17 @@ export function reconcileUsage(tasksDir, agents, { root } = {}) {
     const baseline = before.filter(e => e.kind === 'token_count').at(-1)
     const meta = events.find(e => e.kind === 'session_meta')
     const firstUser = events.find(e => e.kind === 'user')
-    // A positively identified fresh session has a zero pre-assignment baseline.
-    const fresh = meta && firstUser && Date.parse(firstUser.timestamp) >= at && Date.parse(meta.timestamp) <= at + 120000
+    // A Claude run is measured when the board finishes it, and a finished run must not
+    // take the session of a later agent that reuses its name.
+    if (meta?.claude && run.finish) continue
+    // A positively identified fresh session has a zero pre-assignment baseline. A Claude
+    // transcript is one session, so usage before the run's start is an earlier run's.
+    const fresh = meta?.claude || (meta && firstUser && Date.parse(firstUser.timestamp) >= at && Date.parse(meta.timestamp) <= at + 120000)
     if (run.sessionId !== id) { run.sessionId = id; changed = true }
     if (!run.model) { run.model = events.find(e => e.kind === 'context' && e.model)?.model || null; changed = true }
     if (!run.start.counters || run.start.missing) {
       if (baseline || fresh) {
-        run.start = { at: run.start.at, ...(baseline || { counters: { ...ZERO }, ordinal: -1 }), cursorOrdinal: before.at(-1)?.ordinal ?? -1, recovered: true }
+        run.start = startBefore(run.start.at, events)
         delete run.finish; run.status = 'running'; changed = true
       } else continue
     }

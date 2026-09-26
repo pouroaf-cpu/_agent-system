@@ -4,6 +4,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
 import { agentRole } from './ids.mjs'
@@ -11,6 +12,7 @@ import { agentRole } from './ids.mjs'
 const run = promisify(execFile)
 
 const HERDR = process.env.HERDR_BIN_PATH || 'herdr'
+const CLAUDE_AGENT_SETTINGS = fileURLToPath(new URL('../claude-agent-settings.json', import.meta.url))
 
 const CONFIG = (() => {
   try { return JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8')) } catch { return {} }
@@ -379,6 +381,10 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     args.push(...guardArgs)
   } else {
     args.push('--dangerously-skip-permissions')
+    // HERDR started from a Claude session passes on its CLAUDE_CODE_CHILD_SESSION
+    // marker, which turns off transcript saving, and the transcript is where the
+    // board reads a Claude agent's token usage.
+    args.push('--settings', CLAUDE_AGENT_SETTINGS)
     if (model) args.push('--model', model)
   }
   return args
