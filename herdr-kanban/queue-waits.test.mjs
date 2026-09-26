@@ -145,3 +145,31 @@ test('an empty or partial shared node_modules is reinstalled, not treated as ins
   const hold = dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: f.settings, install: folder => { started = folder; return new Promise(() => {}) }, free: () => 20 })
   assert.ok(hold.startsWith(`installing dependencies in ${site}`), hold) // may queue behind another test's install
 })
+
+// Injectbuddy 2026-09-26: the integration checkout's node_modules was half-installed while the
+// main checkout's was complete. The hold said "may start", but the spawn falls back to the main
+// checkout only when integration has no node_modules, so each card failed at start with
+// "dependency setup needed". They must agree: one integration install holds the queue.
+test('a partial integration node_modules holds the queue once even when the main checkout is installed (throughput audit F3)', async t => {
+  const f = repo(t)
+  writeFileSync(join(f.integration, 'package.json'), '{"dependencies":{"dep":"1","other":"2"}}')
+  writeFileSync(join(f.integration, 'package-lock.json'), '{"v":1}')
+  writeFileSync(join(f.integration, '.gitignore'), 'node_modules/\n')
+  git(f.integration, 'add', '.'); git(f.integration, 'commit', '-m', 'deps')
+  for (const name of ['dep', 'other']) {
+    mkdirSync(join(f.integration, 'node_modules', name), { recursive: true })
+    writeFileSync(join(f.integration, 'node_modules', name, 'package.json'), '{}')
+  }
+  const integration = join(f.root, 'integration-wt')
+  git(f.integration, 'worktree', 'add', '-q', '-b', 'integration', integration)
+  mkdirSync(join(integration, 'node_modules', 'dep'), { recursive: true }) // "other" is missing
+  writeFileSync(join(integration, 'node_modules', 'dep', 'package.json'), '{}')
+  const settings = { integrationPath: integration, worktreesRoot: join(f.root, 'cards') }
+  const path = join(f.tasks, 'queue', 'T-41-card.md')
+  writeFileSync(path, cardText('T-41', '.', ['site/app.js']))
+  const card = parseCard(path, 'queue')
+  const hold = dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: settings, install: () => new Promise(() => {}), free: () => 20 })
+  const spawnError = (() => { try { prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: settings }) } catch (e) { return e.message } })()
+  assert.match(spawnError || '', /dependency setup needed/, 'the spawn cannot use the partial install')
+  assert.ok(hold?.startsWith(`installing dependencies in ${integration}`), `the queue holds for one integration install, got: ${hold}`)
+})

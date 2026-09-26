@@ -347,7 +347,10 @@ export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings
     if (entry?.workspacePath && existsSync(join(entry.workspacePath, 'node_modules'))) return null
     if (!state.failures && installedIn(folder, folder)) return null
     if (!gitRoot(folder)) return null // non-Git projects keep their own workspace
-    if (!state.failures && installedIn(folder, dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()))) return null
+    // The main checkout counts only when integration has no node_modules, exactly as in
+    // prepareDependencies; otherwise a partial integration install passed here and failed
+    // every card's spawn instead of holding the queue once (throughput audit 2026-09-26 F3).
+    if (!state.failures && !existsSync(join(folder, 'node_modules')) && installedIn(folder, dirname(git(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim()))) return null
     const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
     if (!Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).length) return null
     return startDependencyInstall({ folder, ...opts })
