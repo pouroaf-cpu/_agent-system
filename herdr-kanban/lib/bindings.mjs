@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 const file = (tasksDir) => join(tasksDir, '.board.json')
 const lockFile = (tasksDir) => join(tasksDir, '.board.lock')
@@ -39,10 +40,22 @@ function alive(pid) {
   try { process.kill(Number(pid), 0); return true } catch { return false }
 }
 
+// Windows reuses PIDs quickly (after a crash or a forced restart), so a live PID does not
+// prove a lock is still held. Its owner started before writing the lock; a process that
+// reused the PID started after. Unreadable start time (a system process) is not an owner;
+// a failed query is (never break a lock on doubt). Only called for locks past their bound.
+export function lockOwnerReplaced(pid, writtenAt) {
+  if (process.platform !== 'win32') return false
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', `$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue; if (!$p) { 'gone' } elseif ($p.StartTime) { ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } else { 'unreadable' }`], { encoding: 'utf8', timeout: 20000, windowsHide: true })
+  const out = (r.stdout || '').trim()
+  return out === 'gone' || out === 'unreadable' || Number(out) > writtenAt
+}
+
 function acquire(tasksDir) {
   mkdirSync(tasksDir, { recursive: true })
   const path = lockFile(tasksDir)
   const deadline = Date.now() + 5000
+  let checkedOwner = false
   while (Date.now() < deadline) {
     try {
       const fd = openSync(path, 'wx')
@@ -53,7 +66,15 @@ function acquire(tasksDir) {
       if (err.code !== 'EEXIST') throw err
       try {
         const pid = readFileSync(path, 'utf8').trim()
-        if ((!pid || !alive(pid)) && Date.now() - statSync(path).mtimeMs > 1000) {
+        const { mtimeMs } = statSync(path)
+        let stale = (!pid || !alive(pid)) && Date.now() - mtimeMs > 1000
+        // Board transactions take milliseconds; past 2 minutes, check the PID is still its owner.
+        if (!stale && !checkedOwner && Date.now() - mtimeMs > 120000) {
+          checkedOwner = true
+          // The check takes a moment: only remove the same lock, not one another process just took.
+          stale = lockOwnerReplaced(pid, mtimeMs) && statSync(path).mtimeMs === mtimeMs && readFileSync(path, 'utf8').trim() === pid
+        }
+        if (stale) {
           unlinkSync(path)
           continue
         }

@@ -1,8 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { withBoardLock } from './lib/bindings.mjs'
+import { reconcileCompletedWorktrees } from './lib/worktrees.mjs'
+import { syncReviewClaims } from './lib/review-claims.mjs'
 import { routeBuilderNoHandoff, recoverBuilderNoHandoff } from './lib/autospawn.mjs'
 import { workerPrompt, issuesSweeperPrompt } from './lib/prompt.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
@@ -174,4 +178,38 @@ test('a Builder whose prompt never landed gets a fresh start, not a nudge', asyn
   assert.deepEqual(closed, ['pane-6'])
   assert.equal(saved[0].status, 'failed')
   assert.equal(readWorkflow(tasks)['T-6'].startFailure.count, 1)
+})
+
+// Windows reuses PIDs quickly after a crash or forced restart. A lock whose PID now belongs to
+// a process that started after the lock was written is reclaimed past its bound (audit 2026-09-26 #11).
+test('locks whose PID was reused by a later process are reclaimed past their bound; a live owner keeps its lock', { skip: process.platform !== 'win32' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-reuse-'))
+  const tasks = join(root, 'TASKS'); mkdirSync(tasks)
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'])
+  t.after(() => { other.kill(); rmSync(root, { recursive: true, force: true }) })
+  await new Promise(done => other.once('spawn', done))
+  const minutesAgo = m => new Date(Date.now() - m * 60000)
+
+  const board = join(tasks, '.board.lock')
+  writeFileSync(board, String(other.pid)); utimesSync(board, minutesAgo(10), minutesAgo(10))
+  assert.equal(withBoardLock(tasks, () => 'ran'), 'ran')
+
+  const integration = join(tasks, '.board-integration.lock')
+  writeFileSync(integration, JSON.stringify({ pid: other.pid, at: minutesAgo(20).toISOString() }))
+  reconcileCompletedWorktrees({ tasksDir: tasks })
+  assert.equal(existsSync(integration), true, 'inside its 30-minute bound the lock is kept')
+  writeFileSync(integration, JSON.stringify({ pid: other.pid, at: minutesAgo(40).toISOString() }))
+  reconcileCompletedWorktrees({ tasksDir: tasks })
+  assert.equal(existsSync(integration), false)
+
+  const ledger = join(root, '.review-claims.json.lock')
+  writeFileSync(ledger, JSON.stringify({ pid: other.pid, createdAt: minutesAgo(10).getTime() })); utimesSync(ledger, minutesAgo(10), minutesAgo(10))
+  assert.deepEqual(syncReviewClaims(root, [{ project: 'one', tasksDir: tasks, known: true, agents: [] }]), [])
+
+  // 40 minutes on, but its PID's process started before it wrote the lock: still the owner.
+  writeFileSync(integration, JSON.stringify({ pid: other.pid, at: new Date().toISOString() }))
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 40 * 60000 })
+  reconcileCompletedWorktrees({ tasksDir: tasks })
+  t.mock.timers.reset()
+  assert.equal(existsSync(integration), true, 'a live owner keeps its lock')
 })

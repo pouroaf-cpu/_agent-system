@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
+import { lockOwnerReplaced } from './bindings.mjs'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
 const lockPath = (tasksDir) => join(tasksDir, '.board-integration.lock')
@@ -590,8 +591,11 @@ function acquireLock(tasksDir) {
   } catch (err) {
     if (err.code !== 'EEXIST') throw err
     try {
-      const owner = JSON.parse(readFileSync(path, 'utf8'))
-      if (processAlive(owner.pid)) return null
+      const bytes = readFileSync(path, 'utf8')
+      const owner = JSON.parse(bytes)
+      // Past 30 minutes, a live PID must still be the process that wrote the lock (PID reuse).
+      const writtenAt = Date.parse(owner.at)
+      if (processAlive(owner.pid) && !(Date.now() - writtenAt > 30 * 60000 && lockOwnerReplaced(owner.pid, writtenAt) && readFileSync(path, 'utf8') === bytes)) return null
       unlinkSync(path)
       return acquireLock(tasksDir)
     } catch {

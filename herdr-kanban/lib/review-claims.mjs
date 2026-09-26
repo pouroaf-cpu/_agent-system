@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { prepareWorktreeEnvironment } from './worktrees.mjs'
+import { lockOwnerReplaced } from './bindings.mjs'
 import { readBoard, moveCard, currentReviewDecision, setAutoReview, findCard } from './cards.mjs'
 import { requestPlannerCorrection } from './card-planner.mjs'
 import { recordOperationalFailure, evidenceFingerprint } from './workflow-state.mjs'
@@ -33,7 +34,9 @@ function ledger(root, update) {
   if (existsSync(lock)) {
     const bytes = readFileSync(lock, 'utf8')
     let owner; try { owner = JSON.parse(bytes) } catch {}
-    if (Date.now() - statSync(lock).mtimeMs > 60000 && (!owner?.pid || !alive(owner.pid)) && readFileSync(lock, 'utf8') === bytes) unlinkSync(lock)
+    const { mtimeMs } = statSync(lock)
+    // A live PID past the bound must still be the process that wrote the lock (PID reuse).
+    if (Date.now() - mtimeMs > 60000 && (!owner?.pid || !alive(owner.pid) || lockOwnerReplaced(owner.pid, mtimeMs)) && readFileSync(lock, 'utf8') === bytes) unlinkSync(lock)
   }
   try { fd = openSync(lock, 'wx') } catch { throw Object.assign(new Error('reviewer ledger locked; retry after current transaction'), { busy: true }) }
   writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }))
