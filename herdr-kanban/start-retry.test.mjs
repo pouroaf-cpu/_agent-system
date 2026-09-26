@@ -317,3 +317,37 @@ test('Builder: a usage-limit screen sends the card back to Queue to wait instead
   assert.equal(err.busy, true); assert.match(err.message, /Codex usage limit/)
   assert.deepEqual(herdr.closed, []); assert.equal(findCard(tasks, 'T-2').column, 'review')
 })
+
+// Audit 2026-09-26 finding 5: every board role runs on Claude, so a model's own cap (an
+// Opus weekly limit) must not stop the Sonnet and Haiku agents; the shared 5-hour
+// session limit still stops them all.
+test('a model cap blocks only that model; the shared 5-hour limit blocks every Claude agent', async () => {
+  const { quotaHold, quotaKey, activeQuota } = await import('./lib/quota.mjs')
+  const { routeBuilderNoHandoff } = await import('./lib/autospawn.mjs')
+  const tasks = project(), boardRoot = join(tasks, '..')
+  const card = createCard(tasks, { title: 'Proof', brief: 'A specific approved outcome' })
+  const now = Date.parse('2026-09-26T04:30:00Z'), until = new Date(2026, 9, 3, 10).getTime()
+  let agents = [], panes = 0, screen = ''
+  const io = {
+    agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+    tabCreate: async () => ({ root_pane: { pane_id: `o-${++panes}` } }),
+    agentStart: async ({ name, paneId }) => { agents = [{ name, pane_id: paneId, agent_status: 'idle' }] },
+    deliver: async () => {}, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    paneClose: async () => { agents = [] }, paneRead: async () => screen,
+  }
+  const args = { project: 'OpusCap', projectPath: tasks, tasksDir: tasks, boardRoot, model: 'claude-opus-5-5', engine: 'claude', io, handoffGraceMs: 10 }
+  await runCardPlanner({ ...args, now })
+  screen = `${CLAUDE_RULE}\n❯ \n${CLAUDE_RULE}\n  Opus weekly limit reached ∙ resets Oct 3, 10am`
+  await runCardPlanner({ ...args, now: now + 1000 })
+  await runCardPlanner({ ...args, now: now + 2000 })
+  assert.equal(findCard(tasks, card.id).column, 'planning')
+  assert.equal(quotaHold(boardRoot, quotaKey('claude', 'claude-opus-5-5'), now + 3000), `Claude claude-opus-5-5 usage limit; retrying at ${new Date(until).toISOString()}`)
+  assert.equal(quotaHold(boardRoot, quotaKey('claude', 'claude-sonnet-5'), now + 3000), null, 'a Sonnet Builder still starts')
+  const claudeBlocks = () => Object.keys(activeQuota(boardRoot, now + 3000)).filter(k => k.startsWith('claude')).sort() // earlier tests share the file
+  assert.deepEqual(claudeBlocks(), ['claude:claude-opus-5-5'], 'the board payload names the blocked model')
+
+  mkdirSync(join(tasks, 'working')); writeFileSync(join(tasks, 'working', 'T-7.md'), '# T-7 — task\n' + plan)
+  routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-7', reason: 'Session b1 finished with status=done without a valid Builder handoff from Working', evidence: '5-hour limit reached ∙ resets 5pm', workspace: boardRoot, boardRoot, engine: 'claude', model: 'claude-sonnet-5', now })
+  assert.match(quotaHold(boardRoot, quotaKey('claude', 'claude-haiku-4-5'), now + 3000), /^Claude usage limit; retrying at /, 'the session limit stops every Claude agent')
+  assert.deepEqual(claudeBlocks(), ['claude', 'claude:claude-opus-5-5'])
+})

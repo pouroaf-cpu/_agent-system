@@ -9,6 +9,8 @@ import { retryHold } from './transient.mjs'
 
 const HOUR = 3600000
 const LIMIT = /hit your (?:usage )?limit|usage limit reached|limit will reset|limit reached\W+resets/i
+// A model's own cap ("Opus weekly limit reached"), unlike the shared 5-hour session limit.
+const MODEL_CAP = /\b(?:opus|sonnet|haiku|weekly|7-day)\b[^.|]{0,20}\blimit\b/i
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const h24 = (h, ap) => (Number(h) % 12) + (/p/i.test(ap) ? 12 : 0)
 
@@ -30,16 +32,19 @@ function resetAt(text, now) {
 }
 
 // { until } when the end of an agent's screen shows an engine usage or rate limit, else
-// null. Only the last lines count: a card about usage limits must not block its engine.
+// null; `modelCap` when only that agent's model is capped. Only the last lines count: a
+// card about usage limits must not block its engine.
 export function usageLimit(screen, now = Date.now()) {
   const tail = String(screen || '').trimEnd().split(/\r?\n/).slice(-20).join(' ').replace(/\s+/g, ' ')
   if (!LIMIT.test(tail)) return null
   const at = resetAt(tail, now)
-  return { until: at > now ? at : now + HOUR }
+  return { until: at > now ? at : now + HOUR, ...(MODEL_CAP.test(tail) && { modelCap: true }) }
 }
 
 export const engineKind = engine => (typeof engine === 'string' ? engine : engine?.kind) || 'claude'
-const label = kind => kind[0].toUpperCase() + kind.slice(1)
+// A block is keyed by engine ("claude", every agent of it) or engine:model (one model's cap).
+export const quotaKey = (kind, model) => model ? `${kind}:${model}` : kind
+const label = key => key[0].toUpperCase() + key.slice(1).replace(':', ' ')
 // Beside the config the server runs with: a test board (KANBAN_CONFIG in a temp dir) must not
 // inherit the live board's block, or its agents never start.
 const quotaPath = boardRoot => join(process.env.KANBAN_CONFIG ? dirname(process.env.KANBAN_CONFIG) : boardRoot, '.engine-quota.json')
@@ -48,7 +53,7 @@ export function readQuota(boardRoot) {
   try { return boardRoot ? JSON.parse(readFileSync(quotaPath(boardRoot), 'utf8')) : {} } catch { return {} }
 }
 
-// Block one engine kind until `until`; a later block is never shortened.
+// Block one engine kind (or quotaKey) until `until`; a later block is never shortened.
 export function blockEngine(boardRoot, kind, until, now = Date.now()) {
   const quota = readQuota(boardRoot)
   if (quota[kind]?.until >= until) return quota[kind]
@@ -58,15 +63,20 @@ export function blockEngine(boardRoot, kind, until, now = Date.now()) {
   return quota[kind]
 }
 
-// The visible hold while an engine is blocked (an allowed wait for the stall watchdog),
-// or null once its reset time has passed.
-export function quotaHold(boardRoot, kind, now = Date.now(), quota = readQuota(boardRoot)) {
-  const until = quota[kind]?.until
-  return until > now ? retryHold(`${label(kind)} usage limit`, until) : null
+// The visible hold while an engine, or `key`'s model of it, is blocked (an allowed wait for
+// the stall watchdog), or null once its reset time has passed.
+export function quotaHold(boardRoot, key, now = Date.now(), quota = readQuota(boardRoot)) {
+  const hit = [key.split(':')[0], key].filter(k => quota[k]?.until > now).sort((a, b) => quota[b].until - quota[a].until)[0]
+  return hit ? retryHold(`${label(hit)} usage limit`, quota[hit].until) : null
+}
+
+// The blocks still in force, for the board header and the manager alert.
+export function activeQuota(boardRoot, now = Date.now()) {
+  return Object.fromEntries(Object.entries(readQuota(boardRoot)).filter(([, block]) => block.until > now))
 }
 
 // Holds for every card waiting on a blocked engine: Planning/Issues (Planner), Queue
-// (Builder), Review (Reviewer). `engineOf(card, stage)` is the card's assigned engine kind.
+// (Builder), Review (Reviewer). `engineOf(card, stage)` is the card's quotaKey.
 const STAGES = { planning: 'planning', issues: 'planning', queue: 'working', review: 'review' }
 export function quotaHolds(boardRoot, board, engineOf, now = Date.now()) {
   const quota = readQuota(boardRoot), holds = {}

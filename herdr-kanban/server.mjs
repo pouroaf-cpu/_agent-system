@@ -18,7 +18,7 @@ import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-hand
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
-import { readQuota, quotaHolds } from './lib/quota.mjs'
+import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
@@ -64,7 +64,7 @@ const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPa
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
 const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
-const quotaHoldsOf = (project) => quotaHolds(HERE, readBoard(tasksDirOf(project)), (card, stage) => assignmentForCard(project, card, stage).engine)
+const quotaHoldsOf = (project) => quotaHolds(HERE, readBoard(tasksDirOf(project)), (card, stage) => { const a = assignmentForCard(project, card, stage); return quotaKey(a.engine, a.model) })
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
 
 function ensureTasks(project) {
@@ -299,6 +299,8 @@ function boardPayload(project) {
     // files another card is still holding. Without it a held card is visually
     // identical to one simply waiting its turn.
     holds: { ...holdsFor(project), ...quotaHoldsOf(project) },
+    // Engine usage blocks in force, keyed "claude" (every model) or "claude:<model>": { until, since }.
+    quotaBlocks: activeQuota(HERE),
     agents: cached.agents,
     herdrUp: cached.herdrUp,
     breakerTripped: breaker.breakerTripped,
@@ -485,6 +487,7 @@ async function pollProject(project) {
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
+        const assigned = assignmentForCard(project, card, card.trivial ? 'trivial' : 'working')
         const routed = routeBuilderNoHandoff({
           tasksDir,
           cardId: id,
@@ -493,7 +496,8 @@ async function pollProject(project) {
           workspace: integrationPathOf(project),
           gitSettings,
           boardRoot: HERE,
-          engine: assignmentForCard(project, card, card.trivial ? 'trivial' : 'working').engine,
+          engine: assigned.engine,
+          model: assigned.model,
         })
         // Requeued to wait out an engine usage limit: its idle pane is of no further use.
         if (routed.column === 'queue' && agent) await paneClose(agent.pane_id, sessionOf(project)).catch(() => {})
@@ -627,8 +631,7 @@ async function pollProject(project) {
     const ageing = ownerAgeing(tasksDir)
     if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
-    for (const [kind, block] of Object.entries(readQuota(HERE))) {
-      if (!(block.until > Date.now())) continue
+    for (const [kind, block] of Object.entries(activeQuota(HERE))) {
       await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} usage limit`,
         detail: `No ${kind} agent starts on any project until ${new Date(block.until).toLocaleString()}. Waiting cards keep their lanes and resume by themselves.` })
     }

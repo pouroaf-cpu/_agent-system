@@ -2046,15 +2046,19 @@ async function openAgent(agent) {
     if (!response.ok) throw new Error(result.error);
   } catch (error) { toast(error.message); }
 }
-// The header only says when herdr itself is down; the Agents page lists agents.
+// The header only says when herdr itself is down or an engine (or one model) is out of
+// usage, so the operator sees why nothing starts; the Agents page lists agents.
 function renderAgents() {
   el.agents.replaceChildren();
-  if (state.herdrUp) return;
-  const m = document.createElement('span');
-  m.className = 'bar-msg';
-  m.textContent = 'herdr is not running — no agent status available.';
-  m.title = m.textContent;
-  el.agents.append(m);
+  const say = text => {
+    const m = document.createElement('span');
+    m.className = 'bar-msg';
+    m.textContent = m.title = text;
+    el.agents.append(m);
+  };
+  for (const [key, block] of Object.entries(state.quotaBlocks || {}))
+    say(`${key.replace(':', ' ')} usage limit — no such agent starts until ${new Date(block.until).toLocaleString()}.`);
+  if (!state.herdrUp) say('herdr is not running — no agent status available.');
 }
 
 

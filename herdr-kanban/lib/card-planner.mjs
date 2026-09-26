@@ -17,7 +17,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { usageLimit, blockEngine, quotaHold, engineKind } from './quota.mjs'
+import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
 const busy = new Set()
 export function correctionFingerprint(text) {
   const last = text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1)
@@ -90,6 +90,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     // Save the old Planner's output, revoke its pane and close it. The card, its
     // saved correction and all counters carry over to the fresh Planner.
     const plannerEngine = card => assignmentForCard?.(card, 'planning')?.engine ?? engineKind(engine)
+    const plannerModel = card => assignmentForCard?.(card, 'planning')?.model ?? model
     const retire = async (card, owner, agent, reason) => {
       const output = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).slice(-4000) : ''
       appendHistory(tasksDir, card.id, { event: 'planner-retired', stage: 'planning', reason, assignment: owner, pane: agent || null, output })
@@ -352,11 +353,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           save(tasksDir, owners)
           continue
         }
-        // The engine ran out of usage: block it board-wide and wait in Planning. Not a
-        // no-handoff; a fresh Planner starts once the limit resets.
+        // The engine (or just its model) ran out of usage: block it board-wide and wait in
+        // Planning. Not a no-handoff; a fresh Planner starts once the limit resets.
         const limit = usageLimit(evidence, now)
         if (limit) {
-          const kind = owner.engine || plannerEngine(card)
+          const kind = quotaKey(owner.engine || plannerEngine(card), limit.modelCap && (owner.model || plannerModel(card)))
           blockEngine(boardRoot, kind, limit.until, now)
           appendHistory(tasksDir, card.id, { event: 'engine-usage-limit', stage: 'planning', engine: kind, until: new Date(limit.until).toISOString(), evidence })
           await retire(card, owner, agent, `${kind} usage limit`)
@@ -397,7 +398,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       // Concurrent Planners per project are capped: 28 audit cards started 11 Codex Planners
       // at once and pinned the CPU (Injectbuddy, 2026-09-25). The rest wait for a later poll.
       if ((!owner || !agent) && !cardRunContext() && busyPlanners(agents) + launched >= maxPlanners) continue
-      if ((!owner || !agent) && quotaHold(boardRoot, plannerEngine(card), now)) continue // its engine is out of usage
+      if ((!owner || !agent) && quotaHold(boardRoot, quotaKey(plannerEngine(card), plannerModel(card)), now)) continue // its engine is out of usage
       if (!owner || !agent) {
         const previous = owner
         // A Planner the board closed after its handoff is not a missing replacement.
