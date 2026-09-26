@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 
@@ -33,17 +33,23 @@ export function agentSessionId(agentOrSession) {
 }
 
 const sessionPaths = new Map()
+// Every poll asks for every unfinished run. A miss (a Claude session id, or a session killed
+// before it wrote a file) walked all 1,454 Codex session files each time and pinned the CPU,
+// so the watchdog saw the board as down (2026-09-26). Misses are remembered for a minute.
+const sessionMisses = new Map() // cacheKey -> checkedAt
 function sessionFile(sessionId, root = CODEX_HOME) {
   const cacheKey = `${root}:${sessionId}`
   if (sessionPaths.has(cacheKey) && existsSync(sessionPaths.get(cacheKey))) return sessionPaths.get(cacheKey)
   if (!sessionId || !existsSync(root)) return null
+  if (Date.now() - (sessionMisses.get(cacheKey) ?? -Infinity) < 60000) return null
+  sessionMisses.set(cacheKey, Date.now())
   const stack = [existsSync(join(root, 'sessions')) ? join(root, 'sessions') : root]
   while (stack.length) {
     const dir = stack.pop()
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name)
       if (e.isDirectory()) stack.push(p)
-      else if (e.name.endsWith('.jsonl') && e.name.includes(sessionId)) { sessionPaths.set(cacheKey, p); return p }
+      else if (e.name.endsWith('.jsonl') && e.name.includes(sessionId)) { sessionPaths.set(cacheKey, p); sessionMisses.delete(cacheKey); return p }
     }
   }
   return null
@@ -58,9 +64,22 @@ const countersFrom = (u = {}) => ({
   total: Number(u.total_tokens) || 0,
 })
 
+// Parsed once per file version: finished and abandoned Codex sessions reach several MB and
+// were re-parsed on every poll.
+const parsedSessions = new Map() // path -> { key, rows }
 function sessionEvents(sessionId, { root = CODEX_HOME } = {}) {
   const path = sessionFile(sessionId, root)
   if (!path) return []
+  let key
+  try { const s = statSync(path); key = `${s.size}:${s.mtimeMs}` } catch { return [] }
+  const hit = parsedSessions.get(path)
+  if (hit?.key === key) return hit.rows
+  const rows = parseSession(path)
+  parsedSessions.set(path, { key, rows })
+  return rows
+}
+
+function parseSession(path) {
   const rows = []
   let sequence = 0
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
