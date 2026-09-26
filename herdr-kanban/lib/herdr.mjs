@@ -326,13 +326,13 @@ async function hold(paneId, fn) {
 }
 
 // By role letter (see ids.mjs), so old kb-* and new b-/p-/r-/i-/a- names match alike.
-// claude-haiku-4-5 everywhere: the operator's Claude fallback while Codex is out of usage (2026-09-26).
+// Operator's Claude fallback while Codex is out of usage (2026-09-26): Opus 5.5 plans, Sonnet 5 builds, Haiku 4.5 anywhere.
 const BOARD_MODELS = {
   r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
-  i: ['gpt-5.6-luna', 'claude-haiku-4-5'],
+  i: ['gpt-5.6-luna', 'claude-opus-5-5', 'claude-haiku-4-5'],
   p: ['gpt-5.6-luna', 'gpt-6-sol', 'claude-opus-5-5', 'claude-haiku-4-5'],
-  b: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
+  b: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-sonnet-5', 'claude-haiku-4-5'],
 }
 
 export function approvedManagedModel(name) {
