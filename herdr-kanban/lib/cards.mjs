@@ -48,6 +48,10 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   if (/^\*\*Trivial:\*\*\s*yes\s*$/im.test(text) && files.length > 2) {
     throw new Error('Trivial cards may list no more than two files')
   }
+  // A card that edits many files is several cards: Injectbuddy I191 (33 files) spent 14.5M
+  // tokens across Planner loops and locked files the whole queue waited on (operator, 2026-09-26).
+  const edited = section('Files').split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).length
+  if (planRoot && edited > MAX_PLAN_FILES) throw new Error(`Plan too wide: ${edited} files to edit (limit ${MAX_PLAN_FILES}). Don't hand this off as one card. Split it: hkb split <card-id> "1. <smaller card: its outcome and files> 2. ..." so the project's orchestrator re-cards each part.`)
   if (readiness === 'investigation') {
     const plan = section('Implementation plan').replaceAll('**', '')
     if (!/(?:check|measurement)\s*(?:commands?|method)?\s*:\s*\S|setup\/start\/check commands?[^\n]*\n[\s\S]*?```/i.test(plan) || !/(?:expected result|disposition)\s*:\s*\S/i.test(plan) || !/stop rules?\s*:\s*\S/i.test(plan)) {
@@ -252,6 +256,7 @@ const plain = (s) => (s ?? '').replace(/\*\*|`/g, '').trim()
 // not the descriptive prose (which often has its own backtick-quoted names).
 // A line the plan marks unchanged or read-only is context, not a file the card edits,
 // so it takes no lock (Tradeflow TF54 waited 7 hours on files it only references).
+export const MAX_PLAN_FILES = 15
 const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|-|:|\()\s*(?:unchanged|read-only|reference only)\b/i
 export function cardFiles(path) {
   const section = readFileSync(path, 'utf8').match(FILES_SECTION)?.[1] ?? ''

@@ -138,3 +138,14 @@ console.log('Planner readiness validation passed')
     validatePlan(plan.replace('Setup: none; use the existing Node runtime.', 'Setup: `npm run check -- package.json` and `node scripts/new-check.mjs`'), { workspace: root })
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
+
+// A Planner handoff that edits more than 15 files is refused with the split instruction;
+// read-only references don't count, and cards already queued (no workspace) aren't re-checked.
+{
+  const many = n => Array.from({ length: n }, (_, i) => `- \`src/f${i}.mjs\` — change handler ${i}`).join('\n')
+  const wide = realistic.replace(/## Files\n[\s\S]*?## Implementation plan/, `## Files\n${many(16)}\n## Implementation plan`)
+  assert.throws(() => validatePlan(wide, { workspace: process.cwd() }), /Plan too wide: 16 files[\s\S]*hkb split/)
+  validatePlan(wide)
+  const refs = realistic.replace(/## Files\n[\s\S]*?## Implementation plan/, `## Files\n${many(15)}\n- \`src/ctx.mjs\` — unchanged, read for context\n## Implementation plan`)
+  assert.doesNotThrow(() => { try { validatePlan(refs, { workspace: process.cwd() }) } catch (e) { if (/too wide/.test(e.message)) throw e } })
+}
