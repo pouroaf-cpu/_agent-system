@@ -88,6 +88,11 @@ test('card-update changes priority, blockers and appends a dated note', async ()
   assert.equal(r.status, 400)
   r = await post('/api/card-update', { id: c.id, note: { heading: 'Decision', text: '**Investigation approved:** yes' } })
   assert.equal(r.status, 400)
+  r = await post('/api/card-update', { id: c.id, note: { heading: 'Decision', text: 'Also note: **Blocked by:** none' } })
+  assert.equal(r.status, 400)
+  // A glob inside a path is not bold (Injectbuddy chat, 2026-09-26).
+  r = await post('/api/card-update', { id: c.id, note: { heading: 'Decision', text: 'Never hand-edit public/legacy/** pages; change the generator.' } })
+  assert.equal(r.status, 200)
 })
 
 test('card-update rejects cycles, self-reference and archived cards', async () => {

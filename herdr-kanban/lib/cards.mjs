@@ -601,7 +601,10 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     // Board markers (Review feedback, Needs you, Blocked by, ...) in a note would be read as card state.
     if (!/^[A-Za-z][A-Za-z0-9 '-]{0,39}$/.test(heading) || /^(build attempt|review feedback|needs you|kicked back|spawn failed|parked|priority)$/i.test(heading)) throw new Error('note.heading must be a short plain label such as "Decision" or "Operator decision" (letters, digits, spaces; at most 40 characters)')
     if (!body) throw new Error('note.text is required')
-    if (/\*\*|^\s*#/m.test(body)) throw new Error('note.text must be plain text: no ** bold markers or # headings (the board reads those as card fields)')
+    // Board fields are bold labels or headings at the start of a line (`**Blocked by:** ...`,
+    // `**Investigation approved:** yes`, `## Files`), plus any `**Label:**`. A glob such as
+    // public/legacy/** mid-line is not one (Injectbuddy chat, 2026-09-26).
+    if (/^[\s>*-]*\*\*|\*\*[^*\n]+:\*\*|^\s*#/m.test(body)) throw new Error('note.text must be plain text: no line starting with ** bold, no **Label:** field and no # headings (the board reads those as card fields); ** inside a path such as public/legacy/** is fine')
     const eol = text.includes('\r\n') ? '\r\n' : '\n'
     text = `${text.trimEnd()}${eol}${eol}**${heading}** ${now.toISOString()}${eol}${eol}${body.replace(/\r?\n/g, eol)}${eol}`
     changes.push(`note: ${heading}`)
