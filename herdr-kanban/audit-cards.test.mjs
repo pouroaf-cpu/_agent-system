@@ -11,7 +11,7 @@ import { cardsFromAudit } from './lib/audit-cards.mjs'
 
 const finding = (n, extra = {}) => ({
   n, title: `Problem ${n}`, severity: 'high', priority: 7, category: 'ui', workspace: '.',
-  files: [`src/app/page-${n}.tsx`], evidence: [`TASKS/reports/x/evidence/${n}.png`],
+  files: ['src/app/page.tsx'], evidence: [`TASKS/reports/x/evidence/${n}.png`],
   problem: `Problem ${n} observed`, recommendation: `Fix ${n}`, acceptance: [`AC1: ${n} is fixed`], dependsOn: [], ...extra,
 })
 const report = (list, json = JSON.stringify(list, null, 2)) =>
@@ -123,45 +123,5 @@ test('audit-cards: off-board report.md source links in the report and never arch
     const legacy = join(dir, 'legacy.md')
     writeFileSync(legacy, `# Old\n\nStatus: FINDINGS\n${report([finding(1)]).replace(/## Audit conclusion[\s\S]*$/, '')}`)
     assert.equal(cardsFromAudit(dir, { report: legacy, findings: 'all', prefix: 'I' }).created.length, 1, 'legacy Status: header is accepted')
-  } finally { rmSync(dir, { recursive: true, force: true }) }
-})
-
-test('audit-cards: findings sharing a file become one card of at most 5 findings (throughput audit F1)', () => {
-  const dir = fixture()
-  try {
-    const path = join(dir, 'report.md')
-    const hot = (n, extra) => finding(n, { files: ['src/LabDashboard.tsx', `src/part-${n}.ts`], acceptance: [`AC1: ${n} first`, `${n} second`], ...extra })
-    const list = [hot(1, { priority: 4 }), hot(2, { dependsOn: [1], priority: 9 }), hot(3), hot(4), hot(5), hot(6), hot(7),
-      finding(8), finding(9, { dependsOn: [1] }),
-      // 10 -> 11 and 12 -> 13 across two shared files would make the two cards block each other.
-      finding(10, { files: ['x.ts'], dependsOn: [11] }), finding(11, { files: ['y.ts'] }), finding(12, { files: ['y.ts'], dependsOn: [13] }), finding(13, { files: ['x.ts'] })]
-    writeFileSync(path, `# Hot file audit
-
-Audit ID: 2026-09-26-hot
-${report(list)}`)
-    const result = cardsFromAudit(dir, { report: path, findings: 'all', prefix: 'I' })
-    const idOf = Object.fromEntries(result.created.map(({ n, id }) => [n, id]))
-    assert.deepEqual(Object.keys(idOf).map(Number), list.map(f => f.n), 'every finding maps to a card')
-    assert.equal(new Set(result.created.map(c => c.id)).size, 2 + 1 + 1 + 3, 'seven hot findings make ceil(7/5) = 2 cards')
-    assert.equal(new Set([1, 2, 3, 4, 5].map(n => idOf[n])).size, 1)
-    assert.equal(new Set([6, 7].map(n => idOf[n])).size, 1)
-    assert.notEqual(idOf[1], idOf[6])
-    const hotCard = findCard(dir, idOf[1]), text = readFileSync(hotCard.path, 'utf8')
-    assert.match(hotCard.title, /src\/LabDashboard\.tsx/)
-    assert.equal(hotCard.priority, 9)
-    assert.deepEqual(hotCard.blockedBy, [], 'a dependency inside the card is not a blocker')
-    for (const n of [1, 2, 3, 4, 5]) for (const part of [`Problem ${n} observed`, `Fix ${n}`, `TASKS/reports/x/evidence/${n}.png`]) assert.ok(text.includes(part), part)
-    assert.equal(text.match(/^- AC\d+:/gm).length, 10)
-    assert.equal(new Set(text.match(/^- AC\d+:/gm)).size, 10, 'AC numbers are unique across the grouped findings')
-    assert.match(text, /- AC10: 5 second/)
-    assert.equal(findCard(dir, idOf[8]).title, 'Problem 8', 'a lone finding keeps its own card')
-    assert.deepEqual(findCard(dir, idOf[9]).blockedBy, [idOf[1]])
-    assert.notEqual(idOf[10], idOf[13], 'a grouped card that would deadlock is split back into one card per finding')
-    assert.deepEqual(findCard(dir, idOf[10]).blockedBy, [idOf[11]])
-    assert.deepEqual(findCard(dir, idOf[11]).blockedBy, [idOf[13]])
-    assert.deepEqual(findCard(dir, idOf[13]).blockedBy, [])
-    const links = readFileSync(path, 'utf8')
-    for (const n of list.map(f => f.n)) assert.match(links, new RegExp(`^- F${n}: ${idOf[n]}$`, 'm'))
-    assert.equal(cardsFromAudit(dir, { report: path, findings: 'all', prefix: 'I' }).created.length, 0)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

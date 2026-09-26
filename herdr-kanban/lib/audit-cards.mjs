@@ -31,58 +31,6 @@ export function briefFor(auditId, f) {
   ].join('\n\n')
 }
 
-// One card for several findings on the same file(s): each finding's problem, change and
-// evidence, then every AC renumbered so the IDs stay unique on the card.
-export function groupBriefFor(auditId, group, area) {
-  let ac = 0
-  return [
-    `This card fixes ${group.length} findings from ${auditId} that share ${area}. Fix them together in one change.`,
-    ...group.map(f => [
-      `### Finding ${f.n}: ${f.title}`,
-      f.problem.trim(),
-      `Recommended change: ${f.recommendation.trim()}`,
-      `Severity: ${f.severity}`,
-      `Files: ${f.files.join(', ')}`,
-      `Evidence:\n${f.evidence.map(e => `- ${e}`).join('\n')}`,
-    ].join('\n\n')),
-    `Acceptance criteria:\n${group.flatMap(f => f.acceptance.map(a => `- AC${++ac}: ${a.replace(/^AC\d+:\s*/, '')} (finding ${f.n})`)).join('\n')}`,
-    `Source: ${auditId} findings ${group.map(f => f.n).join(', ')}`,
-  ].join('\n\n')
-}
-
-// Findings whose Files share a path go on one card, at most MAX_GROUP per card. One card per
-// finding queued Injectbuddy behind its hot files one card at a time: one audit made 16
-// LabDashboard.tsx cards (throughput audit 2026-09-26 F1).
-const MAX_GROUP = 5
-const realFiles = f => f.files.filter(p => !/^unknown\b/i.test(p))
-const fileKeys = f => realFiles(f).map(p => `${f.workspace}\0${p.replaceAll('\\', '/').toLowerCase()}`)
-const shares = (a, b) => fileKeys(a).some(k => fileKeys(b).includes(k))
-const reaches = (deps, from, target, seen = new Set()) => [...deps[from]].some(j => j === target || (!seen.has(j) && seen.add(j) && reaches(deps, j, target, seen)))
-export function groupFindings(list) {
-  let groups = []
-  for (const f of list) {
-    const hits = groups.filter(g => g.some(h => shares(h, f)))
-    groups = [...groups.filter(g => !hits.includes(g)), [...hits.flat(), f]]
-  }
-  let cards = groups.map(g => g.sort((a, b) => a.n - b.n)).sort((a, b) => a[0].n - b[0].n)
-    .flatMap(g => Array.from({ length: Math.ceil(g.length / MAX_GROUP) }, (_, i) => g.slice(i * MAX_GROUP, (i + 1) * MAX_GROUP)))
-  // Grouping must never make two cards block each other: a grouped card on a Blocked-by
-  // cycle goes back to one card per finding (the findings' own graph has no cycle).
-  for (;;) {
-    const cardOf = new Map(cards.flatMap((c, i) => c.map(f => [f.n, i])))
-    const deps = cards.map((c, i) => new Set(c.flatMap(f => f.dependsOn).map(d => cardOf.get(d)).filter(j => j !== undefined && j !== i)))
-    const loop = cards.findIndex((c, i) => c.length > 1 && reaches(deps, i, i))
-    if (loop < 0) return cards
-    cards = [...cards.slice(0, loop), ...cards[loop].map(f => [f]), ...cards.slice(loop + 1)]
-  }
-}
-// The path most of the card's findings list.
-const sharedArea = group => {
-  const count = new Map()
-  for (const f of group) for (const p of new Set(realFiles(f))) count.set(p, (count.get(p) || 0) + 1)
-  return [...count].sort((a, b) => b[1] - a[1])[0][0]
-}
-
 // An audit is either a board audit card (id) or an off-board report.md (report),
 // the Auditor agent's output in Projects/_audits. A report's links are written into
 // the report itself; the orchestrator archives its folder, not the board.
@@ -143,26 +91,21 @@ export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = 
     return target.replaceAll('\\', '/')
   }
   const created = []
-  for (const group of groupFindings(all.filter(f => selected.includes(f.n) && !cardOf(f.n)))) {
-    const local = group.map(f => ({ ...f, evidence: f.evidence.map(localEvidence) }))
-    const lead = [...group].sort((a, b) => b.priority - a.priority)[0], area = group.length > 1 && sharedArea(group)
-    const card = createCard(tasksDir, {
-      title: area ? `Audit findings ${group.map(f => f.n).join(', ')} in ${area}`.slice(0, 200) : lead.title,
-      brief: area ? groupBriefFor(audit.id, local, area) : briefFor(audit.id, local[0]),
-      category: lead.category, workspace: lead.workspace, mission, prefix,
-    })
-    // Link before anything else can fail, so a retry never duplicates these findings.
-    for (const f of group) { links[f.n] = card.id; setLink(audit.path, f.n, card.id) }
-    created.push({ ns: group.map(f => f.n), id: card.id, path: card.path, dependsOn: group.flatMap(f => f.dependsOn), priority: lead.priority })
+  for (const f of all.filter(f => selected.includes(f.n) && !cardOf(f.n))) {
+    const card = createCard(tasksDir, { title: f.title, brief: briefFor(audit.id, { ...f, evidence: f.evidence.map(localEvidence) }), category: f.category, workspace: f.workspace, mission, prefix })
+    // Link before anything else can fail, so a retry never duplicates this finding.
+    links[f.n] = card.id
+    setLink(audit.path, f.n, card.id)
+    created.push({ n: f.n, id: card.id, path: card.path, dependsOn: f.dependsOn, priority: f.priority })
   }
   for (const card of created) {
     // ponytail: only dependencies already carded get Blocked by; a dependency carded later does not block retroactively.
-    const blockers = [...new Set(card.dependsOn.map(cardOf).filter(id => id && id !== card.id))]
+    const blockers = card.dependsOn.map(cardOf).filter(Boolean)
     const text = readFileSync(card.path, 'utf8')
     writeFileSync(card.path, text.replace(/^\*\*Priority\*\*[^\S\r\n]*\d+[^\S\r\n]*\/[^\S\r\n]*10/m, `**Priority** ${card.priority}/10${blockers.length ? `\n**Blocked by:** ${blockers.join(', ')}` : ''}`))
   }
   const remaining = all.map(f => f.n).filter(n => !cardOf(n) && !declined(n))
   const done = !remaining.length && !report
   if (done) moveCard(tasksDir, audit.id, 'archive')
-  return { audit: audit.id, created: created.flatMap(({ ns, id }) => ns.map(n => ({ n, id }))).sort((a, b) => a.n - b.n), links, archived: done, archivedNow: done, remaining }
+  return { audit: audit.id, created: created.map(({ n, id }) => ({ n, id })), links, archived: done, archivedNow: done, remaining }
 }
