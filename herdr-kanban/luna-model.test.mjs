@@ -31,6 +31,7 @@ test('requested role defaults resolve to the right launch arguments', () => {
     const args = agentStartArgs({ name, paneId: 'test', model: setting.model, engine: engineForAssignment(setting) })
     assert.equal(args[args.indexOf('--kind') + 1], kind)
     assert.equal(args[args.indexOf('--model') + 1], model)
+    if (kind === 'claude') assert.equal(args[args.indexOf('--name') + 1], name)
     assert.throws(() => agentStartArgs({ name, paneId: 'test', model: 'gpt-6-astra', engine: 'codex' }), /must use model/)
   }
   assert.equal(assignmentFor(saved, { agentSettings: { working: { model: 'gpt-5.6-luna' } } }, 'working').model, 'gpt-5.6-luna')

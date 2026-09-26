@@ -385,6 +385,8 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     // marker, which turns off transcript saving, and the transcript is where the
     // board reads a Claude agent's token usage.
     args.push('--settings', CLAUDE_AGENT_SETTINGS)
+    // Session title in the Claude app matches the herdr agent name.
+    if (name) args.push('--name', name)
     if (model) args.push('--model', model)
   }
   return args
