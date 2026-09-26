@@ -22,3 +22,15 @@ test('servers left running in a card worktree are stopped; others are not (Trade
   assert.deepEqual(stopServersIn('C:\\Work\\.kanban-worktrees\\Tradeflow\\tf63-x', { list, kill: pid => killed.push(pid) }), [1])
   assert.deepEqual(killed, [1])
 })
+
+test('a relative-path next server is found by its working directory; other worktrees and the board are not (audit 2026-09-26 #9)', () => {
+  const list = () => [
+    { pid: 27744, cwd: 'C:\\Work\\.worktrees\\Injectbuddy\\cards\\i227-x\\', cmd: '"C:\\Program Files\\nodejs\\node.exe" --env-file=C:/Users/me/Projects/Injectbuddy/.env.local node_modules/next/dist/bin/next start -p 3107' },
+    { pid: 2, cwd: 'C:\\Work\\.worktrees\\Injectbuddy\\cards\\i227-x2\\', cmd: 'node node_modules/next/dist/bin/next dev -p 3108' },
+    { pid: 3, cwd: 'C:\\Users\\me', cmd: 'node C:\\Work\\.worktrees\\Injectbuddy\\cards\\i227-x2\\node_modules\\next\\dist\\bin\\next dev' },
+    { pid: process.pid, cwd: 'C:\\Work\\.worktrees\\Injectbuddy\\cards\\i227-x', cmd: 'node server.mjs' },
+  ]
+  const killed = []
+  assert.deepEqual(stopServersIn('C:/Work/.worktrees/Injectbuddy/cards/i227-x', { list, kill: pid => killed.push(pid) }), [27744])
+  assert.deepEqual(killed, [27744])
+})
