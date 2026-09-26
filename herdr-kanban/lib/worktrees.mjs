@@ -390,6 +390,14 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     existing = null
   }
   const plan = recoveryState(readFileSync(card.path, 'utf8')).plan
+  // Git already removed this worktree but Windows kept its empty folder (Injectbuddy I238),
+  // and its branch holds nothing beyond the base: nothing to preserve, start fresh.
+  if (existing && existing.state !== 'integrated' && isResidue(existing)) {
+    if (existsSync(existing.worktreePath)) removeEmptyResidue(existing.worktreePath)
+    finishRegisteredRemoval(existing, false)
+    updateEntry(tasksDir, id, null)
+    existing = null
+  }
   if (existing) {
     if (existing.state === 'integrated') throw new Error(`${id} is already integrated; cleanup is pending`)
     if (!existsSync(existing.worktreePath)) throw new Error(`${id} worktree registry points to missing path: ${existing.worktreePath}`)
@@ -571,15 +579,15 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
   if (status.status !== 0) {
     const listed = git(entry.repoRoot, ['worktree', 'list', '--porcelain']).stdout
       .split(/\r?\n/).some((line) => line === `worktree ${entry.worktreePath}`)
-    if (!integrated || listed) throw new Error(`git status failed in ${entry.worktreePath}: ${(status.stderr || status.stdout).trim()}`)
+    if (listed) throw new Error(`git status failed in ${entry.worktreePath}: ${(status.stderr || status.stdout).trim()}`)
     // Git already removed its metadata but Windows left a directory behind.
     // Never recursively remove unknown residual contents. An empty directory
     // left by Windows is recoverable after the finished session releases it.
-    // A tree of empty folders holds nothing (Tradeflow T-35 after a forced remove).
-    const onlyEmptyDirs = (dir) => readdirSync(dir, { withFileTypes: true }).every(d => d.isDirectory() && !d.isSymbolicLink() && onlyEmptyDirs(join(dir, d.name)))
+    // A tree of empty folders holds nothing (Tradeflow T-35 after a forced remove;
+    // Injectbuddy I238 before integration).
     if (!onlyEmptyDirs(entry.worktreePath)) throw new Error('Residual worktree files require inspection; preserved')
-    rmSync(entry.worktreePath, { recursive: true })
-    git(entry.repoRoot, ['branch', '-D', entry.branch], { allowFailure: true })
+    removeEmptyResidue(entry.worktreePath)
+    finishRegisteredRemoval(entry, integrated)
     finish()
     return
   }
@@ -601,13 +609,44 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
   const dependencies = join(entry.workspacePath, 'node_modules')
   // Remove only our junction, never its shared target, before Git removes the checkout.
   if (existsSync(dependencies) && lstatSync(dependencies).isSymbolicLink()) unlinkSync(dependencies)
-  if (leftovers.length) git(entry.repoRoot, ['worktree', 'remove', '--force', entry.worktreePath])
+  if (leftovers.length) removeRegistered(entry, ['worktree', 'remove', '--force', entry.worktreePath])
   else {
     refreshClean(entry.worktreePath)
-    git(entry.repoRoot, ['worktree', 'remove', entry.worktreePath])
+    removeRegistered(entry, ['worktree', 'remove', entry.worktreePath])
   }
   git(entry.repoRoot, ['branch', '-D', entry.branch])
   finish()
+}
+
+const onlyEmptyDirs = (dir) => readdirSync(dir, { withFileTypes: true }).every(d => d.isDirectory() && !d.isSymbolicLink() && onlyEmptyDirs(join(dir, d.name)))
+// An agent shell that just closed can hold an empty folder open for a moment. Still held:
+// leave it. It holds nothing, and every new card worktree gets a fresh path.
+function removeEmptyResidue(dir) {
+  try { rmSync(dir, { recursive: true, maxRetries: 5, retryDelay: 200 }) } catch { /* empty; released later */ }
+}
+// The branch goes only when it holds nothing beyond its base, or the card is integrated.
+function finishRegisteredRemoval(entry, integrated) {
+  const tip = git(entry.repoRoot, ['rev-parse', '--verify', `refs/heads/${entry.branch}`], { allowFailure: true }).stdout.trim()
+  if (integrated || !tip || tip === entry.baseCommit) git(entry.repoRoot, ['branch', '-D', entry.branch], { allowFailure: true })
+}
+// Windows: `git worktree remove` deletes the files and the registration, then fails on the
+// folder a handle still holds ("failed to delete ... Permission denied"). Injectbuddy I238
+// went to Owner over that empty folder. It is a finished removal.
+function removeRegistered(entry, args) {
+  try { git(entry.repoRoot, args) } catch (err) {
+    if (!/failed to delete/i.test(err.message) || !isResidue(entry, { anyBranch: true })) throw err
+    if (existsSync(entry.worktreePath)) removeEmptyResidue(entry.worktreePath)
+  }
+}
+// Not a registered worktree any more and nothing but empty folders (or nothing) on disk.
+// Unless anyBranch, its branch must also hold nothing beyond the base.
+function isResidue(entry, { anyBranch = false } = {}) {
+  const registered = git(entry.repoRoot, ['worktree', 'list', '--porcelain']).stdout
+    .split(/\r?\n/).some((line) => line.startsWith('worktree ') && norm(line.slice(9)) === norm(entry.worktreePath))
+  if (registered || (existsSync(entry.worktreePath) && !onlyEmptyDirs(entry.worktreePath))) return false
+  if (anyBranch) return true
+  const tip = git(entry.repoRoot, ['rev-parse', '--verify', `refs/heads/${entry.branch}`], { allowFailure: true }).stdout.trim()
+  return !tip || tip === entry.baseCommit
 }
 
 export function cleanupPreparedWorktree({ tasksDir, prepared }) {

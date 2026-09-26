@@ -673,3 +673,35 @@ test('a worktree from an earlier plan is saved to a recovery branch and replaced
     assert.ok(readFileSync(card.path, 'utf8').includes(recovery))
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('an empty folder Windows kept after Git removed the worktree is cleared, not sent to Owner (Injectbuddy I238)', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const first = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    const old = readWorktrees(f.tasks)['T-1'].worktreePath
+    // What `git worktree remove` leaves when a handle holds the folder: no registration, no files.
+    git(f.integration, 'worktree', 'remove', '--force', old)
+    mkdirSync(join(old, 'nested'), { recursive: true })
+    const again = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.ok(existsSync(join(again.workspacePath, 'app.js')))
+    assert.equal(readWorktrees(f.tasks)['T-1'].worktreePath, again.workspacePath)
+    assert.ok(first.workspacePath)
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('a missing worktree whose branch holds a commit is still refused, never silently replaced', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'work\n')
+    git(prepared.workspacePath, 'commit', '-am', 'T-1 work')
+    git(f.integration, 'worktree', 'remove', '--force', readWorktrees(f.tasks)['T-1'].worktreePath)
+    assert.throws(() => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }), /missing path/)
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
