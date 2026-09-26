@@ -68,6 +68,24 @@ test('brief generation preserves original card/history and pause state without t
   assert.match(readFileSync(path, 'utf8'), /Return 2 check/)
   assert.equal(readFileSync(config, 'utf8'), '{"maxConcurrentAgents":0,"paused":true}')
   assert.throws(() => writeBrief(tasks, { id: 'T-1', path: cardPath }, 'builder', { maxChars: 20 }), /exceeds/)
+  assert.doesNotMatch(readFileSync(path, 'utf8'), /Current project constraints/, 'no PROJECT-CONSTRAINTS.md, no section')
+})
+
+test('every role brief carries the current PROJECT-CONSTRAINTS.md, not only the creation-time copy', async () => {
+  const { createCard } = await import('./lib/cards.mjs')
+  const tasks = join(mkdtempSync(join(tmpdir(), 'constraints-brief-')), 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  const constraints = join(tasks, 'PROJECT-CONSTRAINTS.md')
+  writeFileSync(constraints, '## all\nOld rule.\n## ui\nUI rule.\n')
+  const card = createCard(tasks, { title: 'Later rule', brief: 'Fix it.', category: 'code' })
+  writeFileSync(constraints, '## all\nOld rule.\nCard checkouts have NO .env files.\n## code\nCode rule.\n## ui\nUI rule.\n')
+  for (const role of ['planner', 'builder', 'reviewer']) {
+    const brief = readFileSync(writeBrief(tasks, card, role), 'utf8')
+    assert.match(brief, /## Current project constraints\n[\s\S]*Card checkouts have NO \.env files\.[\s\S]*Code rule\./, role)
+    assert.doesNotMatch(brief.split('## Current project constraints')[1], /UI rule/, 'other categories stay out')
+  }
+  writeFileSync(constraints, '## all\nNewest rule.\n')
+  assert.match(readFileSync(writeBrief(tasks, card, 'builder'), 'utf8'), /Newest rule/, 'a later edit changes the brief revision')
 })
 
 test('PowerShell literals survive spaces/apostrophes; generated handoff is directly runnable syntax', () => {

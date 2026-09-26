@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
-import { appendHistory, writeCurrentFeedback, historyPath } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, historyPath, projectConstraints } from './card-history.mjs'
 import { CARD_ID, nextCardId } from './ids.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
@@ -624,12 +624,8 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
 }
 
 function constraintsFor(tasksDir, category) {
-  const path = join(tasksDir, 'PROJECT-CONSTRAINTS.md')
-  if (!existsSync(path)) return '<!-- Optional; populated only when this project has relevant constraints. -->'
-  const text = readFileSync(path, 'utf8')
-  const section = (name) => text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.trim()
-  return [section('all'), section(category)].filter(Boolean).join('\n\n')
-    || '<!-- No project-specific constraints for this category. -->'
+  if (!existsSync(join(tasksDir, 'PROJECT-CONSTRAINTS.md'))) return '<!-- Optional; populated only when this project has relevant constraints. -->'
+  return projectConstraints(tasksDir, category) || '<!-- No project-specific constraints for this category. -->'
 }
 
 // Legacy cards (migrated from TASKS.md, not card-owned) have no Planner path, so they

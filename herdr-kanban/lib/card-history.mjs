@@ -87,9 +87,19 @@ export function focusedText(text, role) {
   return [...sections.values(), ...(feedback ? [`## Current feedback\n${feedback}`] : []),
     ...(latestReturn ? [`Latest correction: Return ${latestReturn}; still-current sections from earlier returns remain above until explicitly replaced. Preserve approved constraints and acceptance criteria; do not replay finished implementation. Superseded sections and verdicts are history, not a fresh pass.`] : [])].join('\n\n')
 }
+// `## all` plus the card's category section of TASKS/PROJECT-CONSTRAINTS.md, or null.
+export function projectConstraints(tasksDir, category) {
+  const path = join(tasksDir, 'PROJECT-CONSTRAINTS.md')
+  if (!existsSync(path)) return null
+  const text = readFileSync(path, 'utf8')
+  return [sectionBody(text, 'all'), category && sectionBody(text, category)].filter(Boolean).join('\n\n') || null
+}
 export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   const source = readFileSync(card.path, 'utf8')
-  const text = focusedText(source, role)
+  // The card's own copy is taken at creation; rules added later reach live cards
+  // only through here (Injectbuddy I265). The brief revision hash carries the change.
+  const constraints = projectConstraints(tasksDir, card.category)
+  const text = focusedText(source, role) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })
