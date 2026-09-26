@@ -75,8 +75,24 @@ function fail(msg) {
   process.exit(1)
 }
 
+// found: something outside this card's scope. The card doesn't move; the finding goes to the
+// Kanban Manager's inbox, who fixes board issues and sends product ones to the project's
+// orchestrator. I213's Builder noted two failing specs only in its card, and nobody saw them
+// until the operator did (2026-09-26).
+if (verb === 'found') {
+  if (!cardId || !note) fail('found needs the card and the finding with its evidence: hkb found T-02 "e2e/x.spec.ts fails on base too: ..."')
+  const card = findCard(tasksDir, cardId)
+  const project = basename(dirname(tasksDir))
+  const inbox = process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+  appendFileSync(inbox, `- ${new Date().toISOString()} FOUND ${project} ${card.id} (${card.column}): ${note.replace(/\s+/g, ' ')}\n`)
+  appendHistory(tasksDir, card.id, { event: 'found', note })
+  activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: note })
+  console.log(`hkb: ${card.id} finding sent to the Kanban Manager; carry on with your card`)
+  process.exit(0)
+}
+
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|review|rework|pass|move> <card-id> [note|column]\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|review|rework|pass|move> <card-id> [note|column]\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 

@@ -135,3 +135,17 @@ test('workflow limits count only runs since the operator retried; a held card re
   writeFileSync(join(tasks, '.request-usage.json'), JSON.stringify(usage))
   assert.match(checkWorkflowLimits(tasks, 'T-4', 'planner'), /maxRunsPerStage reached \(2\/2\)/)
 })
+
+test('hkb found sends an out-of-scope finding to the Kanban Manager inbox and leaves the card where it is (I213)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hkb-found-')), tasks = join(root, 'Proj', 'TASKS'), inbox = join(root, 'inbox.md')
+  try {
+    mkdirSync(join(tasks, 'working'), { recursive: true })
+    writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')
+    const run = (...a) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...a], { encoding: 'utf8', env: { ...process.env, KANBAN_MANAGER_INBOX: inbox } })
+    assert.notEqual(run('found', 'T-1').status, 0)
+    const ok = run('found', 'T-1', 'e2e/i201.spec.ts fails on base too: timeout at Bacteriostatic water')
+    assert.equal(ok.status, 0, ok.stderr)
+    assert.match(readFileSync(inbox, 'utf8'), /FOUND Proj T-1 \(working\): e2e\/i201\.spec\.ts fails on base too/)
+    assert.equal(findCard(tasks, 'T-1').column, 'working')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
