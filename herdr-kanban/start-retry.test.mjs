@@ -61,6 +61,48 @@ test('the prompt text still on the input line counts as staged; placeholders and
   assert.equal(enters, 2)
 })
 
+// Injectbuddy I213 Builder pane, 2026-09-26 04:21Z: Claude Code shows `❯` and wraps the
+// typed pointer inside its box, so the prompt sat unsubmitted for 17 minutes.
+const CLAUDE_RULE = '─'.repeat(64)
+const CLAUDE_STAGED = `   Claude Code v2.1.281
+  Sonnet 5 with medium effort · Claude Pro
+
+
+${CLAUDE_RULE}
+❯\u00a0Read
+  C:/Users/PFrew/Projects/herdr-kanban/.deliveries/f1dcc5c8ea0
+  0ba52a99fe65b0e88194cd570c304087ddb7d879051a1cf8ae85c.md
+  (revision cbe860196adc9bbf6dc041eca8a8ffdd5114a0009aecad47d2
+  aa76918285afd8) and follow it exactly; it is your complete
+  task.
+
+${CLAUDE_RULE}
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SE…
+  i213-muhvr4z3-36368  |  Ctx --  |  ~1.3M/h  |  5h --  |  7d…`
+const CLAUDE_SUBMITTED = `   Claude Code v2.1.281
+
+
+${CLAUDE_RULE}
+❯
+${CLAUDE_RULE}
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SE…
+  i213-muhvr4z3-36368  |  Ctx --  |  ~1.4M/h  |  5h 54% (1h16…
+  ⏵⏵ bypass permissions on (shift+tab to cycle)`
+const I213_POINTER = 'Read C:/Users/PFrew/Projects/herdr-kanban/.deliveries/f1dcc5c8ea00ba52a99fe65b0e88194cd570c304087ddb7d879051a1cf8ae85c.md (revision cbe860196adc9bbf6dc041eca8a8ffdd5114a0009aecad47d2aa76918285afd8) and follow it exactly; it is your complete task.'
+
+test("a Claude prompt wrapped inside its ❯ box is staged; the empty ❯ line after submission is not (Injectbuddy I213)", async () => {
+  const { stagedInput } = await import('./lib/spawn.mjs')
+  assert.equal(stagedInput(CLAUDE_STAGED, I213_POINTER), true)
+  assert.equal(stagedPrompt(CLAUDE_STAGED, I213_POINTER), true)
+  assert.equal(stagedInput(CLAUDE_SUBMITTED, I213_POINTER), false)
+  assert.equal(stagedPrompt(CLAUDE_SUBMITTED, I213_POINTER), false)
+  let enters = 0
+  await deliverWith({ paneId: 'p', text: I213_POINTER, confirmMs: 10, prompt: async () => {}, sendKeys: async () => { enters++ },
+    list: async () => [{ pane_id: 'p', agent_status: enters >= 2 ? 'working' : 'idle' }],
+    read: async () => enters >= 2 ? CLAUDE_SUBMITTED : CLAUDE_STAGED })
+  assert.equal(enters, 2, 'Enters until the Claude agent works, no delivery failure')
+})
+
 test('a brief working flash with the paste still on the input line is not a delivery (Injectbuddy I149)', async () => {
   let enters = 0
   await deliverWith({ paneId: 'p', text: 'task', confirmMs: 10, prompt: async () => {}, sendKeys: async () => { enters++ },

@@ -81,18 +81,36 @@ export async function deliverWith({
 
 // Codex collapses a long paste into "[Pasted Content N chars]" and can swallow the Enter
 // (Tradeflow T-41). The prompt is staged, not delivered, while the pane tail shows that
-// placeholder or the prompt's own text on the `›` input line.
+// placeholder or the prompt's own text on the input line (Codex `›`, Claude `❯`).
 export function stagedPrompt(pane, text = '') {
   const tail = String(pane).trimEnd().split(/\r?\n/).slice(-15)
   if (tail.some(line => /Pasted Content/i.test(line))) return true
-  const input = tail.findLast(line => /^[\s│|]*›/.test(line))?.replace(/^[\s│|]*›\s*/, '').replace(/[\s│|]+$/, '')
-  return !!input && input.length >= 8 && text.replace(/\s+/g, ' ').includes(input.slice(0, 60))
+  return typedOnInput(inputText(tail), text)
 }
-// Stricter: only the current (last) `›` input line counts, so a prompt that was
+// Stricter: only the current (last) input line counts, so a prompt that was
 // submitted and still shows in the scrollback is never read as staged.
 export function stagedInput(pane, text = '') {
-  const input = String(pane).split(/\r?\n/).findLast(line => /^[\s│|]*›/.test(line))
-  return !!input && stagedPrompt(input, text)
+  const input = inputText(String(pane).split(/\r?\n/))
+  return input != null && (/Pasted Content/i.test(input) || typedOnInput(input, text))
+}
+// The last input line plus the indented lines it wraps onto, up to a blank line or
+// the box rule. Claude wraps a long prompt (Injectbuddy I213: `❯ Read` then the path),
+// breaking mid-word or at a space, so the match ignores whitespace.
+const INPUT = /^[\s│|]*[›❯]/
+function inputText(lines) {
+  const at = lines.findLastIndex(line => INPUT.test(line))
+  if (at < 0) return null
+  const strip = line => line.replace(/^[\s│|]*[›❯]?/, '').replace(/[\s│|]+$/, '')
+  const wrapped = []
+  for (const line of lines.slice(at + 1)) {
+    if (!/^[\s│|]/.test(line) || !strip(line) || /^[─━╭╮╰╯]/.test(strip(line))) break
+    wrapped.push(strip(line))
+  }
+  return [strip(lines[at]), ...wrapped].join(' ')
+}
+function typedOnInput(input, text) {
+  const typed = String(input ?? '').replace(/\s+/g, '')
+  return typed.length >= 8 && text.replace(/\s+/g, '').includes(typed.slice(0, 60))
 }
 // Press Enter up to three times, rechecking after each. 'working', 'staged' (never
 // submitted) or 'unknown' (no longer staged, not working either).
