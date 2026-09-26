@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { recoveryTransition } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
-import { appendHistory, writeCurrentFeedback, historyPath, projectConstraints } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, historyPath, projectConstraints, lastTransition } from './card-history.mjs'
 import { CARD_ID, nextCardId } from './ids.mjs'
 
 const TEMPLATE = new URL('../TASK-TEMPLATE.md', import.meta.url)
@@ -568,9 +568,29 @@ export function findCard(tasksDir, cardId) {
 
   const live = all.filter((c) => c.column !== 'archive')
   if (live.length > 1) {
+    if (live.length === 2 && mergeLateCopy(tasksDir, id, live)) return findCard(tasksDir, id)
     throw Object.assign(new Error(`${id} is ambiguous — ${live.map((c) => `${c.column}/${c.file}`).join(' and ')}`), { ambiguous: id })
   }
   return live[0] ?? all[0]
+}
+
+// Tradeflow T-42: a live agent wrote its result to the lane path the board had just
+// moved the card out of, recreating the file there. When the last transition went
+// A -> B, both copies share a file name and the A copy was written after that move,
+// the A copy is that late write: its ## sections the B copy lacks are appended to B
+// (a later same-named section wins in briefs), and the file is kept in .stray/.
+function mergeLateCopy(tasksDir, id, copies) {
+  const move = lastTransition(tasksDir, id)
+  const late = copies.find((c) => c.column === move?.from), current = copies.find((c) => c.column === move?.to)
+  if (!late || !current || late.file !== current.file || statSync(late.path).mtimeMs < Date.parse(move.at)) return false
+  const lateText = readFileSync(late.path, 'utf8'), text = readFileSync(current.path, 'utf8')
+  // Current feedback is the board's own note; the late copy's is the one it replaced.
+  const added = lateText.split(/(?=^## )/m).map((s) => s.trim()).filter((s) => s.startsWith('## ') && !s.startsWith('## Current feedback') && !text.includes(s))
+  appendHistory(tasksDir, id, { event: 'late-copy-merged', from: late.column, text: lateText })
+  if (added.length) writeFileSync(current.path, `${text.trimEnd()}\n\n${added.join('\n\n')}\n`)
+  mkdirSync(join(tasksDir, '.stray'), { recursive: true })
+  renameSync(late.path, join(tasksDir, '.stray', `${Date.now()}-${late.column}-${late.file}`))
+  return true
 }
 
 // Move a card between columns. This IS the state change — there is nothing else to update.

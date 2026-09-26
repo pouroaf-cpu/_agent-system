@@ -40,6 +40,17 @@ export function laneBeforeOwner(tasksDir, id) {
   }
   return from
 }
+// The card's last lane transition from history, or null.
+export function lastTransition(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return null
+  let last = null
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.includes('"transition"')) continue
+    try { const e = JSON.parse(line); if (e.event === 'transition') last = e } catch { /* torn line */ }
+  }
+  return last
+}
 // When the card last moved into `column` (ms), from its history transitions; null when
 // history does not say. Histories reach ~0.5MB and every poll asks, so the answer is
 // cached per file size+mtime.

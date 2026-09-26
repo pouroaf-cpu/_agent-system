@@ -3,7 +3,7 @@
 // limit that held a retried card forever.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -51,6 +51,34 @@ test('a handoff that drops a required section is refused and nothing is restored
   writeFileSync(findCard(tasks, 'T-1').path, saved)
   assert.equal(hkb(tasks, 'move', 'T-1', 'review').status, 0)
   assert.equal(findCard(tasks, 'T-1').column, 'review')
+})
+
+// Tradeflow T-42: the board moved the card working -> issues under a live Builder,
+// which then wrote its result to the old lane path and recreated the file.
+test('a card recreated in the lane it just left is merged into the live copy, not held as ambiguous', t => {
+  const tasks = board(t, 'working', 'T-1', PLAN)
+  moveCard(tasks, 'T-1', 'issues')
+  const live = readFileSync(join(tasks, 'issues', 'T-1.md'), 'utf8')
+  writeFileSync(join(tasks, 'working', 'T-1.md'), '## Evidence\nBuilt; node measure.mjs passed.\n')
+  const card = findCard(tasks, 'T-1')
+  assert.equal(card.column, 'issues')
+  const merged = readFileSync(card.path, 'utf8')
+  assert.ok(merged.startsWith(live), 'the live copy is kept as is')
+  assert.match(merged, /## Evidence\nBuilt; node measure\.mjs passed\./)
+  assert.ok(!existsSync(join(tasks, 'working', 'T-1.md')), 'no second live copy')
+  assert.match(readFileSync(join(tasks, '.stray', readdirSync(join(tasks, '.stray'))[0]), 'utf8'), /Built; node measure/, 'the stale copy is kept')
+  // The agent writes again: nothing it already delivered is appended twice.
+  writeFileSync(join(tasks, 'working', 'T-1.md'), `${live}\n## Evidence\nBuilt; node measure.mjs passed.\n`)
+  assert.equal(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), merged)
+})
+
+test('two genuinely different live cards with one id are still held', t => {
+  const tasks = board(t, 'issues', 'T-1', PLAN)
+  mkdirSync(join(tasks, 'review'))
+  writeFileSync(join(tasks, 'review', 'T-1.md'), `# T-1 — other card\n${PLAN}`)
+  assert.throws(() => findCard(tasks, 'T-1'), /ambiguous/)
+  moveCard(tasks, 'T-1', 'working', { sourcePath: join(tasks, 'review', 'T-1.md') }) // last move review -> working, other copy in issues
+  assert.throws(() => findCard(tasks, 'T-1'), /ambiguous/, 'the other copy is not in the lane the card left')
 })
 
 test('the Builder prompt keeps Builders to their own sections and stays one line', () => {
