@@ -422,6 +422,10 @@ function cardStatus(card) {
   if (card.column === 'owner') return { text: 'Waiting on Kanban Manager', tone: 'muted' };
   const notice = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning;
   if (notice) return { text: notice, tone: 'problem' };
+  // Why the board passed this card over on its last tick: a Queue start hold, or any
+  // lane waiting for an engine that is out of usage ("Codex usage limit; retrying at …").
+  const hold = state.holds?.[card.id];
+  if (hold) return { text: hold, tone: 'muted' };
   const ind = state.stageIndicators?.[card.id];
   const review = ind?.stage === 'Reviewer';
   if (ind?.status === 'issue') return { text: review ? 'Review feedback' : 'Plan issue', tone: 'problem', title: ind.stage + ': ' + ind.reason };
@@ -429,9 +433,6 @@ function cardStatus(card) {
   const queued = reviewing.indexOf(card.id);
   if (queued === 0) return timer?.tone === 'active' ? timer : { text: 'Reviewing', tone: 'active' };
   if (queued > 0) return { text: 'Review queued', tone: 'muted' };
-  // Why the spawner passed this card over on its last tick. Only meaningful in Queue.
-  const hold = card.column === 'queue' ? state.holds?.[card.id] : null;
-  if (hold) return { text: hold, tone: 'muted' };
   if (timer) return timer;
   if (ind?.status === 'working') return { text: review ? 'Reviewing' : 'Planning', tone: 'active', title: ind.stage + ': ' + ind.reason };
   const bind = card.column === 'working' && state.bindings?.[card.id];

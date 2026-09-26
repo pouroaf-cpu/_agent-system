@@ -17,6 +17,7 @@ import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttem
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
+import { usageLimit, blockEngine, quotaHold, engineKind } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
@@ -33,9 +34,18 @@ import { recoveryState } from './recovery.mjs'
 // A Builder that disappears or ends without hkb done/issue leaves Working
 // stuck. Route it to Issues while retaining the binding, workflow assignment,
 // counters and worktree for inspection and recovery.
-export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', workspace, gitSettings }) {
+export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', workspace, gitSettings, boardRoot, engine, now = Date.now() }) {
   const card = findCard(tasksDir, cardId)
   if (card.column !== 'working') return card
+  // The engine ran out of usage: block it board-wide and wait in Queue, where a fresh
+  // Builder continues in the same worktree once it resets. Not a failed build.
+  const limit = boardRoot && usageLimit(evidence, now)
+  if (limit) {
+    blockEngine(boardRoot, engineKind(engine), limit.until, now)
+    appendHistory(tasksDir, card.id, { event: 'engine-usage-limit', stage: 'working', engine: engineKind(engine), until: new Date(limit.until).toISOString(), evidence })
+    unbind(tasksDir, card.id)
+    return moveCard(tasksDir, card.id, 'queue')
+  }
   const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
   const moved = moveCard(tasksDir, card.id, 'issues')
   appendFileSync(moved.path, `\n\n**Builder fallback** ${new Date().toISOString()}\n\n${detail}. Worktree, assignment and prior output are preserved for recovery; inspect this evidence before requeueing.\n`)
@@ -297,6 +307,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
       const operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
+        || quotaHold(boardRoot, engineKind(selectedEngine), now)
         || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings, now })
         || (slots <= 0 ? 'slots full' : null)
         || dependencyInstallHold({ card: freshCard, projectPath, tasksDir, gitSettings })
@@ -640,12 +651,20 @@ const busyError = () => Object.assign(new Error('a reviewer is already running')
 // Every poll, not only when review work exists: a reviewer that vanished or never took its
 // prompt frees its board-wide slot, and its idle pane is closed (an unowned reviewer pane
 // holds verdict routing). This project's inventory reconciles only this project's claims.
-export async function reconcileReviewers({ reviewRoot, project, tasksDir, agents, now = Date.now(), close = paneClose }) {
+export async function reconcileReviewers({ reviewRoot, boardRoot, project, tasksDir, agents, now = Date.now(), close = paneClose, read = paneRead }) {
   const open = new Set(readReviewClaims(reviewRoot).filter(c => !c.closedAt).map(c => c.id))
   syncReviewClaims(reviewRoot, [{ project, tasksDir, known: true, agents }], now)
   const retired = readReviewClaims(reviewRoot).filter(c => c.closedAt && open.has(c.id))
   for (const claim of retired) {
-    if (agents.some(a => a.pane_id === claim.paneId && a.agent_status === 'idle')) await close(claim.paneId, sessionOf(project)).catch(() => {})
+    const agent = agents.find(a => a.pane_id === claim.paneId)
+    // A Reviewer stopped by its engine's usage limit: block that engine and lift the
+    // "ended without a verdict" hold, so its cards wait in Review for the reset.
+    const limit = agent && boardRoot && claim.engine && usageLimit(await read(claim.paneId, sessionOf(project)).catch(() => ''), now)
+    if (limit) {
+      blockEngine(boardRoot, claim.engine, limit.until, now)
+      for (const id of claim.cards) updateWorkflow(claim.tasksDir, id, { operational: null })
+    }
+    if (limit || agent?.agent_status === 'idle') await close(claim.paneId, sessionOf(project)).catch(() => {})
   }
   return retired
 }
@@ -688,6 +707,9 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (!cards.length) throw new Error('nothing in Review')
     assignedCards = cards
     assertCardRunSelection(project, cards.map(c => c.id), 'reviewer')
+    const selected = assignmentForCard?.(cards[0], 'review')
+    const quota = quotaHold(boardRoot, selected?.engine ?? engineKind(engine))
+    if (quota) throw Object.assign(new Error(quota), { busy: true })
     for (const card of cards) {
       const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer') || startRetryHold(readWorkflow(tasksDir)[card.id], 'reviewer')
       if (limit) throw Object.assign(new Error(limit), { busy: true })
@@ -713,7 +735,6 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
       throw new Error(`${card.id}: audit prerequisite BLOCKED; restore required tools/auth/render setup before retrying Review`)
     }
 
-    const selected = assignmentForCard?.(cards[0], 'review')
     const selectedModel = selected?.model ?? model
     const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
     const reviewerEngine = auditMcpEngine(selectedEngine, cards, tasksDir)
@@ -723,7 +744,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
       const commit = integrated[card.id]?.commit
       if (snapshot.head && commit && !snapshotContains(snapshot.path, commit)) throw new Error(`${card.id}: review snapshot ${snapshot.head} does not contain integrated commit ${commit}`)
     }
-    updateReviewClaim(reviewRoot, claim.id, { snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
+    updateReviewClaim(reviewRoot, claim.id, { engine: engineKind(reviewerEngine), snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
 
     const workspace = await agentWorkspaceOr(projectPath, session)
     const created = await tabCreate({
@@ -812,6 +833,7 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
     const cards = readBoard(tasksDir).planning.filter((c) => wanted.has(c.id))
 
     if (!cards.length) throw new Error('nothing in Issues')
+    if (quotaHold(boardRoot, assignmentForCard?.(cards[0], 'issues')?.engine ?? engineKind(engine))) throw busyError()
 
     const workspace = await agentWorkspaceOr(projectPath, session)
     const created = await tabCreate({

@@ -18,6 +18,7 @@ import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-hand
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
+import { readQuota, quotaHolds } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
@@ -29,7 +30,7 @@ const lanHost = process.env.KANBAN_LAN_HOST
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard } = await import('./lib/cards.mjs')
-const { agentList, agentsForProject, isRunning, paneRead, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { agentList, agentsForProject, isRunning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -62,6 +63,8 @@ const projectSettingsOf = (project) => {
 const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
 const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
+// Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
+const quotaHoldsOf = (project) => quotaHolds(HERE, readBoard(tasksDirOf(project)), (card, stage) => assignmentForCard(project, card, stage).engine)
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
 
 function ensureTasks(project) {
@@ -295,7 +298,7 @@ function boardPayload(project) {
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or
     // files another card is still holding. Without it a held card is visually
     // identical to one simply waiting its turn.
-    holds: holdsFor(project),
+    holds: { ...holdsFor(project), ...quotaHoldsOf(project) },
     agents: cached.agents,
     herdrUp: cached.herdrUp,
     breakerTripped: breaker.breakerTripped,
@@ -405,14 +408,14 @@ async function pollProject(project) {
       .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
     // Before the stall check, so a reviewer slot freed here counts.
     try {
-      for (const claim of await reconcileReviewers({ reviewRoot: REVIEW_ROOT, project, tasksDir, agents })) activity(project, claim.cards.join(',') || '-', 'cleanup', `reviewer claim ${claim.paneId || claim.id} retired: ${claim.closeReason}`)
+      for (const claim of await reconcileReviewers({ reviewRoot: REVIEW_ROOT, boardRoot: HERE, project, tasksDir, agents })) activity(project, claim.cards.join(',') || '-', 'cleanup', `reviewer claim ${claim.paneId || claim.id} retired: ${claim.closeReason}`)
     } catch (err) { if (!err.busy) schedulerActivity(project, `review ownership unavailable: ${err.message}`) }
     // Safety net first, so a failure later in this poll cannot hide a stall.
     if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
       actingPolls.add(project)
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
-        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project), ...quotaHoldsOf(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)
@@ -482,14 +485,18 @@ async function pollProject(project) {
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
-        routeBuilderNoHandoff({
+        const routed = routeBuilderNoHandoff({
           tasksDir,
           cardId: id,
           reason: `Session ${beforeReap[id]?.pane_id || 'unknown'} ${agent ? `finished with status=${agent.agent_status}` : 'is missing'} without a valid Builder handoff from Working`,
           evidence,
           workspace: integrationPathOf(project),
           gitSettings,
+          boardRoot: HERE,
+          engine: assignmentForCard(project, card, card.trivial ? 'trivial' : 'working').engine,
         })
+        // Requeued to wait out an engine usage limit: its idle pane is of no further use.
+        if (routed.column === 'queue' && agent) await paneClose(agent.pane_id, sessionOf(project)).catch(() => {})
       } catch (err) {
         if (!ambiguousHold(project, err)) activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
       }
@@ -619,6 +626,12 @@ async function pollProject(project) {
     }
     const ageing = ownerAgeing(tasksDir)
     if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
+    // One alert per engine block (its reset time is in the key), shared by every project's poll.
+    for (const [kind, block] of Object.entries(readQuota(HERE))) {
+      if (!(block.until > Date.now())) continue
+      await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} usage limit`,
+        detail: `No ${kind} agent starts on any project until ${new Date(block.until).toLocaleString()}. Waiting cards keep their lanes and resume by themselves.` })
+    }
     const breaker = breakerState(project)
     if (breaker.breakerTripped) {
     await notifyManagerException({

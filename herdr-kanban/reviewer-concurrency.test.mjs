@@ -130,6 +130,21 @@ test('a claim whose pane is gone is retired on a poll with no review work (audit
   await reconcileReviewers({ reviewRoot: f.root, project: 'one', tasksDir: f.tasks, agents: [], now: 200000, close: async () => {} })
   assert.equal(readReviewClaims(f.root).filter(c => !c.closedAt).length, 0)
 })
+test('a Reviewer that stopped on an engine usage limit blocks that engine, closes its pane and leaves no failure on its cards', async t => {
+  const { quotaHold } = await import('./lib/quota.mjs')
+  const f = fixture(t); f.card('T-1')
+  const a = f.reserve(['T-1'], 'one', 1000)
+  updateReviewClaim(f.root, a.id, { paneId: 'a', phase: 'running', engine: 'codex' })
+  const agents = [{ name: 'r-t-1', pane_id: 'a', agent_status: 'done' }]
+  const closed = []
+  const poll = now => reconcileReviewers({ reviewRoot: f.root, boardRoot: f.root, project: 'one', tasksDir: f.tasks, agents, now, close: async pane => closed.push(pane),
+    read: async () => '■ You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.\n\n› Ask Codex to do anything' })
+  await poll(10000)
+  await poll(10000 + 180000)
+  assert.deepEqual(closed, ['a'])
+  assert.equal(readWorkflow(f.tasks)['T-1'].operational, null)
+  assert.match(quotaHold(f.root, 'codex', 10000 + 180000 + 60000), /^Codex usage limit; retrying at /)
+})
 test('isolated snapshots pin committed HEAD and separate build output; non-Git is report-only', t => {
   const f = fixture(t); const repo = join(f.root, 'repo'); mkdirSync(repo)
   const git = (...args) => { const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }

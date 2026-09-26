@@ -15,6 +15,7 @@ review-evidence/
 # Runtime state and evidence (not source)
 .server.pid
 .manager-alerts.json
+.engine-quota.json
 .watchdog-outage
 .watchdog-*-outage
 .lan-on

@@ -36,6 +36,7 @@ export async function notifyManagerException({
   title,
   detail,
   now = Date.now(),
+  cooldownMs = COOLDOWN_MS,
   send = pushover,
   inbox = join(boardRoot, '..', '_roles', 'KANBAN_MANAGER-INBOX.md'),
   log = herdrLog,
@@ -45,7 +46,7 @@ export async function notifyManagerException({
   state.alerts ||= {}
   const body = `${title}: ${detail}`.replace(/\s+/g, ' ').trim()
   const last = state.alerts[key]?.sentAt
-  if (last != null && now - last < COOLDOWN_MS) return { sent: false, reason: 'cooldown' }
+  if (last != null && now - last < cooldownMs) return { sent: false, reason: 'cooldown' }
 
   state.alerts[key] = { sentAt: now, body }
   writeState(file, state)

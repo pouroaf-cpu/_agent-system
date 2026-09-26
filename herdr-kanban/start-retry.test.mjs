@@ -175,3 +175,103 @@ test('Reviewer: a failed start closes the pane, releases the claim and retries; 
   assert.equal(findCard(tasks, 'T-1').column, 'owner')
   assert.match(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), /The Reviewer for T-1 failed to start twice in a row/)
 })
+
+// Injectbuddy 2026-09-26 01:30Z: the Codex account ran out and every Planner printed this,
+// went idle, and was counted as a no-handoff; I191, I221 and I240 reached Owner in minutes.
+const CODEX_LIMIT = `│ >_ OpenAI Codex (v0.156.1)                │
+╰───────────────────────────────────────────╯
+
+› Read C:/Users/PFrew/Projects/herdr-
+  kanban/.deliveries/7ea28d3e.md and follow it
+  exactly; it is your complete task.
+
+
+↳ Hook · PONYTAIL:FULL
+
+■ You’ve hit your usage limit. Visit
+https://chatgpt.com/codex/settings/usage to
+purchase more credits or try again at Oct
+1st, 2026 10:36 AM.
+
+
+› Ask Codex to do anything
+
+  GPT-6-Sol high · ~\\KanbanProjec…  ⚠ 4 · f2`
+
+test('an engine usage-limit screen is recognised with its reset time; other output is not', async () => {
+  const { usageLimit } = await import('./lib/quota.mjs')
+  const now = Date.parse('2026-09-26T01:33:14Z'), hour = 3600000
+  assert.deepEqual(usageLimit(CODEX_LIMIT, now), { until: new Date(2026, 9, 1, 10, 36).getTime() }, 'local time, as Codex prints it')
+  assert.equal(usageLimit('saved planner output\n› Ask Codex to do anything', now), null)
+  assert.equal(usageLimit(`■ You’ve hit your usage limit. Try again later.\n${'working on the card\n'.repeat(30)}`, now), null, 'only the end of the screen counts, not old scrollback')
+  assert.deepEqual(usageLimit('Claude usage limit reached. Your limit will reset soon.', now), { until: now + hour }, 'unreadable reset: an hour')
+  const five = new Date(now); five.setHours(17, 0, 0, 0); if (five <= now) five.setDate(five.getDate() + 1)
+  assert.deepEqual(usageLimit('5-hour limit reached ∙ resets 5pm', now), { until: five.getTime() })
+  assert.deepEqual(usageLimit('Claude AI usage limit reached|1790400000', now), { until: 1790400000000 })
+})
+
+test('a usage limit blocks that engine: the card keeps its lane with no failure counted, nothing of that engine starts, the wait is not a stall, and work resumes after the reset', async () => {
+  const { quotaHold, quotaHolds } = await import('./lib/quota.mjs')
+  const { checkStalls } = await import('./lib/stall-watchdog.mjs')
+  const { readBoard } = await import('./lib/cards.mjs')
+  const tasks = project(), boardRoot = join(tasks, '..')
+  const card = createCard(tasks, { title: 'Proof', brief: 'A specific approved outcome' })
+  mkdirSync(join(tasks, 'queue')); writeFileSync(join(tasks, 'queue', 'T-9.md'), '# T-9 — task\n' + plan)
+  const now = Date.now(), until = Math.ceil((now + 2 * 86400000) / 60000) * 60000
+  const reset = new Date(until).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  let agents = [], panes = 0, screen = ''
+  const closes = []
+  const io = {
+    agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+    tabCreate: async () => ({ root_pane: { pane_id: `q-${++panes}` } }),
+    agentStart: async ({ name, paneId }) => { agents = [{ name, pane_id: paneId, agent_status: 'idle' }] },
+    deliver: async () => {}, recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    paneClose: async pane => { closes.push(pane); agents = [] }, paneRead: async () => screen,
+  }
+  const args = { project: 'Quota', projectPath: tasks, tasksDir: tasks, boardRoot, model: 'gpt-6-sol', engine: 'codex', io, handoffGraceMs: 10 }
+  await runCardPlanner({ ...args, now })
+  screen = CODEX_LIMIT.replace('Oct\n1st, 2026 10:36 AM', reset)
+  await runCardPlanner({ ...args, now: now + 1000 })
+  await runCardPlanner({ ...args, now: now + 2000 })
+  const owner = readCardPlanners(tasks)[card.id]
+  assert.equal(findCard(tasks, card.id).column, 'planning')
+  assert.equal(owner.noHandoffCount, undefined, 'not a no-handoff')
+  assert.deepEqual(closes, ['q-1'], 'the idle pane is closed')
+  const hold = `Codex usage limit; retrying at ${new Date(until).toISOString()}`
+  assert.equal(quotaHold(boardRoot, 'codex', now + 3000), hold)
+  assert.equal(quotaHold(boardRoot, 'claude', now + 3000), null, 'only that engine')
+
+  await runCardPlanner({ ...args, now: now + 3000 })
+  assert.equal(panes, 1, 'no Planner starts while blocked')
+  let builds = 0
+  const spawn = async () => { builds++; return { pane_id: 'b1' } }
+  await autoSpawn({ project: 'QuotaBuild', projectPath: boardRoot, tasksDir: tasks, boardRoot, max: 2, agents: [], engine: { kind: 'codex' }, spawn, now: now + 3000 })
+  assert.equal(builds, 0, 'no Builder starts while blocked')
+  assert.equal(holdsFor('QuotaBuild')['T-9'], hold)
+  const holds = quotaHolds(boardRoot, readBoard(tasks), () => 'codex', now + 3000)
+  assert.deepEqual(holds, { [card.id]: hold, 'T-9': hold })
+  assert.deepEqual(checkStalls({ tasksDir: tasks, holds, minutes: 1, now: now + 30 * 60000 }), [], 'waiting out the limit is not a stall')
+
+  await runCardPlanner({ ...args, now: until + 1000 })
+  assert.equal(panes, 2, 'after the reset a fresh Planner starts')
+  assert.equal(readCardPlanners(tasks)[card.id].replacementAttempts, 0, 'not a failed-launch replacement')
+  await autoSpawn({ project: 'QuotaBuild', projectPath: boardRoot, tasksDir: tasks, boardRoot, max: 2, agents: [], engine: { kind: 'codex' }, spawn, now: until + 1000 })
+  assert.equal(builds, 1, 'and Builders start again')
+})
+
+test('Builder: a usage-limit screen sends the card back to Queue to wait instead of Issues; the Reviewer waits too', async () => {
+  const { routeBuilderNoHandoff } = await import('./lib/autospawn.mjs')
+  const { quotaHold } = await import('./lib/quota.mjs')
+  const tasks = project(), boardRoot = join(tasks, '..')
+  mkdirSync(join(tasks, 'working')); writeFileSync(join(tasks, 'working', 'T-1.md'), '# T-1 — task\n' + plan)
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Session b1 finished with status=done without a valid Builder handoff from Working', evidence: CODEX_LIMIT, workspace: boardRoot, boardRoot, engine: 'codex', now: Date.parse('2026-09-26T01:33:14Z') })
+  assert.equal(moved.column, 'queue')
+  assert.equal(readWorkflow(tasks)['T-1']?.operational, undefined, 'no failure recorded')
+  assert.match(quotaHold(boardRoot, 'codex', Date.parse('2026-09-26T02:00:00Z')), /^Codex usage limit; retrying at /)
+
+  mkdirSync(join(tasks, 'review')); writeFileSync(join(tasks, 'review', 'T-2.md'), '# T-2 — task\n' + plan)
+  herdr.startError = null; herdr.closed = []
+  const err = await spawnReviewer({ project: 'Proof', projectPath: boardRoot, tasksDir: tasks, boardRoot, reviewRoot: root, model: 'm', engine: 'codex', cardIds: ['T-2'], inventory: async () => [] }).catch(e => e)
+  assert.equal(err.busy, true); assert.match(err.message, /Codex usage limit/)
+  assert.deepEqual(herdr.closed, []); assert.equal(findCard(tasks, 'T-2').column, 'review')
+})
