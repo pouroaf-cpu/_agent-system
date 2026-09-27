@@ -3,7 +3,7 @@
 // it waits, and exits with one line when the Manager has something to do:
 //   OWNER/POU <file>  a card landed in Owner or Pou
 //   INBOX <line>      KANBAN_MANAGER-INBOX.md got a line (alerts, FOUND --board)
-//   STUCK <project>   a project's stuck count went up and stayed up a minute
+//   STUCK <project>   a project's stuck count went up and stayed up three minutes
 //   RE-ARM            12 h passed quietly (a lifetime cap, so an orphan cannot outlive
 //                     its chat the way `tail -F` did under Monitor)
 // Re-run it after every wake.
@@ -31,7 +31,7 @@ const stuck = async () => {
 const done = line => { console.log(line); process.exit(0) }
 const seen = new Set(cards())
 let lines = inboxLines().length
-let stuckBefore = await stuck() ?? {}, rising = new Set()
+let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
 
 for (let tick = 0; ; tick++) {
@@ -44,12 +44,13 @@ for (let tick = 0; ; tick++) {
   if (tick % 6 === 5) {
     const now = await stuck()
     if (now) {
-      // A rise must hold for two checks a minute apart: a card whose blocker just
-      // landed reads "stuck" for the seconds before its Planner starts (I341, 2026-09-27).
+      // A rise must hold for three minutes: a card whose blocker just landed reads "stuck"
+      // until integration finishes and its Planner starts (I341 8 s, I344 68 s, 2026-09-27).
       const worse = Object.keys(now).filter(p => now[p] > (stuckBefore[p] || 0))
-      const confirmed = worse.filter(p => rising.has(p))
+      for (const p of Object.keys(rising)) if (!worse.includes(p)) delete rising[p]
+      for (const p of worse) rising[p] = (rising[p] || 0) + 1
+      const confirmed = worse.filter(p => rising[p] >= 4)
       if (confirmed.length) done(`STUCK ${confirmed.map(p => `${p}=${now[p]}`).join(', ')}`)
-      rising = new Set(worse)
       if (!worse.length) stuckBefore = now
     }
   }
