@@ -67,9 +67,9 @@ test('isolated HTTP list/open validates registered report identity and does not 
   const configPath = put('board.config.json', JSON.stringify(config))
   const child = spawn(process.execPath, ['server.mjs'], { cwd: new URL('.', import.meta.url), env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'unavailable-audit-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   t.after(() => { if (child.exitCode === null) child.kill() })
-  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('startup timeout')), 10000); child.stdout.on('data', b => { if (String(b).includes('http://')) { clearTimeout(timer); resolve() } }); child.on('exit', c => { clearTimeout(timer); reject(new Error(`exit ${c}`)) }) })
+  // server.mjs prints its port: another test run may hold the config one.
+  const base = await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('startup timeout')), 30000); child.stdout.on('data', b => { const port = String(b).match(/127\.0\.0\.1:(\d+)/)?.[1]; if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}`) } }); child.on('exit', c => { clearTimeout(timer); reject(new Error(`exit ${c}`)) }) })
   try {
-    const base = 'http://127.0.0.1:18783'
     const list = await fetch(base + '/api/audits?project=Proof').then(r => r.json())
     assert.equal(list.project, 'Proof'); assert.equal(list.audits.length, 2)
     const reportId = list.audits.find(a => a.reports.length).reports[0].id

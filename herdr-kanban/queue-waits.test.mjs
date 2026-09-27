@@ -2,7 +2,7 @@
 // holder in Owner, and workspace-prefixed file paths that were doubled.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -11,6 +11,13 @@ import { dependencyInstallHold, prepareCardWorktree, readWorktrees, reconcileCom
 import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
+
+// Running installs are recorded beside the board config. Without this the tests read the live
+// board's record and queue behind its real npm install (2026-09-27: failed only while it ran).
+const stateDir = mkdtempSync(join(tmpdir(), 'hkb-waits-state-'))
+process.env.KANBAN_CONFIG = join(stateDir, 'board.config.json')
+copyFileSync(new URL('./board.config.json', import.meta.url), process.env.KANBAN_CONFIG)
+process.on('exit', () => rmSync(stateDir, { recursive: true, force: true }))
 
 const git = (cwd, ...args) => {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })

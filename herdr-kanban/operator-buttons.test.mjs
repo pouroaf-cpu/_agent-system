@@ -123,12 +123,12 @@ test('board API: Approve and Finish route, release the archive, and a held Finis
   registry(tasks, { 'T-3': 'ready', 'T-4': 'building' })
   const child = spawn(process.execPath, [join(import.meta.dirname, 'server.mjs')], { cwd: import.meta.dirname, env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'nonexistent-operator-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   t.after(() => { if (child.exitCode === null) child.kill() })
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 10000)
-    child.stdout.on('data', bytes => { if (String(bytes).includes('http://')) { clearTimeout(timer); resolve() } })
+  const base = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 30000)
+    child.stdout.on('data', bytes => { const port = String(bytes).match(/127\.0\.0\.1:(\d+)/)?.[1]; if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}`) } })
     child.on('exit', code => { clearTimeout(timer); reject(new Error(`test server exited ${code}`)) })
   })
-  const post = (op, id) => fetch(`http://127.0.0.1:18785/api/${op}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id }) }).then(async r => ({ status: r.status, ...(await r.json()) }))
+  const post = (op, id) => fetch(`${base}/api/${op}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id }) }).then(async r => ({ status: r.status, ...(await r.json()) }))
   const approved = await post('approve', 'T-1')
   assert.deepEqual([approved.status, approved.card.column], [200, 'review'])
   assert.equal((await post('approve', 'T-1')).status, 400, 'only Owner cards')
@@ -141,5 +141,5 @@ test('board API: Approve and Finish route, release the archive, and a held Finis
   const review = await post('finish', 'T-4')
   assert.deepEqual([review.status, review.card.column], [200, 'completed'])
   assert.match(review.held, /no Git integration settings/)
-  assert.match(await fetch('http://127.0.0.1:18785/board.js').then(r => r.text()), /card-op[\s\S]*'Approve' : 'Finish'/)
+  assert.match(await fetch(`${base}/board.js`).then(r => r.text()), /card-op[\s\S]*'Approve' : 'Finish'/)
 })

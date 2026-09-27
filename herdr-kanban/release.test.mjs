@@ -103,13 +103,14 @@ test('release endpoints: start pauses with a marker, finish fast-forwards and un
     projectSettings: { Proof: { integrationPath: r.integ } } }))
   const child = spawn(process.execPath, [join(here, 'server.mjs')], { cwd: here, env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'nonexistent-release-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   t.after(() => { if (child.exitCode === null) child.kill() })
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 10000)
-    child.stdout.on('data', bytes => { if (String(bytes).includes('http://')) { clearTimeout(timer); resolve() } })
+  // The config port is only where server.mjs starts looking: another test run may hold it.
+  const base = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 30000)
+    child.stdout.on('data', bytes => { const port = String(bytes).match(/127\.0\.0\.1:(\d+)/)?.[1]; if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}`) } })
     child.on('exit', code => { clearTimeout(timer); reject(new Error(`test server exited ${code}`)) })
   })
-  const post = (path, body) => fetch(`http://127.0.0.1:18791/api/release/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async res => ({ status: res.status, ...await res.json() }))
-  const board = p => fetch(`http://127.0.0.1:18791/api/board?project=${p}`).then(res => res.json())
+  const post = (path, body) => fetch(`${base}/api/release/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async res => ({ status: res.status, ...await res.json() }))
+  const board = p => fetch(`${base}/api/board?project=${p}`).then(res => res.json())
 
   const noMarker = await post('finish', { project: 'Proof', commit: r.release })
   assert.equal(noMarker.status, 400); assert.match(noMarker.error, /no release in progress/i)

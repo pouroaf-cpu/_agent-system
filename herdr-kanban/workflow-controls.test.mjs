@@ -181,22 +181,22 @@ test('product corrections route by cause and retain the five-return stop', t => 
 
 test('project control API survives a real server restart with no agent dispatch', async t => {
   const f = fixture(t)
-  let child
+  let child, base // server.mjs prints its port; another test run may hold the config one
   const launch = async () => {
     child = spawn(process.execPath, [join(here, 'server.mjs')], { cwd: here, env: { ...process.env, KANBAN_CONFIG: f.config, HERDR_BIN_PATH: 'nonexistent-workflow-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('test server startup timeout')), 10000)
-      child.stdout.on('data', bytes => { if (String(bytes).includes('http://')) { clearTimeout(timer); resolve() } })
+    base = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('test server startup timeout')), 30000)
+      child.stdout.on('data', bytes => { const port = String(bytes).match(/127\.0\.0\.1:(\d+)/)?.[1]; if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}`) } })
       child.on('exit', code => { clearTimeout(timer); reject(new Error(`test server exited ${code}`)) })
     })
   }
   const stop = () => new Promise(resolve => { child.once('exit', resolve); child.kill() })
   t.after(() => { if (child && child.exitCode === null) child.kill() })
   await launch()
-  const post = paused => fetch('http://127.0.0.1:18779/api/project-control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', paused }) }).then(r => r.json())
+  const post = paused => fetch(`${base}/api/project-control`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', paused }) }).then(r => r.json())
   assert.equal((await post(true)).control.paused, true)
   await stop(); await launch()
-  const response = await fetch('http://127.0.0.1:18779/api/board?project=Proof').then(r => r.json())
+  const response = await fetch(`${base}/api/board?project=Proof`).then(r => r.json())
   assert.equal(response.control.paused, true)
   assert.equal((await post(false)).control.paused, false)
   assert.equal(controlState('Other').paused, true)
@@ -205,17 +205,16 @@ test('project control API survives a real server restart with no agent dispatch'
 
 test('board operator can archive each lane while agent archive remains gated', async t => {
   const f = fixture(t)
-  const archiveUrl = 'http://127.0.0.1:18779/api/move'
   let child
   child = spawn(process.execPath, [join(here, 'server.mjs')], { cwd: here, env: { ...process.env, KANBAN_CONFIG: f.config, HERDR_BIN_PATH: 'nonexistent-workflow-test-herdr' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   t.after(() => { if (child && child.exitCode === null) child.kill() })
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 10000)
-    child.stdout.on('data', bytes => { if (String(bytes).includes('http://')) { clearTimeout(timer); resolve() } })
+  const base = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('test server startup timeout')), 30000)
+    child.stdout.on('data', bytes => { const port = String(bytes).match(/127\.0\.0\.1:(\d+)/)?.[1]; if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}`) } })
     child.on('exit', code => { clearTimeout(timer); reject(new Error(`test server exited ${code}`)) })
   })
 
-  const postArchive = id => fetch(archiveUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id, to: 'archive' }) })
+  const postArchive = id => fetch(`${base}/api/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id, to: 'archive' }) })
   for (const lane of ['review', 'completed', 'issues', 'owner']) {
     const card = createCard(f.tasks, { title: `operator archive from ${lane}`, brief: 'board archive' })
     if (lane === 'completed') writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Trivial:** no', '**Trivial:** yes'))
