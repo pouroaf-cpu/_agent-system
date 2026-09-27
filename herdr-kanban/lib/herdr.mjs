@@ -3,7 +3,9 @@
 
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
@@ -17,6 +19,25 @@ const CLAUDE_BROWSER_MCP = fileURLToPath(new URL('../claude-browser-mcp.json', i
 // The built-ins board agents called in 135 audited runs; the rest (Artifact alone ~12.9k
 // tokens) rode along on every call. MCP tools are not affected by --tools.
 const CLAUDE_BOARD_TOOLS = 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop'
+
+// Codex board profile: `codex -p board` layers ~/.codex/board.config.toml on the user config.
+// It turns off the curated Vercel and Google Drive skills (~3.3k tokens a call, never used by
+// board agents). Those plugins are enabled account-side, so only per-SKILL.md entries work, and
+// passing them with -c made a 7.8 KB start command. Rewritten at each Codex start so a plugin
+// update's new version folder is covered; its entries add to the user's own skills.config list.
+const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex')
+export const CODEX_BOARD_PROFILE = join(CODEX_HOME, 'board.config.toml')
+export function writeCodexBoardProfile() {
+  const cache = join(CODEX_HOME, 'plugins', 'cache', 'openai-curated-remote')
+  const list = dir => { try { return readdirSync(dir) } catch { return [] } }
+  const skills = ['vercel', 'google-drive'].flatMap(plugin => list(join(cache, plugin)).flatMap(version =>
+    list(join(cache, plugin, version, 'skills')).map(skill => join(cache, plugin, version, 'skills', skill, 'SKILL.md'))))
+    .filter(path => existsSync(path))
+  const toml = '# Written by herdr-kanban for board agents (codex -p board). Do not edit.\n' +
+    skills.map(path => `\n[[skills.config]]\npath = '${path}'\nenabled = false\n`).join('')
+  try { if (readFileSync(CODEX_BOARD_PROFILE, 'utf8') === toml) return } catch {}
+  writeFileSync(CODEX_BOARD_PROFILE, toml)
+}
 
 const CONFIG = (() => {
   try { return JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8')) } catch { return {} }
@@ -333,11 +354,12 @@ async function hold(paneId, fn) {
 
 // By role letter (see ids.mjs), so old kb-* and new b-/p-/r-/i-/a- names match alike.
 // Operator's Claude fallback while Codex is out of usage (2026-09-26): Opus 5.5 plans, Sonnet 5 builds, Haiku 4.5 anywhere.
+// Operator 2026-09-27: Planners on Codex gpt-6-luna to balance usage.
 const BOARD_MODELS = {
   r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
-  i: ['gpt-5.6-luna', 'claude-opus-5-5', 'claude-haiku-4-5'],
-  p: ['gpt-5.6-luna', 'gpt-6-sol', 'claude-opus-5-5', 'claude-haiku-4-5'],
+  i: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-opus-5-5', 'claude-haiku-4-5'],
+  p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'claude-opus-5-5', 'claude-haiku-4-5'],
   b: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-sonnet-5', 'claude-haiku-4-5'],
 }
 
@@ -380,6 +402,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     if (!/orchestrator/i.test(name || '')) {
       const hooks = ['user_prompt_submit:0:0', 'post_tool_use:0:0', 'stop:1:0'].map(id => String.raw`'C:\Users\PFrew\.codex\hooks.json:` + id + `'={enabled=false}`)
       args.push('-c', `hooks.state={${hooks.join(',')}}`)
+      if (existsSync(CODEX_BOARD_PROFILE)) args.push('-p', 'board')
     }
     // Browser MCPs start ~4 node processes per Codex agent; 27 idle agents' worth
     // overloaded herdr (2026-09-24). Agents whose cards don't browse start without them.
@@ -424,6 +447,7 @@ export async function agentStart({ name, paneId, model, engine, kind, workspaceP
   assertPromptAllowed(session)
   name = await freeName(name, paneId, session)
   try {
+    if ((kind || (typeof engine === 'string' ? engine : engine?.kind)) === 'codex') { try { writeCodexBoardProfile() } catch { /* no profile: the agent starts without it */ } }
     const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs, browser })
     return { ...(await hold(paneId, () => herdr(args, { timeout: timeoutMs + 15000, session }))), name }
   } catch (err) {
