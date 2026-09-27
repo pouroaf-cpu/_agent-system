@@ -20,14 +20,14 @@ const handoff = (dir, id, n, engine, ...args) => {
   return spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8' })
 }
 
-// Operator 2026-09-27: a Codex Planner gets one try, then claude-opus-4-6 gets the other two.
+// Operator 2026-09-27: a Codex Planner gets one try, then claude-opus-5-5 gets the other two.
 test('the first Codex Planner blocker escalates the card to an Opus Planner; the third blocker goes to Owner', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'planner-escalation-'))
   try {
     const card = createCard(dir, { title: 'Hard plan', brief: 'x' })
     assert.equal(handoff(dir, card.id, 1, 'codex', 'issue', card.id, '[planning] blocker remains, attempt 1').status, 0)
     assert.equal(findCard(dir, card.id).column, 'planning')
-    assert.equal(readWorkflow(dir)[card.id].plannerEscalation.model, 'claude-opus-4-6')
+    assert.equal(readWorkflow(dir)[card.id].plannerEscalation.model, 'claude-opus-5-5')
     const log = readFileSync(join(dir, 'codex-planner-failures.log'), 'utf8').trim().split('\n')
     assert.equal(log.length, 1)
     assert.deepEqual(log[0].split('\t').slice(1), [card.id, '[planning] blocker remains, attempt 1'])
@@ -44,18 +44,18 @@ test('the first Codex Planner blocker escalates the card to an Opus Planner; the
     const assignmentForCard = () => ({ engine: 'codex', model: 'gpt-6-luna', reasoning: 'high' })
     await runCardPlanner({ project: 'P', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-6-luna', engine: { kind: 'codex' }, assignmentForCard, io })
     assert.equal(starts.length, 1)
-    assert.equal(starts[0].model, 'claude-opus-4-6')
+    assert.equal(starts[0].model, 'claude-opus-5-5')
     assert.equal(starts[0].engine.kind, 'claude')
     assert.match(prompts[0], /Escalation: a Codex Planner could not make this card build-ready/)
     // The launch guard lets a Planner start on it.
-    assert.deepEqual(agentStartArgs({ name: starts[0].name, paneId: 'p9', model: 'claude-opus-4-6', engine: starts[0].engine }).slice(-2), ['--model', 'claude-opus-4-6'])
+    assert.deepEqual(agentStartArgs({ name: starts[0].name, paneId: 'p9', model: 'claude-opus-5-5', engine: starts[0].engine }).slice(-2), ['--model', 'claude-opus-5-5'])
 
     assert.equal(handoff(dir, card.id, 2, 'claude', 'issue', card.id, '[planning] blocker remains, attempt 2').status, 0)
     assert.equal(findCard(dir, card.id).column, 'planning')
     assert.equal(handoff(dir, card.id, 3, 'claude', 'issue', card.id, '[planning] blocker remains, attempt 3').status, 0)
     const moved = findCard(dir, card.id)
     assert.equal(moved.column, 'owner')
-    assert.match(moved.ask?.text || '', /Three Planners in a row[\s\S]*claude-opus-4-6 escalation Planners also failed[\s\S]*attempt 3/)
+    assert.match(moved.ask?.text || '', /Three Planners in a row[\s\S]*claude-opus-5-5 escalation Planners also failed[\s\S]*attempt 3/)
     assert.equal(readFileSync(join(dir, 'codex-planner-failures.log'), 'utf8').trim().split('\n').length, 1, 'only Codex failures are logged')
 
     operatorRetry(dir, card.id, 'planning')
@@ -107,7 +107,7 @@ AC1 | src/app.mjs helper() | node --test test/app.test.mjs passes | return 0 and
 ## Prerequisites
 Existing Node runtime; no additional access.
 `)
-    updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-4-6', at: 'x' } })
+    updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-5-5', at: 'x' } })
     const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
     const saved = readWorkflow(tasks)['T-1']

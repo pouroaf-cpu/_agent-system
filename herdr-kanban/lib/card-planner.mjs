@@ -75,7 +75,7 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 }
 export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
 // A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
-export const ESCALATION_MODEL = 'claude-opus-4-6'
+export const ESCALATION_MODEL = 'claude-opus-5-5'
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {

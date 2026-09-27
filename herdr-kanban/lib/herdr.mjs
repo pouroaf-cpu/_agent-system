@@ -363,7 +363,7 @@ async function hold(paneId, fn) {
 
 // By role letter (see ids.mjs), so old kb-* and new b-/p-/r-/i-/a- names match alike.
 // Operator's Claude fallback while Codex is out of usage (2026-09-26): Opus 5.5 plans, Sonnet 5 builds, Haiku 4.5 anywhere.
-// Operator 2026-09-27: Planners on Codex gpt-6-luna to balance usage; claude-opus-4-6 plans cards a Codex Planner could not.
+// Operator 2026-09-27: Planners on Codex gpt-6-luna to balance usage; claude-opus-5-5 (was 4-6: its cache reads cost ~2.5x) plans cards a Codex Planner could not.
 const BOARD_MODELS = {
   r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
