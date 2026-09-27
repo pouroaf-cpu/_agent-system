@@ -13,6 +13,10 @@ const run = promisify(execFile)
 
 const HERDR = process.env.HERDR_BIN_PATH || 'herdr'
 const CLAUDE_AGENT_SETTINGS = fileURLToPath(new URL('../claude-agent-settings.json', import.meta.url))
+const CLAUDE_BROWSER_MCP = fileURLToPath(new URL('../claude-browser-mcp.json', import.meta.url))
+// The built-ins board agents called in 135 audited runs; the rest (Artifact alone ~12.9k
+// tokens) rode along on every call. MCP tools are not affected by --tools.
+const CLAUDE_BOARD_TOOLS = 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop'
 
 const CONFIG = (() => {
   try { return JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8')) } catch { return {} }
@@ -369,9 +373,13 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
       args.push('--sandbox', cfg.sandbox, '--ask-for-approval', cfg.approvalPolicy || 'on-request')
     } else args.push('--dangerously-bypass-approvals-and-sandbox')
     args.push('-c', 'check_for_update_on_startup=false')
-    // Intake belongs to the orchestrator; disable only its interview hook for workers.
+    // Workers skip the orchestrator's Grill Me intake hook and the impeccable design lint
+    // (PostToolUse and the Stop "Design deep pass"). -c splits a dotted path on every '.',
+    // so hook ids (which contain '.codex\hooks.json') only work inside an inline table,
+    // which Codex merges into the user's hooks.state rather than replacing it.
     if (!/orchestrator/i.test(name || '')) {
-      args.push('-c', String.raw`hooks.state.'C:\Users\PFrew\.codex\hooks.json:user_prompt_submit:0:0'.enabled=false`)
+      const hooks = ['user_prompt_submit:0:0', 'post_tool_use:0:0', 'stop:1:0'].map(id => String.raw`'C:\Users\PFrew\.codex\hooks.json:` + id + `'={enabled=false}`)
+      args.push('-c', `hooks.state={${hooks.join(',')}}`)
     }
     // Browser MCPs start ~4 node processes per Codex agent; 27 idle agents' worth
     // overloaded herdr (2026-09-24). Agents whose cards don't browse start without them.
@@ -381,6 +389,12 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     args.push(...guardArgs)
   } else {
     args.push('--dangerously-skip-permissions')
+    // --disable-slash-commands drops the skill listing; cards name skills by SKILL.md path.
+    args.push('--tools', CLAUDE_BOARD_TOOLS, '--disable-slash-commands')
+    // Same rule as the Codex branch: no user MCPs or claude.ai connectors, and the browser MCP
+    // only when the card browses.
+    args.push('--strict-mcp-config')
+    if (browser) args.push('--mcp-config', CLAUDE_BROWSER_MCP)
     // HERDR started from a Claude session passes on its CLAUDE_CODE_CHILD_SESSION
     // marker, which turns off transcript saving, and the transcript is where the
     // board reads a Claude agent's token usage.

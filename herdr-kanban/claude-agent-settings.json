@@ -2,6 +2,15 @@
   "env": {
     "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
   },
+  "autoMemoryEnabled": false,
+  "promptSuggestionEnabled": false,
+  "enabledPlugins": {
+    "vercel-plugin@vercel": false,
+    "i-have-adhd@i-have-adhd": false,
+    "agents-design-experience@buildwithclaude": false,
+    "andrej-karpathy-skills@karpathy-skills": false,
+    "agent-coms@pouroa-plugins": false
+  },
   "hooks": {
     "Stop": [
       { "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/agent-stop-hook.mjs", "timeout": 30 }] }
