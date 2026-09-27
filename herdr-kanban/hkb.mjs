@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url'
 import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
+import { recoveryState } from './lib/recovery.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
 
 const args = process.argv.slice(2)
@@ -220,9 +221,16 @@ try {
     const category = failureCategory(note)
     if (category === 'incidental') fail('Incidental findings alone are not a failed handoff: record evidence/classification in the current result and use the normal done/pass handoff only when every agreed criterion is met. In-scope or change-caused defects still require issue/rework.')
     target = failureDestination(category, current.column)
-    appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note })
+    // A second Builder on the same plan that also cannot implement it is a plan gap:
+    // Injectbuddy I340 hit the plan's own stop rule five times in six minutes, each
+    // tagged [implementation], and each re-queued to a fresh Builder (2026-09-27).
+    const plan = recoveryState(readFileSync(current.path, 'utf8')).plan
+    const prior = readWorkflow(tasksDir)[current.id]?.correction
+    const repeat = current.column === 'working' && category === 'implementation' && prior?.category === 'implementation' && prior.plan === plan
+    if (repeat) target = 'planning'
+    appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note, ...(repeat ? { routed: 'planning: second Builder implementation failure on the same plan' } : {}) })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
-    updateWorkflow(tasksDir, current.id, { correction: { category, note } })
+    updateWorkflow(tasksDir, current.id, { correction: { category, note, plan } })
     // Planners that keep reporting a blocker loop through fresh sessions: I152/I168/I184
     // each ran 25 overnight, worded differently every time. The third in a row is the
     // operator's question.
