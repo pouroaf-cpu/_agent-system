@@ -7,7 +7,7 @@ import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, as
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
-import { agentName, issuesSweeperPrompt } from './prompt.mjs'
+import { agentName, plannerPrompt } from './prompt.mjs'
 import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
@@ -25,13 +25,23 @@ export function correctionFingerprint(text) {
 }
 
 // correction: false ends the session as a handoff without marking a correction (hkb wait).
-export function requestPlannerCorrection(dir, cardId, { correction = true } = {}) {
+// failure: a board-detected failure sent the card back (Builder fallback, file-hold cycle,
+// expired Queue hold). It counts a correction round; the same failure three times in a row
+// is the operator's question (I152/I184 ran 25 each; throughput audit 2026-09-26 F7).
+export function requestPlannerCorrection(dir, cardId, { correction = true, failure = false } = {}) {
   const owners = readCardPlanners(dir)
   const owner = owners[String(cardId).toUpperCase()]
   if (!owner || ['retired', 'retiring'].includes(owner.lifecycle)) return false
   owner.submitted = false
   owner.replacementAttempts = 0
   if (correction) owner.correctionRequestedAt = new Date().toISOString()
+  if (failure) {
+    const fingerprint = correctionFingerprint(readFileSync(findCard(dir, cardId).path, 'utf8'))
+    owner.correctionRounds = (owner.correctionRounds || 0) + 1
+    owner.sameFailureCount = owner.failureFingerprint === fingerprint ? (owner.sameFailureCount || 0) + 1 : 1
+    owner.failureFingerprint = fingerprint
+    if (owner.sameFailureCount >= 3) owner.askOwner = true
+  }
   delete owner.error
   delete owner.handoffRetried
   delete owner.inactiveSince
@@ -41,10 +51,26 @@ export function requestPlannerCorrection(dir, cardId, { correction = true } = {}
   return true
 }
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
-// restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
+// restart the workflow-limit counters, and give Planning a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
   updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null, waitFor: null })
-  if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
+  if (to === 'planning' || to === 'issues') requestPlannerCorrection(tasksDir, cardId)
+}
+// Issues is retired (2026-09-25). A card an older board left there goes to Planning on
+// startup; its held failure is cleared so a fresh Planner takes it. A card that cannot move
+// (a duplicate id) stays in Issues, still shown, for the operator to move.
+export function drainIssues(tasksDir, onError = () => {}) {
+  const moved = []
+  for (const card of readBoard(tasksDir).issues) {
+    try {
+      moveCard(tasksDir, card.id, 'planning')
+      appendHistory(tasksDir, card.id, { event: 'issues-retired', note: 'Issues lane retired; moved to Planning on board start' })
+      updateWorkflow(tasksDir, card.id, { operational: null })
+      requestPlannerCorrection(tasksDir, card.id, { failure: true })
+      moved.push(card.id)
+    } catch (err) { onError(card, err) }
+  }
+  return moved
 }
 // Board Approve button on a Pou or Owner card: record the decision, add the operator-only
 // investigation marker when that is all the plan waits on, then retry the card in
@@ -76,7 +102,6 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
 // A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
 export const ESCALATION_MODEL = 'claude-opus-5-5'
-const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
@@ -167,7 +192,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
@@ -180,7 +205,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     // Retirement preserves the ledger and card; only the agent pane is closed. A card
     // past Planning never goes back to this session (corrections get a fresh one), and
     // each idle Codex Planner holds its MCP servers: 27 of them overloaded herdr (Tradeflow).
-    for (const card of Object.entries(board).filter(([lane]) => !['planning', 'issues'].includes(lane)).flatMap(([, cards]) => cards)) {
+    for (const card of Object.entries(board).filter(([lane]) => lane !== 'planning').flatMap(([, cards]) => cards)) {
       if (cardRunContext()) continue
       const owner = owners[card.id]
       if (!owner || owner.closedAt) continue
@@ -194,7 +219,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
     }
     // Owner is an explicit stop, including older technical-exhaustion cards.
-    for (let card of [...board.issues, ...board.planning]) {
+    for (let card of board.planning) {
       try {
       if (onlyIds && !onlyIds.includes(card.id)) continue
       // Two live copies of one id hold only that card, never the whole run (Tradeflow T-42).
@@ -205,7 +230,6 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       }
       // A legacy card in Planning has no Planner path: convert it, then plan it normally.
       if (!card.cardOwned && !card.audit) {
-        if (card.column !== 'planning') continue
         card = convertLegacyCard(tasksDir, card)
       }
       // Waiting only on an operator-only approval: ask the operator, never re-prompt (T-148).
@@ -265,21 +289,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         }
       }
       const held = !deliveryFailed && operationalHold(tasksDir, card, projectPath)
-      // A Planner that stopped without a handoff is not a reason to park the card
-      // in Issues (older boards did; T-8, 2026-09-24): lift that hold and recover.
-      const plannerHold = !!held && card.column === 'issues' && !!owner && PLANNER_NO_HANDOFF.test(held) && !cardRunContext()
-      if (held && !plannerHold) continue
+      if (held) continue
       if (checkWorkflowLimits(tasksDir, card.id, 'planner')) continue
       if (startRetryHold(readWorkflow(tasksDir)[card.id], 'planner', now)) continue // a transient start failure backs off
       if (mission?.id && card.mission !== mission.id) continue
-      if (plannerHold) {
-        updateWorkflow(tasksDir, card.id, { operational: null })
-        owner.noHandoffCount = (owner.noHandoffCount || 0) + 1
-        owner.noHandoffReason ||= held
-        save(tasksDir, owners)
-        if (owner.noHandoffCount >= 2) { askOwnerAfterNoHandoffs(card, owner); continue }
-      }
-      let fresh = plannerHold || deliveryFailed || !!owner?.startRetry
+      let fresh = deliveryFailed || !!owner?.startRetry
       if (owner?.lifecycle === 'retiring') continue
       if (owner?.lifecycle === 'retired') {
         if (!owner.recoveryReady || !cardRunContext()) continue
@@ -287,30 +301,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         await submit(card, recovered.owner, recovered.agent)
         return { cards: [card.id], pane_id: recovered.owner.paneId, spawnedNewAgent: true }
       }
-      // Every fresh Issues transition starts the same bounded correction cycle.
-      if (card.column === 'issues' && owner) {
-        owner.correctionRounds = (owner.correctionRounds || 0) + 1
-        const text = readFileSync(card.path, 'utf8'), fingerprint = correctionFingerprint(text)
-        owner.sameFailureCount = owner.failureFingerprint === fingerprint ? (owner.sameFailureCount || 0) + 1 : 1
-        owner.failureFingerprint = fingerprint
-        owner.submitted = false
-        owner.replacementAttempts = 0
-        owner.correctionRequestedAt = new Date(now).toISOString()
-        delete owner.error
-        delete owner.inactiveSince
-        delete owner.handoffRetried
-        if (!plannerHold) delete owner.noHandoffCount // a new correction round
+      // The same board-detected failure a third time in a row (requestPlannerCorrection) is the
+      // operator's question: another Planner only repeats it (throughput audit 2026-09-26 F7).
+      if (owner?.askOwner) {
+        delete owner.askOwner
         save(tasksDir, owners)
-        // The same failure a third time in a row is the operator's question: another Planner
-        // only repeats it (I152/I184 ran 25 each; throughput audit 2026-09-26 F7).
-        if (owner.sameFailureCount >= 3) {
-          const moved = moveCard(tasksDir, card.id, 'owner')
-          writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} failed the same way ${owner.sameFailureCount} times in a row, so the board stopped re-planning it. The repeated blocker:\n\n${lastCorrection(text).slice(-1500)}\n\nHow should it be resolved (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.`)
-          continue
-        }
-        // A Planner going quiet is operational, not a failed plan: no failed return.
-        card = moveCard(tasksDir, card.id, 'planning', { intake: plannerHold })
-        if (['pou', 'owner'].includes(card.column)) continue
+        const moved = moveCard(tasksDir, card.id, 'owner')
+        writeCurrentFeedback(tasksDir, moved, 'Needs you', `${card.id} failed the same way ${owner.sameFailureCount} times in a row, so the board stopped re-planning it. The repeated blocker:\n\n${lastCorrection(readFileSync(moved.path, 'utf8')).slice(-1500)}\n\nHow should it be resolved (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.`)
+        continue
       }
       const escalate = (error) => {
         if (cardRunContext()) { stopCardRun(project, card.id, error.message); throw error }
@@ -407,8 +405,6 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         appendFileSync(card.path, `\n\n**Planner fallback** ${new Date(now).toISOString()}\n\n${reason}. A fresh Planner is taking over this card; the previous session's output is saved in the card history.\n`)
         fresh = true
       }
-      if (card.column === 'issues') card = moveCard(tasksDir, card.id, 'planning')
-      if (['pou', 'owner'].includes(card.column)) continue
       let spawnedNewAgent = false
       // Corrections and retries go to a fresh session, never back into an idle
       // (possibly day-old) one. An uncertain delivery keeps its pane for inspection.

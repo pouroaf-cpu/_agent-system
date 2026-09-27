@@ -335,7 +335,7 @@ export async function tabCreate({ cwd, label, focus = false, workspace, session 
 //
 // Refcounted, not a flag: a bound builder is protected the moment it's bound
 // (before agentStart even runs), so agentStart's own internal hold is enough
-// for it. An UNBOUND agent (the reviewer, the issues sweeper — deliberately
+// for it. An UNBOUND agent (the reviewer — deliberately
 // never bound to one card) has no such backstop; it's only protected by this
 // flag, and agentStart's hold used to release it the instant `agent start`
 // returned — before deliver() ever sent the actual prompt. In that gap the
@@ -392,7 +392,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
   const args = ['agent', 'start', name, '--kind', agentKind, '--pane', paneId, '--timeout', String(timeoutMs)]
   // Board agents run unattended, so a permission prompt is a pane that hangs
   // until its timeout with nobody there to answer it. Every spawn path (builder,
-  // reviewer, issues sweeper) calls agentStart, so the flag belongs here rather
+  // planner, reviewer) calls agentStart, so the flag belongs here rather
   // than at three call sites.
   assertManagedModel({ name, model })
   args.push('--')

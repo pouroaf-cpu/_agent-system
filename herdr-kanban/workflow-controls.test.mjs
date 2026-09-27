@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { controlState, setProjectPaused, assertPromptAllowed } from './lib/project-control.mjs'
 import { deliverWith, deliver, typedPrompt, resumeDeliveries, MAX_TYPED } from './lib/spawn.mjs'
 import { pendingDeliveries, saveDelivery, readDelivery, deliveryKey, promptPath } from './lib/delivery-state.mjs'
-import { workerPrompt, reviewerPrompt, issuesSweeperPrompt } from './lib/prompt.mjs'
+import { workerPrompt, reviewerPrompt, plannerPrompt } from './lib/prompt.mjs'
 import { focusedText, appendHistory, historyPath, writeBrief, writeCurrentFeedback } from './lib/card-history.mjs'
 import { failureDestination, operationalHold, recordOperationalFailure, readWorkflow, evidenceFingerprint } from './lib/workflow-state.mjs'
 import { checkWorkflowLimits } from './lib/workflow-limits.mjs'
@@ -274,7 +274,7 @@ test('every role is typed as a short one-line pointer; the file holds the task a
   const prompts = {
     builder: workerPrompt({ ...args, card }) + ' Implementation correction: continue from the existing commits.',
     reviewer: reviewerPrompt({ ...args, cards: [card, { ...card, id: 'T-98' }, { ...card, id: 'T-99' }], reviewClaim: 'claim', envFile: join(f.root, '.env') }),
-    planner: issuesSweeperPrompt({ ...args, cards: [{ ...card, column: 'planning' }], plannerAssignment: 'assignment' }) + ' Plan only this card; do not delegate.',
+    planner: plannerPrompt({ ...args, cards: [{ ...card, column: 'planning' }], plannerAssignment: 'assignment' }) + ' Plan only this card; do not delegate.',
   }
   const file = promptPath('proof', 'w12:p34@default')
   for (const [role, full] of Object.entries(prompts)) {

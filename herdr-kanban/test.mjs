@@ -9,8 +9,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
 import { bind, readBindings, unbind, liveBindings, reap } from './lib/bindings.mjs'
-import { promoteAutoReview, promotePlanned, routeReviewVerdicts, missionIssueHandoff, slotsFree, reviewerRunning, spawnReviewer, spawnIssuesSweeper, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason, holdsFor } from './lib/autospawn.mjs'
-import { workerPrompt, reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
+import { promoteAutoReview, promotePlanned, routeReviewVerdicts, slotsFree, reviewerRunning, spawnReviewer, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason, holdsFor } from './lib/autospawn.mjs'
+import { workerPrompt, reviewerPrompt, plannerPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
 import { recordFailure, coolingDown, attemptsFor, clearRetries } from './lib/retries.mjs'
 import { findWorkspace, agentWorkspace, parseAgentList, agentStartArgs, assertManagedModel, sessionServerArgs } from './lib/herdr.mjs'
 import { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } from './lib/breaker.mjs'
@@ -271,7 +271,7 @@ test('a live card wins over an archived one with the same id, and two live ones 
   rmSync(root, { recursive: true, force: true })
 })
 
-test('a card that fails to start is retried twice, then parked in Issues', () => {
+test('a card that fails to start is retried twice, then gives up', () => {
   const { tasks, root } = fixture()
   const id = 'T-04'
 
@@ -622,20 +622,7 @@ test('T-9 keeps an allowed Owner prerequisite wait visible in Queue', async () =
   rmSync(root, { recursive: true, force: true })
 })
 
-test('T-9 routes an Issues prerequisite to Owner with a decision', async () => {
-  const { tasks, root } = fixture()
-  moveCard(tasks, 'T-04', 'working')
-  mkdirSync(join(tasks, 'issues'), { recursive: true })
-  writeFileSync(join(tasks, 'issues', 'T-08-issue.md'), '# T-08 — Issue\n')
-  writeFileSync(join(tasks, 'queue', 'T-09-gated.md'), '# T-09 — Gated\n\n**Blocked by:** T-08\n')
-  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 5 })
-  const routed = findCard(tasks, 'T-09')
-  assert.equal(routed.column, 'owner')
-  assert.match(readFileSync(routed.path, 'utf8'), /Decision needed: resolve this hold or authorize a recovery path/)
-  rmSync(root, { recursive: true, force: true })
-})
-
-test('T-9 sends a continuous full-slot hold to Issues only after three stall windows', async () => {
+test('T-9 sends a continuous full-slot hold to Planning only after three stall windows', async () => {
   const { tasks, root } = fixture()
   moveCard(tasks, 'T-17', 'working')
   bind(tasks, 'T-17', { pane_id: 'w1:p1' })
@@ -645,8 +632,8 @@ test('T-9 sends a continuous full-slot hold to Issues only after three stall win
   assert.equal(findCard(tasks, 'T-04').column, 'queue', 'exactly three windows stays in Queue')
   await autoSpawn({ ...args, now: 4001 })
   const routed = findCard(tasks, 'T-04')
-  assert.equal(routed.column, 'issues')
-  assert.match(readFileSync(routed.path, 'utf8'), /continuously held for 3 seconds/)
+  assert.equal(routed.column, 'planning')
+  assert.match(readFileSync(routed.path, 'utf8'), /\[planning\] Queue hold expired[\s\S]*continuously held for 3 seconds/)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -797,8 +784,8 @@ test('the agent workspace is found by label, and recreated once it is gone', asy
 })
 
 test('the Lead Planner prompt is single-line, specialist-scoped, and returns ready cards to Planned', () => {
-  const card = { id: 'T-06', title: 'x', category: 'ui', path: 'C:\\p\\TASKS\\issues\\T-06-x.md' }
-  const text = issuesSweeperPrompt({ cards: [card], projectPath: 'C:\\p', boardRoot: 'C:\\board' })
+  const card = { id: 'T-06', title: 'x', category: 'ui', path: 'C:\\p\\TASKS\\planning\\T-06-x.md' }
+  const text = plannerPrompt({ cards: [card], projectPath: 'C:\\p', boardRoot: 'C:\\board' })
   assert.ok(!/\n/.test(text), 'planner prompt must not contain a newline')
   assert.match(text, /_roles\/PLANNER\.md/, 'the spawned Planner role is explicit')
   assert.ok(text.includes('hkb.mjs'), 'planner prompt must tell the agent how to report back')
@@ -811,13 +798,13 @@ test('the Lead Planner prompt is single-line, specialist-scoped, and returns rea
 
 test('a Claude Planner gets no Codex shell wording and no audit rules for an ordinary card', () => {
   const card = { id: 'T-07', title: 'x', path: 'C:\\p\\TASKS\\planning\\T-07-x.md' }
-  const claude = issuesSweeperPrompt({ cards: [card], projectPath: 'C:\\p', boardRoot: 'C:\\board' })
+  const claude = plannerPrompt({ cards: [card], projectPath: 'C:\\p', boardRoot: 'C:\\board' })
   assert.doesNotMatch(claude, /FINDINGS audits/)
   assert.doesNotMatch(claude, /login:false|yield_time_ms|max_output_tokens/)
   assert.match(claude, /with the Read tool, one file per call; never concatenate them/)
   assert.match(claude, /Never run npm ci or npm install in a card checkout/)
   assert.match(claude, /git diff --stat/)
-  const codex = issuesSweeperPrompt({ cards: [{ ...card, audit: true }], projectPath: 'C:\\p', boardRoot: 'C:\\board', engine: 'codex' })
+  const codex = plannerPrompt({ cards: [{ ...card, audit: true }], projectPath: 'C:\\p', boardRoot: 'C:\\board', engine: 'codex' })
   assert.match(codex, /FINDINGS audits/)
   assert.match(codex, /login:false/)
   assert.match(codex, /one file per command/)
@@ -840,40 +827,14 @@ test('trivial cards use the lightweight builder model and engine', async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-test('Lead Planner (Issues sweeper) agent names use the i- role prefix', () => {
-  const name = agentName('issues', 'T-7')
-  assert.ok(name.startsWith('i-'), 'sweeperRunning matches on this prefix')
-  assert.ok(isBoardAgent({ name }), 'the generic close/board-agent check must also recognise it')
-})
-
-test('only one sweeper can be in flight, however many callers ask at once', async () => {
+test('Auto-Manager sweeps unparked Owner cards and skips parked ones', () => {
   const { root, tasks } = fixture()
-  const previousConfig = process.env.KANBAN_CONFIG
-  const temporaryConfig = join(root, 'board.config.json')
-  writeFileSync(temporaryConfig, JSON.stringify({ projects: ['test'], maxConcurrentAgents: 1 }))
-  process.env.KANBAN_CONFIG = temporaryConfig
-  const args = { project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet' }
-  const results = await Promise.allSettled([spawnIssuesSweeper(args), spawnIssuesSweeper(args)])
-  if (previousConfig === undefined) delete process.env.KANBAN_CONFIG
-  else process.env.KANBAN_CONFIG = previousConfig
-  const busy = results.filter((r) => r.status === 'rejected' && r.reason.busy)
-  assert.equal(busy.length, 1, 'the second caller is turned away, not run')
-  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 0, 'no herdr here, so neither can succeed')
-  rmSync(root, { recursive: true, force: true })
-})
-
-test('Auto-Manager sweeps unparked Owner cards too; Auto sweeps Issues only', () => {
-  const { root, tasks } = fixture()
-  for (const d of ['issues', 'owner']) mkdirSync(join(tasks, d), { recursive: true })
-  writeFileSync(join(tasks, 'issues', 'T-40-blocked.md'), '# T-40 — Blocked\n')
+  mkdirSync(join(tasks, 'owner'), { recursive: true })
   writeFileSync(join(tasks, 'owner', 'T-41-question.md'), '# T-41 — A question\n')
   writeFileSync(join(tasks, 'owner', 'T-42-parked.md'), '# T-42 — Parked\n\n**Parked** needs your bank details\n')
 
-  const board = readBoard(tasks)
-  const auto = board.issues.map((c) => c.id)
-  const manager = [...board.issues, ...board.owner.filter((c) => !isParked(c))].map((c) => c.id)
-  assert.deepEqual(auto, ['T-40'], 'auto mode never touches the Owner column')
-  assert.deepEqual(manager.sort(), ['T-40', 'T-41'], 'manager mode adds Owner but skips a parked card')
+  const manager = readBoard(tasks).owner.filter((c) => !isParked(c)).map((c) => c.id)
+  assert.deepEqual(manager, ['T-41'], 'manager mode skips a parked card')
 
   // Parking is what stops an unanswerable card being re-read every 15 minutes.
   assert.equal(isParked(findCard(tasks, 'T-42')), true)
@@ -929,7 +890,7 @@ test('Auto-Manager promotion uses the shared Planned helper', () => {
   assert.ok(promotePlanned(tasks).includes('T-18'), 'promotion resumes after the prerequisite reaches Archive')
 
   // And the sweeper no longer carries any promotion instructions.
-  const prompt = issuesSweeperPrompt({ cards: board.queue, projectPath: root, boardRoot: root, manager: true })
+  const prompt = plannerPrompt({ cards: board.queue, projectPath: root, boardRoot: root, manager: true })
   assert.match(prompt, /move <ID> planned/)
   assert.match(prompt, /After the handoff succeeds, stop that card immediately/)
   assert.equal(prompt.includes('\n'), false, 'prompts are delivered as a single line')
@@ -948,12 +909,13 @@ test('the poll tick caps builders at maxConcurrentAgents in every mode', () => {
   assert.match(tick, /max,/, 'and the tick must actually pass that cap to autoSpawn')
 })
 
-test('Lead Planner reuses the sweep endpoint and one poll path', () => {
+test('Issues is retired: the tick runs only the card Planner and the sweep endpoint answers 410', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   const tick = source.slice(source.indexOf('async function tick'), source.indexOf('// --- SSE'))
-  assert.match(tick, /config\.leadPlanner\?\.autoIssues[\s\S]+spawnIssuesSweeper/, 'polling uses the existing Issues planner path when enabled')
-  assert.match(source, /url\.pathname === '\/api\/sweep-issues'[\s\S]+?spawnIssuesSweeper\(/,
-    'the confirmed Sweep action remains available')
+  assert.match(tick, /config\.leadPlanner\?\.autoIssues[\s\S]+runCardPlanner/, 'polling runs the card Planner when enabled')
+  assert.doesNotMatch(source, /spawnIssuesSweeper|recoverBuilderNoHandoff/)
+  assert.match(source, /url\.pathname === '\/api\/sweep-issues'\) \{\s*return json\(res, 410,/, 'the old sweep task gets a clear 410')
+  assert.match(source, /drainIssues\(tasksDirOf\(project\),/, 'startup moves any old Issues card to Planning')
 })
 
 // --- review plan (T-53: postman batching) -----------------------------
@@ -1063,15 +1025,6 @@ test('spawnReviewer accepts an explicit cardIds subset, filtering the Review col
   const source = readFileSync(new URL('./lib/autospawn.mjs', import.meta.url), 'utf8')
   assert.match(source, /spawnReviewer\(\{[^}]*cardIds/, 'spawnReviewer must accept a cardIds param')
   assert.match(source, /wanted\.has\(c\.id\)/, 'when given, cardIds filters the Review column to that subset')
-})
-
-test('sweep-issues is wired through the circuit breaker exactly like Review', () => {
-  const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
-  const route = source.slice(source.indexOf("url.pathname === '/api/sweep-issues'"), source.indexOf("url.pathname === '/api/pane'"))
-  assert.match(route, /breakerState\(p\)\.breakerTripped/, 'a tripped project breaker must refuse the sweep, same shape as Review')
-  assert.match(route, /recordSpawn\(\{ project: p, cap: config\.maxConcurrentAgents \}\)/, 'a successful spawn must count toward its project breaker window')
-  assert.match(route, /tripBreakerIfNeeded\(p\)/, 'a run of sweeps must be able to trip its project breaker like builders and the reviewer')
-  assert.match(route, /config\.models\.issues/, 'the sweeper uses the configured issues model')
 })
 
 test('request usage records start and finish deltas by Codex session id', async () => {
@@ -1421,21 +1374,6 @@ test('mission build attempts are durable and total budget is recomputed from car
   assert.equal(card.buildAttempts, 1, 'failed startup still consumes the reserved attempt')
   assert.match(startHoldReason({ card, board: after, projectPath: root, tasksDir: tasks, mission: { id: 'IB-AUDIT-20260908', maxBuilds: 1 } }),
     /mission build budget exhausted/)
-  rmSync(root, { recursive: true, force: true })
-})
-
-test('mission issue handoff moves only matching Issues to Planning and leaves Owner alone', () => {
-  const { root, tasks } = fixture()
-  for (const d of ['issues', 'owner', 'planning']) mkdirSync(join(tasks, d), { recursive: true })
-  writeFileSync(join(tasks, 'issues', 'T-20-mission.md'), '# T-20 — Mission issue\n\n**Mission:** IB-AUDIT-20260908\n')
-  writeFileSync(join(tasks, 'issues', 'T-21-old.md'), '# T-21 — Old issue\n')
-  writeFileSync(join(tasks, 'owner', 'T-22-owner.md'), '# T-22 — Owner\n\n**Mission:** IB-AUDIT-20260908\n')
-
-  assert.deepEqual(missionIssueHandoff(tasks, { id: 'IB-AUDIT-20260908' }), ['T-20'])
-  const board = readBoard(tasks)
-  assert.ok(board.planning.some((c) => c.id === 'T-20'))
-  assert.ok(board.issues.some((c) => c.id === 'T-21'))
-  assert.ok(board.owner.some((c) => c.id === 'T-22'))
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -1954,7 +1892,7 @@ test('running server poll leaves verdicts alone while a reviewer is active', asy
   }
 })
 
-test('running server poll auto-starts one Lead Planner for Issues, then hkb returns the plan to Planned', async () => {
+test('a server start moves an old Issues card to Planning, where one card Planner takes it', async () => {
   const run = await startPollServer({
     maxConcurrentAgents: 1,
     cardColumn: 'issues',
@@ -1963,27 +1901,18 @@ test('running server poll auto-starts one Lead Planner for Issues, then hkb retu
   })
   try {
     await waitUntil(() => readBoard(run.tasks).planning.some((c) => c.id === 'T-50'), 'Issue moved to Planning')
-    const starts = await waitUntil(() => {
-      const state = JSON.parse(readFileSync(run.herdrState, 'utf8'))
-      const names = state.events.filter((e) => e[0] === 'agent start').map((e) => e[1])
-      return names.filter((name) => name.startsWith('i-')).length === 1 ? names : false
-    }, 'Lead Planner start', run.spawnProgress)
-    assert.equal(starts.filter((name) => name.startsWith('i-')).length, 1)
-    assert.match(readFileSync(findCard(run.tasks, 'T-50').path, 'utf8'), /Lead Planner accepted ownership/)
+    assert.deepEqual(readBoard(run.tasks).issues, [])
+    assert.match(readFileSync(join(run.tasks, '.history', 'T-50.jsonl'), 'utf8'), /issues-retired/)
+    const planners = () => JSON.parse(readFileSync(run.herdrState, 'utf8')).events
+      .filter((e) => e[0] === 'agent start' && e[1].startsWith('p-'))
+    await waitUntil(() => planners().length === 1, 'card Planner start', run.spawnProgress)
+    assert.equal(JSON.parse(readFileSync(run.herdrState, 'utf8')).events.filter((e) => e[0] === 'agent start' && e[1].startsWith('i-')).length, 0, 'no Issues sweeper')
 
     await run.stop()
     const stopRestart = await restartPollServer(run)
     await delay(150)
     await stopRestart()
-    const restartedStarts = JSON.parse(readFileSync(run.herdrState, 'utf8')).events
-      .filter((e) => e[0] === 'agent start' && e[1].startsWith('i-'))
-    assert.equal(restartedStarts.length, 1, 'restart does not spawn a duplicate for a Planning card')
-
-    const result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), 'move', 'T-50', 'planned'], {
-      cwd: run.projectsRoot, encoding: 'utf8',
-    })
-    assert.equal(result.status, 0, result.stderr)
-    assert.ok(readBoard(run.tasks).planned.some((c) => c.id === 'T-50'))
+    assert.equal(planners().length, 1, 'restart does not spawn a duplicate for a Planning card')
   } finally {
     await run.stop()
     rmSync(run.root, { recursive: true, force: true })

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { issuesSweeperPrompt } from './lib/prompt.mjs'
-const prompt = issuesSweeperPrompt({cards:[{id:'T-99',column:'planning',path:'C:/project/TASKS/planning/T-99.md'}],projectPath:'C:/project',boardRoot:'C:/board'})
+import { plannerPrompt } from './lib/prompt.mjs'
+const prompt = plannerPrompt({cards:[{id:'T-99',column:'planning',path:'C:/project/TASKS/planning/T-99.md'}],projectPath:'C:/project',boardRoot:'C:/board'})
 assert.ok(prompt.includes('Projects/_roles/PLANNER.md'))
 assert.ok(!prompt.includes('ORCHESTRATION.md'))
 assert.ok(!prompt.includes('Grill Me'))

@@ -9,7 +9,7 @@ export function auditStatus(text) {
   return meaningful(section(text, 'Audit conclusion')).match(/\b(INCOMPLETE|FINDINGS|CLEAR)\b/)?.[1] || null
 }
 export function auditDestination(text, status) {
-  if (status === 'INCOMPLETE') return 'issues'
+  if (status === 'INCOMPLETE') return 'planning'
   if (!meaningful(section(text, 'Evidence'))) throw new Error('Audit needs current Evidence before completed-report handoff')
   if (status === 'CLEAR') return 'archive'
   if (status === 'FINDINGS') return /^\*\*Audit disposition:\*\*\s*report-only-await-owner\s*$/im.test(text) ? 'owner' : 'planning'

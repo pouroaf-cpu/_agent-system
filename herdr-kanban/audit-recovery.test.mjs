@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCard, findCard, moveCard } from './lib/cards.mjs'
-import { recoveryState } from './lib/recovery.mjs'
+import { recoveryState, recoveryTransition } from './lib/recovery.mjs'
 import { auditDestination, auditArchiveError } from './lib/audit-routing.mjs'
 import { notifyManagerException } from './lib/manager-alerts.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
@@ -20,15 +20,12 @@ test('distinct failed returns 1-4 recover, fifth stops, duplicated returns/resta
     assert.equal(state().returns, 0)
     for (let attempt = 1; attempt <= 5; attempt++) {
       moveCard(dir, card.id, 'review')
-      moveCard(dir, card.id, 'issues')
-      moveCard(dir, card.id, 'issues')
       card = moveCard(dir, card.id, 'planning')
       assert.equal(state().returns, attempt)
       assert.equal(card.column, attempt === 5 ? 'owner' : 'planning')
       if (attempt < 5) {
-        moveCard(dir, card.id, 'issues') // repeated delivery, not another issued plan
-        moveCard(dir, card.id, 'planning')
-        assert.equal(state().returns, attempt)
+        // A repeated delivery of the same return is not another issued plan.
+        assert.equal(recoveryTransition(readFileSync(card.path, 'utf8'), 'review', 'planning').state.returns, attempt)
       }
     }
     const restarted = recoveryState(readFileSync(findCard(dir, card.id).path, 'utf8'))
@@ -50,7 +47,7 @@ test('audit disposition, evidence and durable linked fixes; verified access exce
   const findings = '# Audit\n## Evidence\nMeasured keyboard result.json\n## Findings\n1. Entry\n2. Containment\n## Audit conclusion\nFINDINGS\n'
   assert.equal(auditDestination(findings, 'FINDINGS'), 'planning')
   assert.equal(auditDestination('**Audit disposition:** report-only-await-owner\n' + findings, 'FINDINGS'), 'owner')
-  assert.equal(auditDestination('', 'INCOMPLETE'), 'issues')
+  assert.equal(auditDestination('', 'INCOMPLETE'), 'planning')
   assert.match(auditArchiveError(findings, () => true), /F1/)
   const mapped = findings + '\n## Remediation links\n- F1: T-131\n- F2: T-131\n'
   assert.equal(auditArchiveError(mapped, id => id === 'T-131'), null, 'one deduplicated card can resolve several findings')

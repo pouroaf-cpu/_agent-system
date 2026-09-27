@@ -14,7 +14,7 @@ import { findCard, moveCard } from './lib/cards.mjs'
 import { pendingDeliveries, saveDelivery } from './lib/delivery-state.mjs'
 import { deliver } from './lib/spawn.mjs'
 import { recordOperationalFailure } from './lib/workflow-state.mjs'
-import { autoSpawn, spawnReviewer, spawnIssuesSweeper } from './lib/autospawn.mjs'
+import { autoSpawn, spawnReviewer } from './lib/autospawn.mjs'
 
 const plan = '# T-1 — approved task\n**Workflow:** card-owned\n**Auto-review:** yes\n## Approved brief\nChange only this result\n## Files\n- `app.mjs` result\n## Implementation plan\nChange result\n## Acceptance criteria\nResult correct\n## Implementation\nDone\n## Evidence\nCheck passed\n'
 function fixture(t, column = 'queue') {
@@ -44,7 +44,6 @@ test('assignment identity, mixed-card denial, duplicate click/prompt/Enter, and 
     assert.throws(() => assertPromptAllowed('other'), /match/)
     await assert.rejects(autoSpawn({ project: 'Proof', onlyIds: ['T-2'] }), /match/)
     await assert.rejects(spawnReviewer({ project: 'Proof', cardIds: ['T-1', 'T-2'] }), /match/)
-    await assert.rejects(spawnIssuesSweeper({ project: 'Proof' }), /not permitted/)
     assert.throws(() => prompt('p'), /pane mismatch/)
     bindCardRunAssignment('Proof', ['T-1'], 'builder', 'p')
     prompt('p', 'start'); prompt('p')

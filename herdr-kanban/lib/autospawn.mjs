@@ -19,9 +19,9 @@ import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailur
 import { isRetryHold } from './transient.mjs'
 import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { reviewerPrompt, issuesSweeperPrompt, agentName, isBoardAgent, reviewLabel, sweepLabel } from './prompt.mjs'
-import { CARD_ID, agentRole, isReviewerAgent, isSweeperAgent } from './ids.mjs'
-import { tabCreate, agentStart, agentList, agentsForProject, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
+import { reviewerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
+import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
+import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
@@ -29,12 +29,11 @@ import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependenc
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
 import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
-import { recoveryState } from './recovery.mjs'
 
-// A Builder that disappears or ends without hkb done/issue leaves Working
-// stuck. Route it to Issues while retaining the binding, workflow assignment,
-// counters and worktree for inspection and recovery.
-export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', workspace, gitSettings, boardRoot, engine, model, now = Date.now() }) {
+// A Builder that disappears or ends without hkb done/issue leaves Working stuck.
+// Its card goes to Planning for a fresh Planner (Issues is retired, 2026-09-25); the
+// workflow assignment, counters and worktree stay for inspection and recovery.
+export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', boardRoot, engine, model, session, io = { readDelivery, saveDelivery }, now = Date.now() }) {
   const card = findCard(tasksDir, cardId)
   if (card.column !== 'working') return card
   // The engine (or just its model) ran out of usage: block it board-wide and wait in Queue,
@@ -47,81 +46,25 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     unbind(tasksDir, card.id)
     return moveCard(tasksDir, card.id, 'queue')
   }
-  const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
-  const moved = moveCard(tasksDir, card.id, 'issues')
-  appendFileSync(moved.path, `\n\n**Builder fallback** ${new Date().toISOString()}\n\n${detail}. Worktree, assignment and prior output are preserved for recovery; inspect this evidence before requeueing.\n`)
-  appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
-  recordOperationalFailure(tasksDir, moved, detail, workspace, gitSettings)
-  return moved
-}
-
-export async function recoverBuilderNoHandoff({ tasksDir, cardId, agents, io = { paneRead, deliver }, session, workspace, gitSettings, graceMs = 120000, now = Date.now() }) {
-  const card = findCard(tasksDir, cardId)
-  const workflow = readWorkflow(tasksDir)[card.id] || {}
-  const marker = workflow.builderRecovery
-  const attempt = recoveryState(readFileSync(card.path, 'utf8')).attempt
-  const binding = readBindings(tasksDir)[card.id]
-  const paneId = binding?.pane_id || workflow.builder?.pane_id
-  const agent = agents.find(item => item.pane_id === paneId)
-  const operational = workflow.operational
-  const hold = operationalHold(tasksDir, card, workspace, gitSettings)
-
-  const routeToPlanner = async (cause, output) => {
-    const prior = readWorkflow(tasksDir)[card.id]?.builderRecovery || {}
-    const failures = prior.cause === cause ? (prior.failures || 0) + 1 : 1
-    const detail = `Builder recovery failed (${cause}); original hold: ${operational?.reason || 'Builder stopped without a handoff'}. Pane output: ${String(output || '(unavailable)').slice(-4000)}`
-    unbind(tasksDir, card.id)
-    const to = failures >= 2 ? 'owner' : 'planning'
-    const moved = moveCard(tasksDir, card.id, to)
-    if (to === 'planning') {
-      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${detail}. Worktree, commits, and dirty files remain preserved.\n`)
-      requestPlannerCorrection(tasksDir, card.id)
-    } else {
-      appendFileSync(moved.path, `\n\n**Needs you**\nThe Builder recovery failed twice for the same reason (${cause}). Should the Planner change the recovery plan before this card is requeued?\n\n${detail}\n`)
-    }
-    appendHistory(tasksDir, card.id, { event: 'builder-recovery-failed', cause, failures, paneId, output: String(output || '').slice(-4000), operationalReason: operational?.reason || null })
-    updateWorkflow(tasksDir, card.id, { operational: null, builderRecovery: { attempt, cause, failures, status: to, paneId, at: new Date(now).toISOString() } })
-    return true
-  }
-
-  if (card.column === 'working' && marker?.status === 'nudged' && marker.attempt === attempt) {
-    if (now - Date.parse(marker.at) < graceMs) return true
-    if (agent && !['idle', 'done'].includes(agent.agent_status)) return false
-    const output = agent ? await io.paneRead(paneId, session).catch(() => '') : ''
-    return routeToPlanner(marker.cause || 'idle-no-handoff', output)
-  }
-  if (card.column !== 'issues' || !hold || !/Builder fallback|without a valid Builder handoff from Working/i.test(hold)) return false
-  const cause = !agent ? 'missing-pane' : 'idle-no-handoff'
-  if (!agent) return routeToPlanner(cause, '')
-  if (!['idle', 'done'].includes(agent.agent_status)) return false
-  // The Builder's prompt never landed (uncertain delivery, pane idle): nothing ran, so
-  // this is a failed start for a fresh Builder, never a nudge that delivery refuses
-  // forever (Tradeflow T-36 sat 2.5h and held the files every queued card needed).
-  const delivery = (io.readDelivery ?? readDelivery)(session, paneId)
+  // The Builder's prompt never landed: nothing ran, so this is a failed start for a fresh
+  // Builder, not a failed build (Tradeflow T-36; I157, TF50: machine load, not a strike).
+  const paneId = readBindings(tasksDir)[card.id]?.pane_id || readWorkflow(tasksDir)[card.id]?.builder?.pane_id
+  const delivery = paneId && io.readDelivery(session, paneId)
   if (delivery?.status === 'uncertain') {
-    ;(io.saveDelivery ?? saveDelivery)(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain delivery resolved as failed; a fresh Builder takes over' })
+    io.saveDelivery(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain delivery resolved as failed; a fresh Builder takes over' })
     unbind(tasksDir, card.id)
-    await (io.paneClose ?? paneClose)(paneId, session).catch(() => {})
     const moved = moveCard(tasksDir, card.id, 'queue')
-    updateWorkflow(tasksDir, card.id, { operational: null, builderRecovery: null })
     appendHistory(tasksDir, card.id, { event: 'builder-delivery-failed', paneId, deliveryAt: delivery.at || null })
     recordStartFailure(tasksDir, card.id, 'builder', 'Builder prompt was never submitted')
-    return !!moved
+    return moved
   }
-  if (marker?.attempt === attempt && marker.status) return false
-  const output = await io.paneRead(paneId, session)
-  updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'claimed', at: new Date(now).toISOString() } })
-  const moved = moveCard(tasksDir, card.id, 'working')
-  const nudge = `Finish ${card.id} within the approved card scope, do not ask questions, then report with exactly one of hkb done, hkb issue, or hkb owner.`
-  appendHistory(tasksDir, card.id, { event: 'builder-recovery-nudge', cause, paneId, output: String(output).slice(-4000), attempt })
-  try {
-    await io.deliver(paneId, nudge, session)
-  } catch (err) {
-    updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'uncertain', at: new Date(now).toISOString(), error: err.message } })
-    throw err
-  }
-  updateWorkflow(tasksDir, card.id, { builderRecovery: { attempt, cause, paneId, status: 'nudged', at: new Date(now).toISOString() } })
-  return !!moved
+  const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
+  unbind(tasksDir, card.id)
+  const moved = moveCard(tasksDir, card.id, 'planning')
+  appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
+  appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
+  requestPlannerCorrection(tasksDir, card.id, { failure: true })
+  return moved
 }
 
 // A spawn blocks for ~55s. Without this, every 2s agent poll would start another.
@@ -248,9 +191,9 @@ export function routeMutualHolds(tasksDir, held, log) {
     // Preserved edits need attribution; never resolve a lock cycle by deleting
     // a worktree or allowing overlapping Builders to start.
     for (const cardId of [id, other]) {
-      const moved = moveCard(tasksDir, cardId, 'issues')
-      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date().toISOString()}\n\nMutual file hold between ${id} and ${other}: ${held[cardId]}. Reconcile declared scope and preserved commits with the other card before requeueing; do not discard work or bypass file locks.\n`)
-      requestPlannerCorrection(tasksDir, cardId)
+      const moved = moveCard(tasksDir, cardId, 'planning')
+      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date().toISOString()}\n\n[planning] Mutual file hold between ${id} and ${other}: ${held[cardId]}. Reconcile declared scope and preserved commits with the other card before requeueing; do not discard work or bypass file locks.\n`)
+      requestPlannerCorrection(tasksDir, cardId, { failure: true })
       routed.push(cardId)
       log?.(`${cardId}: mutual file hold returned to Planner for preserved-work attribution`)
     }
@@ -306,11 +249,10 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         // Only unfinished prerequisites count: an archived one has no live copy, and counting it
         // made Injectbuddy I195's wait on I244 look broken once I243 landed (card went to Owner).
         const prerequisites = (freshCard.blockedBy || []).filter(id => unmet.includes(id)).map(id => [id, liveCards(fresh).filter(c => c.id === id)])
-        const blockedByIssue = prerequisites.find(([, hits]) => hits.length === 1 && hits[0].column === 'issues')
         const allowedDependencyWait = hold.startsWith('waiting for unique integrated or archived prerequisite')
-          && !blockedByIssue && unmet.length > 0
+          && unmet.length > 0
           && prerequisites.every(([, hits]) => hits.length === 1 && ['pou', 'owner', 'planning', 'planned', 'queue', 'working', 'review', 'completed'].includes(hits[0].column))
-        const cardProblem = !!(dupId || dupKey || cycle || hold.startsWith('card not ready') || (unmet.length && !allowedDependencyWait && !blockedByIssue))
+        const cardProblem = !!(dupId || dupKey || cycle || hold.startsWith('card not ready') || (unmet.length && !allowedDependencyWait))
         // Waiting on another live card's files is allowed in any lane, Owner included:
         // only the holder is escalated, never the cards queued behind it (Tradeflow T-35).
         const fileHolder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
@@ -328,10 +270,11 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           const elapsed = now - since
           held[freshCard.id] = hold
           if (elapsed > 3 * stallSeconds * 1000) {
-            const moved = moveCard(tasksDir, freshCard.id, 'issues')
+            const moved = moveCard(tasksDir, freshCard.id, 'planning')
             fresh = null
-            appendFileSync(moved.path, `\n\n---\n\n**Queue hold expired** ${new Date(now).toISOString()}\n\n${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
+            appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] Queue hold expired: ${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
             updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
+            requestPlannerCorrection(tasksDir, freshCard.id, { failure: true })
             delete held[freshCard.id]
             onChange?.()
           } else updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: since })
@@ -477,7 +420,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
   // A card's Builder pane matters only while it can still hand off, be recovered or be
   // retired after integration. Back in Planning/Queue the next build is a fresh Builder,
   // and the old idle one held its worktree's files (Tradeflow TF51: npm ci lock).
-  const builderLanes = ['working', 'issues', 'completed', 'review']
+  const builderLanes = ['working', 'completed', 'review']
   const liveCards = new Set(Object.entries(readBoard(tasksDir)).filter(([column]) => builderLanes.includes(column)).flatMap(([, cards]) => cards.map(c => c.id)))
   for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) if (liveCards.has(id) && saved.builder) bound.add(saved.builder.pane_id)
   for (const a of agents) {
@@ -784,83 +727,5 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (claim && paneId && !err.startFailed) updateReviewClaim(reviewRoot, claim.id, { phase: 'uncertain', error: err.message })
     else if (claim) failReviewClaim(reviewRoot, claim.id, err.message)
     throw err
-  }
-}
-
-export const sweeperRunning = (agents) => agents.some(isSweeperAgent)
-
-// Same one-in-flight guard as spawnReviewer, held here for the same reason:
-// herdr does not register an agent until it has booted.
-const sweeping = new Set()
-
-// Move mission-matching Issues into Planning before a Lead Planner starts, so
-// ownership is explicit and a restart cannot spawn a duplicate planner for the
-// same cards.
-export function missionIssueHandoff(tasksDir, mission, { all = false } = {}) {
-  const moved = []
-  if (!all && !mission?.id) return moved
-  const issues = readBoard(tasksDir).issues.filter((c) => !c.cardOwned && (all || c.mission === mission.id))
-  for (const card of issues) {
-    const next = moveCard(tasksDir, card.id, 'planning')
-    appendFileSync(next.path,
-      `\n\n---\n\n**Planner handoff** ${new Date().toISOString()}\n\n` +
-      `Lead Planner accepted ownership of this Issue. Await a builder-ready plan in Planned; do not rewrite or requeue directly.\n`)
-    moved.push(next.id)
-  }
-  return moved
-}
-
-export async function spawnIssuesSweeper({ project, projectPath, tasksDir, boardRoot, model, engine, manager = false, mission, assignmentForCard }) {
-  if (cardRunContext()) throw new Error('Multi-card Planner sweeps are not permitted by explicit card runs')
-  assertPromptAllowed(project)
-  if (sweeping.has(project)) throw busyError()
-  sweeping.add(project)
-  try {
-    const session = sessionOf(project)
-    if (sweeperRunning(await agentsForProject(projectPath, session))) throw busyError()
-
-    const accepted = missionIssueHandoff(tasksDir, mission, { all: !mission?.id })
-    const wanted = new Set(accepted)
-    const cards = readBoard(tasksDir).planning.filter((c) => wanted.has(c.id))
-
-    if (!cards.length) throw new Error('nothing in Issues')
-    const assigned = assignmentForCard?.(cards[0], 'issues')
-    if (quotaHold(boardRoot, quotaKey(assigned?.engine ?? engineKind(engine), assigned?.model ?? model))) throw busyError()
-
-    const workspace = await agentWorkspaceOr(projectPath, session)
-    const created = await tabCreate({
-      cwd: projectPath, label: sweepLabel(cards.length), focus: false, workspace, session,
-    })
-    const paneId = created?.root_pane?.pane_id
-    if (!paneId) throw new Error(`tab create returned no pane id: ${JSON.stringify(created)}`)
-
-    await waitForPrompt(paneId, { session })
-    let name = agentName('issues', cards[0].id)
-    // Same reasoning as spawnReviewer: unbound, so isSpawning() must stay true
-    // through deliver(), not just agentStart().
-    beginSpawn(paneId)
-    try {
-      const selected = assignmentForCard?.(cards[0], 'issues')
-      const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
-      name = (await agentStart({ name, paneId, model: selected?.model ?? model, engine: selectedEngine, timeoutMs: START_TIMEOUT_MS, session, browser: cards.some(needsBrowser) }))?.name ?? name
-      const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
-      try {
-        recordUsageStart({
-          tasksDir, project, requestId: `plan:${cards.map((c) => c.id).join(',')}`, cardIds: cards.map((c) => c.id),
-          role: 'planner', paneId, tabId: created?.tab?.tab_id, model, name, agentSession: agent?.agent_session,
-        })
-      } catch {}
-      await deliver(paneId, issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, manager, engine: selectedEngine }), session, null, { engine: selectedEngine })
-    } catch (err) {
-      if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
-      throw new Error(`issues sweeper spawn failed: ${err.message}`)
-    } finally {
-      endSpawn(paneId)
-    }
-
-    // Deliberately not bound to a card, same reasoning as the reviewer.
-    return { pane_id: paneId, tab_id: created?.tab?.tab_id, model, name, cards: cards.map((c) => c.id) }
-  } finally {
-    sweeping.delete(project)
   }
 }

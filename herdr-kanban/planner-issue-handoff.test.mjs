@@ -135,9 +135,9 @@ test('a refused plan handoff does not reset the Planner blocker count', () => {
 
 // Throughput audit 2026-09-26 F7: the same failure a third time in a row only added a
 // "Diagnostic recovery" note and launched another Planner.
-test('the third identical failure in Issues goes to Owner with the blocker, not to another Planner', async () => {
+test('the third identical board-detected failure goes to Owner with the blocker, not to another Planner', async () => {
   const { appendFileSync } = await import('node:fs')
-  const { moveCard } = await import('./lib/cards.mjs')
+  const { requestPlannerCorrection } = await import('./lib/card-planner.mjs')
   const dir = mkdtempSync(join(tmpdir(), 'planner-same-failure-'))
   try {
     const card = createCard(dir, { title: 'Repeats', brief: 'x' })
@@ -152,7 +152,8 @@ test('the third identical failure in Issues goes to Owner with the blocker, not 
     const run = () => runCardPlanner({ project: 'P', projectPath: dir, tasksDir: dir, boardRoot: dir, model: 'gpt-5.5', io })
     await run()
     for (const round of [1, 2, 3]) {
-      appendFileSync(moveCard(dir, card.id, 'issues').path, `\n\n**Kicked back** 2026-09-26T0${round}:00:00Z\n\nAC1 lacks a verified isolated 390px check.\n`)
+      appendFileSync(findCard(dir, card.id).path, `\n\n**Kicked back** 2026-09-26T0${round}:00:00Z\n\nAC1 lacks a verified isolated 390px check.\n`)
+      requestPlannerCorrection(dir, card.id, { failure: true })
       await run()
     }
     const moved = findCard(dir, card.id)

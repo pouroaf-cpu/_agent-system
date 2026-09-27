@@ -53,15 +53,15 @@ test('a handoff that drops a required section is refused and nothing is restored
   assert.equal(findCard(tasks, 'T-1').column, 'review')
 })
 
-// Tradeflow T-42: the board moved the card working -> issues under a live Builder,
+// Tradeflow T-42: the board moved the card out of Working under a live Builder,
 // which then wrote its result to the old lane path and recreated the file.
 test('a card recreated in the lane it just left is merged into the live copy, not held as ambiguous', t => {
   const tasks = board(t, 'working', 'T-1', PLAN)
-  moveCard(tasks, 'T-1', 'issues')
-  const live = readFileSync(join(tasks, 'issues', 'T-1.md'), 'utf8')
+  moveCard(tasks, 'T-1', 'planning')
+  const live = readFileSync(join(tasks, 'planning', 'T-1.md'), 'utf8')
   writeFileSync(join(tasks, 'working', 'T-1.md'), '## Evidence\nBuilt; node measure.mjs passed.\n')
   const card = findCard(tasks, 'T-1')
-  assert.equal(card.column, 'issues')
+  assert.equal(card.column, 'planning')
   const merged = readFileSync(card.path, 'utf8')
   assert.ok(merged.startsWith(live), 'the live copy is kept as is')
   assert.match(merged, /## Evidence\nBuilt; node measure\.mjs passed\./)
@@ -73,11 +73,11 @@ test('a card recreated in the lane it just left is merged into the live copy, no
 })
 
 test('two genuinely different live cards with one id are still held', t => {
-  const tasks = board(t, 'issues', 'T-1', PLAN)
+  const tasks = board(t, 'planning', 'T-1', PLAN)
   mkdirSync(join(tasks, 'review'))
   writeFileSync(join(tasks, 'review', 'T-1.md'), `# T-1 — other card\n${PLAN}`)
   assert.throws(() => findCard(tasks, 'T-1'), /ambiguous/)
-  moveCard(tasks, 'T-1', 'working', { sourcePath: join(tasks, 'review', 'T-1.md') }) // last move review -> working, other copy in issues
+  moveCard(tasks, 'T-1', 'working', { sourcePath: join(tasks, 'review', 'T-1.md') }) // last move review -> working, other copy in planning
   assert.throws(() => findCard(tasks, 'T-1'), /ambiguous/, 'the other copy is not in the lane the card left')
 })
 

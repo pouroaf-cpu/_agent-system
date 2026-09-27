@@ -117,11 +117,9 @@ export function reviewerPrompt({ cards, projectPath, boardRoot, tasksDir, review
   )
 }
 
-// One sweeper for every card sitting in Issues, same batching reasoning as the
-// reviewer. Mirrors the KANBAN_MANAGER.md "Issues sweep" policy — keep the two in sync.
-// PLANNER.md holds the ownership, failed-return and Owner rules; this gives the
+// The card Planner's prompt (card-planner.mjs). PLANNER.md holds the ownership, failed-return and Owner rules; this gives the
 // cards, the files and the handoff (planner audit F7).
-export function issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine }) {
+export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine }) {
   const cmd = hkb(boardRoot, tasksDir) + (plannerAssignment ? ` --planner-assignment ${plannerAssignment}` : '')
   const list = cards
     .map((c) => `${c.id} [${c.category || 'code'}] [${c.column}] (${briefing(tasksDir, c, 'planner')})`)
@@ -152,8 +150,6 @@ export const paneLabel = (card, holdsUp = 0) =>
   `${card.id}${holdsUp ? ` ⛔${holdsUp}` : ''} · ${card.title}`.slice(0, 48)
 
 export const reviewLabel = (count) => `reviewer ${count} card${count === 1 ? '' : 's'}`
-
-export const sweepLabel = (count) => `Lead Planner ${count} card${count === 1 ? '' : 's'}`
 
 // Role-prefixed names (b-i149, r-hk14) are how the board recognises a pane it
 // spawned, so it only ever closes its own and never one you opened by hand.

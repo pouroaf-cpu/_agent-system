@@ -27,7 +27,7 @@ try {
   moveCard(dir, card.id, 'owner'); await runCardPlanner(args)
   assert.equal(closes, 1); assert.ok(readCardPlanners(dir)[card.id].closedAt)
   // A correction goes to a fresh Planner, never counted as a missing replacement.
-  moveCard(dir, card.id, 'issues'); const correction = await runCardPlanner(args)
+  moveCard(dir, card.id, 'planning'); const correction = await runCardPlanner(args)
   assert.equal(correction.spawnedNewAgent, true)
   assert.equal(starts, 2); assert.equal(submissions, 2); assert.equal(usage, 2); assert.equal(closes, 1)
   assert.equal(readCardPlanners(dir)[card.id].paneId, 'pane-2')
@@ -81,11 +81,11 @@ try {
     assert.equal(findCard(replacementDir, replacementCard.id).column, 'owner', 'human decisions are not automatically recovered')
     assert.notEqual(correctionFingerprint('**Kicked back** date\nA'), correctionFingerprint('**Kicked back** date\nB'))
   } finally { rmSync(replacementDir, { recursive: true, force: true }) }
-  // Tradeflow T-42: a card in Issues with a 0-byte twin in Working holds only itself;
+  // Tradeflow T-42: a card in Planning with a 0-byte twin in Working holds only itself;
   // the run goes on to plan other cards instead of throwing (which tripped the breaker).
   const dupDir = mkdtempSync(join(tmpdir(), 'card-planner-dup-'))
   try {
-    const twin = moveCard(dupDir, createCard(dupDir, { title: 'Twin', brief: 'Duplicated card' }).id, 'issues')
+    const twin = moveCard(dupDir, createCard(dupDir, { title: 'Twin', brief: 'Duplicated card' }).id, 'planning')
     mkdirSync(join(dupDir, 'working'), { recursive: true })
     writeFileSync(join(dupDir, 'working', twin.file), '')
     const other = createCard(dupDir, { title: 'Other', brief: 'Unrelated card' })
@@ -101,7 +101,7 @@ try {
     const run = await runCardPlanner({ project: 'Dup', projectPath: dupDir, tasksDir: dupDir, boardRoot: dupDir, model: 'test', io: dupIo, onHold: err => holds.push(err.message) })
     assert.deepEqual(run.cards, [other.id], 'the other card is still planned')
     assert.equal(holds.length, 1)
-    for (const path of [`working/${twin.file}`, `issues/${twin.file}`]) assert.ok(holds[0].includes(path), holds[0])
+    for (const path of [`working/${twin.file}`, `planning/${twin.file}`]) assert.ok(holds[0].includes(path), holds[0])
     assert.ok(existsSync(join(dupDir, 'working', twin.file)) && existsSync(twin.path), 'both copies are kept')
   } finally { rmSync(dupDir, { recursive: true, force: true }) }
   // Injectbuddy I149: an idle Planner whose prompt is still on the `›` input line was

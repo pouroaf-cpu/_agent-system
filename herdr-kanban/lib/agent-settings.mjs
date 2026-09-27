@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { findCard } from './cards.mjs'
 import { approvedManagedModel } from './herdr.mjs'
 
-export const STAGES = ['planning', 'working', 'review', 'issues', 'trivial']
+export const STAGES = ['planning', 'working', 'review', 'trivial']
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 export const SUPPORTED = {
   codex: {
@@ -17,7 +17,7 @@ export const SUPPORTED = {
   },
 }
 
-const legacyRole = { planning: 'planning', working: 'working', review: 'review', issues: 'issues', trivial: 'trivial' }
+const legacyRole = { planning: 'planning', working: 'working', review: 'review', trivial: 'trivial' }
 const kindOf = engine => typeof engine === 'string' ? engine : engine?.kind
 const reasoningOf = engine => String(engine?.reasoning || engine?.reasoningLevel || engine?.reasoningArgs?.join(' ')?.match(/model_reasoning_effort=\\?"?([a-z]+)/i)?.[1] || (kindOf(engine) === 'codex' ? 'high' : 'medium')).toLowerCase()
 
@@ -47,7 +47,7 @@ export function globalSettings(config) {
 
 // The launch guard (herdr.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
 // here too, or a saved setting only fails at agent start and sends cards to Owner (2026-09-26 I229).
-const ROLE = { planning: 'p', working: 'b', review: 'r', issues: 'i', trivial: 'b' }
+const ROLE = { planning: 'p', working: 'b', review: 'r', trivial: 'b' }
 function assertLaunchable(stage, setting) {
   const allowed = [approvedManagedModel(`${ROLE[stage]}-t-1`) ?? []].flat()
   if (allowed.length && !allowed.includes(setting.model)) throw new Error(`${stage}: model ${setting.model} is not approved for board launches (allowed: ${allowed.join(', ')})`)
@@ -81,7 +81,7 @@ export function catalog() {
   return Object.fromEntries(Object.entries(SUPPORTED).map(([engine, data]) => [engine, { models: [...data.models], reasoning: [...data.reasoning] }]))
 }
 
-const labels = { planning: 'Planner', working: 'Builder', review: 'Reviewer', issues: 'Issues', trivial: 'Trivial' }
+const labels = { planning: 'Planner', working: 'Builder', review: 'Reviewer', trivial: 'Trivial' }
 const fields = ['engine', 'model', 'reasoning']
 export function setCardOverride(tasksDir, cardId, stage, patch, config) {
   if (!STAGES.includes(stage)) throw new Error(`unsupported settings stage ${stage}`)

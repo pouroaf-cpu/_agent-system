@@ -191,6 +191,8 @@ export const COLUMNS = [
   { key: 'planned',   dir: 'backlog',   label: 'Planned'   },
   { key: 'queue',     dir: 'queue',     label: 'Queue'     },
   { key: 'working',   dir: 'working',   label: 'Working'   },
+  // Retired 2026-09-25: nothing moves here (moveCard sends it to Planning). Kept so an old
+  // card left in TASKS/issues still shows and can be moved; startup drains it to Planning.
   { key: 'issues',    dir: 'issues',    label: 'Issues'    },
   { key: 'review',    dir: 'review',    label: 'Review'    },
   { key: 'completed', dir: 'completed', label: 'Completed' },
@@ -221,8 +223,8 @@ export const CATEGORIES = ['ui', 'code', 'auth-security', 'data']
 // when it writes the card and a human can see it in the diff.
 const AUTOREVIEW = /^\*\*Auto-review:\*\*\s*(yes|no)\s*$/im
 const TRIVIAL = /^\*\*Trivial:\*\*\s*(yes|no)\s*$/im
-const AGENT_SETTING = /\*\*(Planner|Builder|Reviewer|Issues|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
-const AGENT_STAGE = { Planner: 'planning', Builder: 'working', Reviewer: 'review', Issues: 'issues', Trivial: 'trivial' }
+const AGENT_SETTING = /\*\*(Planner|Builder|Reviewer|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
+const AGENT_STAGE = { Planner: 'planning', Builder: 'working', Reviewer: 'review', Trivial: 'trivial' }
 // Planner-authored time estimates, same metadata line as Priority/Status/Surface.
 const EST_BUILD = /\*\*Est build:\*\*\s*(\d+)\s*m/i
 const EST_REVIEW = /\*\*Est review:\*\*\s*(\d+)\s*m/i
@@ -755,6 +757,8 @@ function mergeLateCopy(tasksDir, id, copies) {
 
 // Move a card between columns. This IS the state change — there is nothing else to update.
 export function moveCard(tasksDir, cardId, toKey, options = {}) {
+  // Issues is retired (operator 2026-09-25): anything aimed at it goes to Planning.
+  if (toKey === 'issues') toKey = 'planning'
   let col = columnByKey(toKey)
   if (!col) throw new Error(`unknown column: ${toKey}`)
 

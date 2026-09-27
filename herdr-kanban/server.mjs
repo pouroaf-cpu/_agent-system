@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
 import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
-import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners } from './lib/card-planner.mjs'
+import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
@@ -41,7 +41,7 @@ const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mj
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, spawnIssuesSweeper, routeBuilderNoHandoff, recoverBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -322,7 +322,6 @@ function boardPayload(project) {
       model: config.models.working,
       trivialModel: config.models.trivial ?? config.models.working,
       reviewModel: config.models.review,
-      sweepModel: config.models.issues,
       engine: engineFor('working').kind ?? engineFor('working'),
       agentSettings: globalSettings(config),
       supportedAgentSettings: catalog(),
@@ -538,16 +537,6 @@ async function pollProject(project) {
     for (const id of recoverIds) {
       recordUsageFinish({ tasksDir, paneId: beforeReap[id]?.pane_id, binding: beforeReap[id], status: 'ambiguous' }).catch(() => {})
       try {
-        if (await recoverBuilderNoHandoff({ tasksDir, cardId: id, agents, session: sessionOf(project), workspace: integrationPathOf(project), gitSettings, graceMs: FINISHED_BINDING_GRACE_MS })) {
-          dirty = true
-          continue
-        }
-        const pendingRecovery = readWorkflow(tasksDir)[id]?.builderRecovery
-        if (['claimed', 'uncertain'].includes(pendingRecovery?.status)) continue
-        // A nudged Builder still working must not be moved under it (Tradeflow T-42:
-        // the card was routed to Issues mid-work and its handoff hit two copies).
-        const nudgedAgent = pendingRecovery?.status === 'nudged' && liveByPane.get(pendingRecovery.paneId)
-        if (nudgedAgent && !['idle', 'done'].includes(nudgedAgent.agent_status)) continue
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
@@ -557,26 +546,15 @@ async function pollProject(project) {
           cardId: id,
           reason: `Session ${beforeReap[id]?.pane_id || 'unknown'} ${agent ? `finished with status=${agent.agent_status}` : 'is missing'} without a valid Builder handoff from Working`,
           evidence,
-          workspace: integrationPathOf(project),
-          gitSettings,
           boardRoot: HERE,
           engine: assigned.engine,
           model: assigned.model,
+          session: sessionOf(project),
         })
-        // Requeued to wait out an engine usage limit: its idle pane is of no further use.
+        // Requeued (usage limit or a prompt that never landed): its idle pane is of no further use.
         if (routed.column === 'queue' && agent) await paneClose(agent.pane_id, sessionOf(project)).catch(() => {})
       } catch (err) {
         if (!ambiguousHold(project, err)) activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
-      }
-    }
-
-    if (config.maxConcurrentAgents > 0 && missionAllowsProject(project) && !breakerState(project).breakerTripped) {
-      for (const card of readBoard(tasksDir).issues) {
-        try {
-          if (await recoverBuilderNoHandoff({ tasksDir, cardId: card.id, agents, session: sessionOf(project), workspace: integrationPathOf(project), gitSettings })) dirty = true
-        } catch (err) {
-          if (!ambiguousHold(project, err)) activity(project, card.id, 'recovery-held',`Builder recovery needs attention: ${err.message}`, 'error')
-        }
       }
     }
 
@@ -630,7 +608,7 @@ async function pollProject(project) {
         projectPath: integrationPathOf(project),
         tasksDir,
         boardRoot: HERE,
-        model: config.models.planning ?? config.models.issues,
+        model: config.models.planning,
         engine: engineFor('planning'),
         maxPlanners: config.maxPlanners ?? 4,
         assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
@@ -640,20 +618,12 @@ async function pollProject(project) {
       }).catch((err) => {
         if (err.paused || ambiguousHold(project, err)) return null
         recordSpawnFailure({ project, cap: config.maxConcurrentAgents, reason: err.message })
-        if (!err.busy && !/nothing in Issues/.test(err.message)) {
+        if (!err.busy) {
           console.log(`lead planner skipped — ${err.message}`)
           activity(project, '-', 'failure', err.message, 'error')
         }
         return null
       })
-      if (!planner && readBoard(tasksDirOf(project)).issues.some(c => !c.cardOwned)) {
-        const sweeper = await spawnIssuesSweeper({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, model: config.models.issues ?? config.models.planning, engine: engineFor('issues'), assignmentForCard: (card, stage) => assignmentForCard(project, card, stage), mission: config.mission }).catch(err => {
-          if (!err.busy && !/nothing in Issues/.test(err.message)) console.log(`legacy planner skipped — ${err.message}`)
-          if (!err.busy && !/nothing in Issues/.test(err.message)) activity(project, '-', 'failure', err.message, 'error')
-          return null
-        })
-        if (sweeper) for (const id of sweeper.cards) activity(project, id, 'planner-start', 'Issues sweeper started')
-      }
       if (planner) {
         if (planner.spawnedNewAgent) recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
@@ -1438,43 +1408,18 @@ const handleRequest = async (req, res) => {
       for (const id of result.cards) activity(p, id, 'reviewer-start', 'Reviewer started')
       json(res, 200, { ok: true, reviewer: result })
     } catch (err) {
-      // 409: the tick or another click is already spawning one; not a failure. An empty
-      // Issues lane is not one either: the 15-minute sweep task logged it on every project.
-      if (!err.busy && !/nothing in Issues/.test(err.message)) activity(p, '-', 'failure', err.message, 'error')
-      json(res, err.busy ? 409 : 400, { ok: false, error: err.message })
-    }
-    broadcastBoard(p)
-    return
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/sweep-issues') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0] } = JSON.parse(body || '{}')
-    try {
-      if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
-      const result = await spawnIssuesSweeper({
-        project: p,
-        projectPath: integrationPathOf(p),
-        tasksDir: tasksDirOf(p),
-        boardRoot: HERE,
-        model: config.models.planning ?? config.models.issues,
-        engine: engineFor('planning'),
-        assignmentForCard: (card, stage) => assignmentForCard(p, card, stage),
-        mission: p === config.mission?.project ? config.mission : null,
-      })
-      recordSpawn({ project: p, cap: config.maxConcurrentAgents })
-      tripBreakerIfNeeded(p)
-      herdrLog(`Lead Planner started for ${result.cards.length} card(s)`)
-      for (const id of result.cards) activity(p, id, 'planner-start', 'Lead Planner started')
-      json(res, 200, { ok: true, planner: result })
-    } catch (err) {
       // 409: the tick or another click is already spawning one; not a failure.
       if (!err.busy) activity(p, '-', 'failure', err.message, 'error')
       json(res, err.busy ? 409 : 400, { ok: false, error: err.message })
     }
     broadcastBoard(p)
     return
+  }
+
+  // Issues is retired (2026-09-25): failed cards go to Planning, whose Planners run on the
+  // tick. Kept only so the old 15-minute sweep task gets a clear answer until it is removed.
+  if (req.method === 'POST' && url.pathname === '/api/sweep-issues') {
+    return json(res, 410, { ok: false, error: 'The Issues lane is retired; failed cards go to Planning. Remove the InjectbuddyIssuesSweep task.' })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/pane') {
@@ -1531,6 +1476,8 @@ async function startPollers() {
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.
   for (const project of config.projects) {
+    const drained = drainIssues(tasksDirOf(project), (card, err) => activity(project, card.id, 'failure', `left in Issues: ${err.message}`, 'error'))
+    for (const id of drained) activity(project, id, 'move', 'issues -> planning (Issues lane retired)')
     setInterval(() => pollProject(project), config.agentPollMs)
   }
   setInterval(() => {

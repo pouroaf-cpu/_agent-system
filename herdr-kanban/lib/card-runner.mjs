@@ -96,7 +96,7 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
     const common = { project, projectPath, tasksDir, boardRoot }
     if (card.column === 'planning') {
       const setting = selected('planning')
-      return await withCardRunAssignment(run, 'planner', () => io.runCardPlanner({ ...common, onlyIds: [card.id], model: setting?.model ?? config.models.planning ?? config.models.issues, engine: setting ? { kind: setting.engine, ...(setting.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${setting.reasoning}"`] } : {}) } : engine('planning'), assignmentForCard: config.assignmentForCard, mission: config.mission }))
+      return await withCardRunAssignment(run, 'planner', () => io.runCardPlanner({ ...common, onlyIds: [card.id], model: setting?.model ?? config.models.planning, engine: setting ? { kind: setting.engine, ...(setting.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${setting.reasoning}"`] } : {}) } : engine('planning'), assignmentForCard: config.assignmentForCard, mission: config.mission }))
     }
     if (['planned', 'queue'].includes(card.column)) {
       validatePlan(readFileSync(card.path, 'utf8'))

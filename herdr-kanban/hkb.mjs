@@ -53,7 +53,7 @@ if (args[0] === '--planner-assignment') { plannerAssignment = args[1]; args.spli
 const [verb, cardId, ...rest] = args
 const note = rest.join(' ').trim()
 
-const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'issues', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'issues', pass: null, move: null }
+const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'planning', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'planning', pass: null, move: null }
 
 // What gets stamped above the note, and what the board reads back out.
 // split: an investigation found several separate issues. The card stops, and the project's
@@ -212,7 +212,7 @@ try {
   if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again. Edit only your own sections; never rewrite other sections.`)
   // A Planner cannot add an operator-only approval, so any Planner handoff on a plan
   // held only by one goes to Owner with the question, never back to planning (T-148).
-  approvalWait = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['move', 'issue', 'owner', 'park', 'split'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
+  approvalWait = (plannerAssignment || current.column === 'planning') && ['move', 'issue', 'owner', 'park', 'split'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
   if (approvalWait) target = 'owner'
   if (reviewClaim || current.column === 'review') assertReviewHandoff(reviewRoot, tasksDir, current.id, reviewClaim)
   if (reviewClaim && !['pass', 'rework', 'owner', 'audit', 'issue'].includes(verb)) fail('Reviewer claim permits only scoped review handoffs')
@@ -302,7 +302,7 @@ try {
       if (plannerIssues >= 3) target = 'owner'
     }
   }
-  if (verb === 'done' && current.cardOwned && ['working', 'issues'].includes(current.column)) {
+  if (verb === 'done' && current.cardOwned && current.column === 'working') {
     const commitError = handoffCommitError(tasksDir, current)
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
   }
@@ -322,7 +322,7 @@ try {
       if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
     }
   }
-  const check = (plannerAssignment || ['planning', 'issues'].includes(current.column)) && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
+  const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   // Only a plan the check accepted clears the blocker count: resetting it before a refused
@@ -337,7 +337,7 @@ try {
     requestPlannerCorrection(tasksDir, card.id)
     appendFileSync(card.path, '\n\n**Audit findings intake**\nValidate current findings, deduplicate against existing cards, and link each numbered finding to an approved remediation card. Create only missing in-scope fixes through Planner -> Builder -> scoped independent review. Archive this report only after all findings are linked; report closure does not mean fixes are complete. No deployment or unsafe business/data change is authorized.\n')
   }
-  if (!card.audit && (verb === 'rework' || (previousColumn === 'review' && ['issues', 'planning'].includes(target)))) setAutoReview(tasksDir, card.id, true)
+  if (!card.audit && (verb === 'rework' || (previousColumn === 'review' && target === 'planning'))) setAutoReview(tasksDir, card.id, true)
   appendDirtySnapshot(card, dirtySnapshot)
   if (previousColumn === 'review' || approvalWait || ['issue', 'rework', 'owner', 'park', 'split'].includes(verb)) stopCardRun(basename(dirname(tasksDir)), card.id, previousColumn === 'review' ? `Review handoff: ${verb}` : `Stopped at ${verb}`)
 } catch (err) {
@@ -355,8 +355,7 @@ else if (HEADING[verb]) {
   const tail = capped
     ? `\n\nRepeated review failure: Planner must diagnose the root cause and record a changed approach before requeueing. Preserve all evidence and acceptance criteria.\n`
     : '\n'
-  const heading = target === 'issues' && ['owner', 'park'].includes(verb) ? 'Kicked back' : HEADING[verb]
-  writeCurrentFeedback(tasksDir, card, heading, note + tail)
+  writeCurrentFeedback(tasksDir, card, HEADING[verb], note + tail)
 }
 // A plan that is now build-ready answers any earlier Owner question; a stale "Needs you"
 // left on a queued card reads as waiting on the operator (Injectbuddy I165, I178).
@@ -369,8 +368,7 @@ appendHistory(tasksDir, card.id, { event: 'handoff', stage: previousColumn, outc
 if (binding) updateWorkflow(tasksDir, card.id, { builder: binding })
 if (['done', 'unchanged', 'pass'].includes(verb)) updateWorkflow(tasksDir, card.id, {
   operational: null,
-  // A Builder routed to Issues mid-work still completes the Builder stage (Tradeflow T-42).
-  completedStage: previousColumn === 'issues' && ['done', 'unchanged'].includes(verb) && !plannerAssignment ? 'working' : previousColumn,
+  completedStage: previousColumn,
   ...(target === 'completed' ? { completedAt: new Date().toISOString() } : {}),
 })
 unbind(tasksDir, card.id)

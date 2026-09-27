@@ -30,7 +30,6 @@ const el = {
   dlgMsg: document.getElementById('spawn-msg'),
   slots: document.getElementById('slots'),
   reviewBtn: document.getElementById('review-btn'),
-  sweepBtn: document.getElementById('sweep-btn'),
   archiveBtn: document.getElementById('archive-btn'),
   archiveCancel: document.getElementById('archive-cancel'),
   burger: document.getElementById('burger'),
@@ -110,7 +109,7 @@ function mockPayload() {
 
   const cols = [['planning', 'planning', 'Planning'], ['planned', 'backlog', 'Planned'],
 
-    ['queue', 'queue', 'Queue'], ['working', 'working', 'Working'], ['issues', 'issues', 'Issues'],
+    ['queue', 'queue', 'Queue'], ['working', 'working', 'Working'],
 
     ['review', 'review', 'Review'], ['completed', 'completed', 'Completed']];
 
@@ -154,8 +153,6 @@ function mockPayload() {
 
       ],
 
-      issues: [c('T-06', 'Blocked: Supabase RLS policy rejects anonymous dose reads', 'issues', 6, { status: 'blocked — waiting on policy decision' })],
-
       completed: [c('T-02', 'Ship the BAC water calculator landing page', 'completed', 5)],
 
       review: [c('T-08', 'Review peptide dosage disclaimer copy for medical accuracy', 'review', 10, { surface: 'both' })],
@@ -190,7 +187,7 @@ function mockPayload() {
 
     slotsFree: 2,
 
-    config: { stallSeconds: 60, maxConcurrentAgents: 3, model: 'sonnet', reviewModel: 'claude-opus-4-6', sweepModel: 'sonnet' }
+    config: { stallSeconds: 60, maxConcurrentAgents: 3, model: 'sonnet', reviewModel: 'claude-opus-4-6' }
 
   };
 
@@ -492,7 +489,7 @@ function cardNode(card) {
   if (holdsUp) bit('holds ' + holdsUp, holdsUp + ' card' + (holdsUp === 1 ? '' : 's') + ' cannot start until this one lands');
   // A card that failed to start is still queued, but it is on its second go.
   const retry = state.retries?.[card.id]?.attempts || 0;
-  if (retry) bit('retry ' + retry + '/3', 'Failed to start ' + retry + ' time' + (retry === 1 ? '' : 's') + '; goes to Issues after 3');
+  if (retry) bit('retry ' + retry + '/3', 'Failed to start ' + retry + ' time' + (retry === 1 ? '' : 's'));
   const usage = state?.cardUsage?.[card.id];
   if (usage) bit(usage.tokens ? compactNum.format(usage.tokens.total) + ' tokens' + (usage.unknown ? ' (partial)' : '') : 'usage unverified', usage.tokens ? fmtNum(usage.tokens.total) + ' tokens' : null);
   const meta = document.createElement('div');
@@ -599,8 +596,6 @@ function setView(next) {
   if (state) {
 
     renderReviewBtn();
-
-    renderSweepBtn();
 
     renderArchiveBtn();
 
@@ -1066,7 +1061,7 @@ function renderManagerTasksScreen() {
   wrap.append(ah, ap);
   const stages = state.config?.agentSettings || {};
   const catalog = state.config?.supportedAgentSettings || {};
-  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['issues', 'Issues'], ['trivial', 'Trivial']]) {
+  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) {
     const current = stages[stage] || {};
     const line = document.createElement('div'); line.className = 'settings-agent-row';
     const title = document.createElement('strong'); title.textContent = label;
@@ -1111,9 +1106,9 @@ function renderSettingsScreen() {
 
   mp.className = 'settings-help';
 
-  mp.textContent = 'Auto starts Queue cards on its own and sweeps Issues. Auto-Manager stops that: ' +
+  mp.textContent = 'Auto starts Queue cards on its own. Auto-Manager stops that: ' +
 
-    'a manager agent sweeps Issues and Owner every 15 minutes, answers what the evidence settles, ' +
+    'a manager agent sweeps Owner every 15 minutes, answers what the evidence settles, ' +
 
     'parks what only you can, and decides what gets started.';
 
@@ -1683,28 +1678,6 @@ function renderArchiveBtn() {
 
 
 
-function renderSweepBtn() {
-
-  if (view !== 'board') {
-
-    el.sweepBtn.hidden = true;
-
-    return;
-
-  }
-
-  const n = (state.board.issues || []).length;
-
-  el.sweepBtn.hidden = n === 0;
-
-  el.sweepBtn.textContent = 'Sweep ' + n + ' issue' + (n === 1 ? '' : 's');
-
-  el.sweepBtn.title = 'One ' + (state.config?.sweepModel || 'sweeper') + ' agent fixes or hands each one back in a single pass';
-
-}
-
-
-
 // Switching project is a full page load: every timer, the SSE stream and the
 
 // drawer are all scoped to one project, and a reload is cheaper than unwinding
@@ -1945,8 +1918,6 @@ function render() {
   renderSlots();
 
   renderReviewBtn();
-
-  renderSweepBtn();
 
   renderArchiveBtn();
 
@@ -2641,7 +2612,7 @@ function renderDrawer() {
   const grid = document.createElement('div');
   grid.className = 'override-grid';
   const stagePick = document.createElement('select');
-  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['issues', 'Issues'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
+  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
   const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
   stagePick.setAttribute('aria-label', 'Stage'); oe.setAttribute('aria-label', 'Engine'); om.setAttribute('aria-label', 'Model'); or.setAttribute('aria-label', 'Reasoning');
   os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';
@@ -3000,58 +2971,6 @@ async function runReview() {
 
 
 
-// One sweeper for the whole Issues column, not one per card.
-
-async function runSweep() {
-
-  const n = (state.board.issues || []).length;
-
-  if (!n) return;
-
-  if (!(await ask('Sweep all ' + n + ' issue' + (n === 1 ? '' : 's') +
-
-      ' with ' + (state.config?.sweepModel || 'the sweeper') + ' in one pass?'))) return;
-
-  el.sweepBtn.disabled = true;
-
-  el.sweepBtn.textContent = 'starting sweeper…';
-
-  try {
-
-    const r = await fetch('/api/sweep-issues', {
-
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-
-      body: JSON.stringify({ project: PROJECT })
-
-    });
-
-    const j = await r.json().catch(() => ({}));
-
-    // One sweeper at a time is the design, so clicking twice is a note, not a fault.
-
-    if (r.status === 409) return toast(j.error || 'a sweeper is already running', 'info');
-
-    if (!r.ok || !j.ok) throw new Error(j.error || 'sweeper failed to start');
-
-    toast('sweeper running on ' + (j.sweeper?.cards || []).join(', '));
-
-  } catch (err) {
-
-    toast(String(err.message || err));
-
-  } finally {
-
-    el.sweepBtn.disabled = false;
-
-    render();
-
-  }
-
-}
-
-
-
 function setMore(open) {
   el.drawerMoreMenu.hidden = !open;
   el.drawerMore.setAttribute('aria-expanded', String(open));
@@ -3106,8 +3025,6 @@ el.drawerArchive.addEventListener('click', () => {
 
 el.reviewBtn.addEventListener('click', runReview);
 
-el.sweepBtn.addEventListener('click', runSweep);
-
 el.archiveBtn.addEventListener('click', async () => {
 
   if (!picking) { picking = true; render(); return; }
@@ -3157,6 +3074,10 @@ document.getElementById('spawn-cancel').addEventListener('click', () => el.dlg.c
 function apply(payload) {
 
   trackStatuses(payload.agents);
+
+  // Issues is retired: its column shows only while an old card still sits there.
+
+  payload.columns = payload.columns.filter(c => c.key !== 'issues' || payload.board.issues?.length);
 
   state = payload;
 

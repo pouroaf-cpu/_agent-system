@@ -18,14 +18,12 @@ test('requested role defaults resolve to the right launch arguments', () => {
     review: { engine: 'codex', model: 'gpt-6-luna', reasoning: 'high' },
   })
   const saved = { ...config, agentSettings: { global: globals } }
-  assert.deepEqual(globalSettings(saved).issues, before.issues)
   assert.deepEqual(globalSettings(saved).trivial, before.trivial)
 
   for (const [stage, name, kind, model] of [
     ['planning', 'kb-planner-t-1-test', 'claude', 'claude-opus-5-5'],
     ['working', 'kb-t-1-test', 'codex', 'gpt-6-luna'],
     ['review', 'kb-review-test', 'codex', 'gpt-6-luna'],
-    ['issues', 'kb-plan-test', 'codex', 'gpt-5.6-luna'],
   ]) {
     const setting = assignmentFor(saved, null, stage)
     const args = agentStartArgs({ name, paneId: 'test', model: setting.model, engine: engineForAssignment(setting) })
