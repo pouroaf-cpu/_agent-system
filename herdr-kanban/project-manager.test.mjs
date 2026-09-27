@@ -113,6 +113,24 @@ test('summary has lane counts, the oldest card, owner ids and the stuck count', 
   assert.ok(!('release' in s))
 })
 
+// Injectbuddy I341/I344 read "stuck" the moment their blocker landed (2026-09-27).
+test('a card whose blocker landed a minute ago is not stuck, however long it waited', async () => {
+  const blocker = createCard(tasks, { title: 'Blocker', brief: 'x', prefix: 'P' })
+  moveCard(tasks, blocker.id, 'archive', { operatorArchive: true })
+  const card = createCard(tasks, { title: 'Was blocked', brief: 'x', prefix: 'P' })
+  writeFileSync(card.path, readFileSync(card.path, 'utf8').replace(/^(\*\*Trivial:\*\*.*)$/m, `$1\n**Blocked by:** ${blocker.id}`))
+  moveCard(tasks, card.id, 'owner')
+  moveCard(tasks, card.id, 'planning')
+  // Three hours in Planning; the blocker's archive move one minute ago.
+  const age = (id, ms) => { const path = historyPath(tasks, id); writeFileSync(path, readFileSync(path, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - ms).toISOString()}"`)) }
+  age(card.id, 3 * 3600000)
+  age(blocker.id, 60000)
+  const r = await get('/api/stuck?project=Proj&minutes=60')
+  assert.equal(r.status, 200, r.body.error)
+  assert.ok(!r.body.cards.some(c => c.id === card.id), 'card listed as stuck right after its blocker landed')
+  assert.ok((await get('/api/stuck?project=Proj&minutes=0')).body.cards.some(c => c.id === card.id && c.minutes <= 2))
+})
+
 test('hkb found goes to the registered manager inbox, to the Kanban Manager without one, and always with --board', async () => {
   mkdirSync(join(tasks, 'working'), { recursive: true })
   writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')

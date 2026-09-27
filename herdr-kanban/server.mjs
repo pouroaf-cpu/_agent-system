@@ -333,6 +333,12 @@ function boardPayload(project) {
 
 // --- project chat reads: stuck cards and summary ---------------------------
 
+// When the card's last Blocked-by card landed (integrated, else archived), or 0.
+const lastBlockerLanded = (tasksDir, card, board, registry) => Math.max(0, ...(card.blockedBy || []).map(id => {
+  const archived = board.archive.find(c => c.id === id)
+  return Date.parse(registry[id]?.integratedAt ?? '') || (archived ? laneEnteredAt(tasksDir, id, 'archive') ?? archived.mtime : 0)
+}))
+
 // Every non-archived card with its minutes in lane, the live agent working on it and
 // why it waits, from the same lane times, holds and stage indicators the board shows.
 function cardWaits(project, now = Date.now()) {
@@ -345,7 +351,9 @@ function cardWaits(project, now = Date.now()) {
   let registry = {}
   try { registry = readWorktrees(tasksDir) } catch { /* no registry: blockers count as unmet by archive state alone */ }
   const cards = COLUMNS.flatMap(c => board[c.key] || []).map(card => {
-    const since = Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime)
+    // The stuck clock starts when the last blocker landed if that is later: a card that waited
+    // hours read as stuck the moment its blocker landed (Injectbuddy I341, I344, 2026-09-27).
+    const since = Math.max(Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime), lastBlockerLanded(tasksDir, card, board, registry))
     // A Planner's `hkb wait`: the files or cards its plan needs that do not exist yet.
     const wait = card.column === 'planning' && workflow[card.id]?.waitFor, needs = wait ? [...wait.cards, ...wait.files] : []
     const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
