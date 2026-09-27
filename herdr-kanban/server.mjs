@@ -351,7 +351,7 @@ function cardWaits(project, now = Date.now()) {
     const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
     return { project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? (needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }
@@ -1111,7 +1111,9 @@ const handleRequest = async (req, res) => {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
-      if (['pou', 'owner'].includes(before.column) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
+      // Moving a card held on a Planner's [decision] question is the answer: lift the hold.
+      const decision = before.column === 'planning' && readWorkflow(tasksDirOf(p))[card.id]?.waitFor?.decision
+      if ((['pou', 'owner'].includes(before.column) || decision) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
       if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)

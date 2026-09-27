@@ -182,6 +182,7 @@ let card
 let previousColumn
 let approvalWait = false
 let prerequisiteWait = false
+let decisionWait = false
 let plannerIssues = 0
 let escalated = false
 let auditNotReady = ''
@@ -255,11 +256,19 @@ try {
   }
   // A Planner reporting that Blocked-by prerequisites have not landed is a valid
   // wait, not a failed plan (TF44): the card stays in Planning until they land.
-  prerequisiteWait = verb === 'issue' && !approvalWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
+  // A product/operator decision no Planner can make: the card waits in Planning for the
+  // manager's answer, uncounted and unescalated; moving the card (/api/move) clears it.
+  decisionWait = verb === 'issue' && !approvalWait && current.column === 'planning' && failureCategory(note) === 'decision'
+  if (decisionWait) {
+    target = 'planning'
+    updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, why: note, since: new Date().toISOString() } })
+    appendHistory(tasksDir, current.id, { event: 'planner-decision-wait', stage: 'planning', note })
+  }
+  prerequisiteWait = verb === 'issue' && !approvalWait && !decisionWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
   if (prerequisiteWait) {
     target = 'planning'
     appendHistory(tasksDir, current.id, { event: 'planner-prerequisite-wait', stage: current.column, note, waitingFor: waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)) })
-  } else if (['issue', 'rework'].includes(verb) && !approvalWait) {
+  } else if (['issue', 'rework'].includes(verb) && !approvalWait && !decisionWait) {
     const category = failureCategory(note)
     if (category === 'incidental') fail('Incidental findings alone are not a failed handoff: record evidence/classification in the current result and use the normal done/pass handoff only when every agreed criterion is met. In-scope or change-caused defects still require issue/rework.')
     target = failureDestination(category, current.column)
@@ -323,7 +332,7 @@ try {
   // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
   // a fresh Planner. Left "submitted" it was counted as a no-handoff and sent to Owner
   // under a false reason (Injectbuddy I152, I178).
-  if (previousColumn === 'planning' && target === 'planning' && verb === 'issue' && !prerequisiteWait && !approvalWait) requestPlannerCorrection(tasksDir, card.id)
+  if (previousColumn === 'planning' && target === 'planning' && verb === 'issue' && !prerequisiteWait && !approvalWait) requestPlannerCorrection(tasksDir, card.id, { correction: !decisionWait })
   if (auditIntake && previousColumn !== 'planning') {
     requestPlannerCorrection(tasksDir, card.id)
     appendFileSync(card.path, '\n\n**Audit findings intake**\nValidate current findings, deduplicate against existing cards, and link each numbered finding to an approved remediation card. Create only missing in-scope fixes through Planner -> Builder -> scoped independent review. Archive this report only after all findings are linked; report closure does not mean fixes are complete. No deployment or unsafe business/data change is authorized.\n')
@@ -336,6 +345,10 @@ try {
 }
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
+else if (decisionWait) writeCurrentFeedback(tasksDir, card, 'Needs you', `${note}
+
+Record the answer on the card, then move it to Planning (or Planned).
+`)
 else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready${escalated ? ` (after one Codex Planner, the ${ESCALATION_MODEL} escalation Planners also failed)` : ''}. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
 else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {

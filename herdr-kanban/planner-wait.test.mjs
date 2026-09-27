@@ -2,11 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createCard, findCard } from './lib/cards.mjs'
-import { readCardPlanners, runCardPlanner } from './lib/card-planner.mjs'
+import { readCardPlanners, runCardPlanner, operatorRetry } from './lib/card-planner.mjs'
 import { saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 
@@ -69,4 +69,47 @@ test('hkb wait on a card adds it to Blocked by', () => {
     assert.deepEqual(findCard(dir, card.id).blockedBy, [needed.id])
     assert.deepEqual(readWorkflow(dir)[card.id].waitFor.cards, [needed.id])
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// A decision is the manager's, not another Planner's: it must not count toward Owner or escalate.
+test('hkb issue [decision] from Planning holds the card for the manager, uncounted and unescalated', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-decision-'))
+  const dir = join(root, 'Proj', 'TASKS')
+  try {
+    mkdirSync(dir, { recursive: true })
+    const config = join(root, 'board.config.json'), inbox = join(root, 'inbox.md')
+    writeFileSync(config, JSON.stringify({ projectsRoot: root, projects: ['Proj'] }))
+    const card = createCard(dir, { title: 'Pick a layout', brief: 'x' })
+    const owners = readCardPlanners(dir)
+    owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
+    saveCardPlanners(dir, owners)
+    const r = spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[decision] one page or two? A: one page, B: two pages'],
+      { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: inbox } })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(findCard(dir, card.id).column, 'planning')
+    const saved = readWorkflow(dir)[card.id]
+    assert.equal(saved.plannerIssues, undefined)
+    assert.equal(saved.plannerEscalation, undefined)
+    assert.equal(saved.waitFor.decision, true)
+    assert.throws(() => readFileSync(join(dir, 'codex-planner-failures.log')))
+    assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /^Needs you: \[decision\] one page or two/m)
+    assert.match(readFileSync(inbox, 'utf8'), new RegExp(`ASK Proj ${card.id} \\(planning\\): \\[decision\\] one page or two`))
+
+    let starts = 0
+    const agents = []
+    const io = {
+      agentList: async () => agents, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+      tabCreate: async () => ({ root_pane: { pane_id: 'p2' } }),
+      agentStart: async ({ name, paneId }) => { starts++; agents.push({ name, pane_id: paneId, agent_status: 'idle' }) },
+      deliver: async () => {}, paneClose: async () => {}, paneRead: async () => '', recordUsageStart: () => {}, recordUsageFinish: async () => {},
+    }
+    const run = () => runCardPlanner({ project: 'Proj', projectPath: dirname(dir), tasksDir: dir, boardRoot: root, model: 'gpt-5.5', io })
+    assert.equal(await run(), null)
+    assert.equal(starts, 0)
+    // The manager's answer: /api/move of a decision-held Planning card runs operatorRetry.
+    operatorRetry(dir, card.id, 'planning')
+    assert.equal(readWorkflow(dir)[card.id].waitFor, null)
+    assert.deepEqual((await run())?.cards, [card.id])
+    assert.equal(starts, 1)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
