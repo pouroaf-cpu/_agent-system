@@ -18,7 +18,7 @@ const briefing = (tasksDir, card, role) => {
 
 export const psLiteral = value => `'${String(value).replaceAll("'", "''")}'`
 const hkb = (boardRoot, tasksDir) => `node ${psLiteral(resolve(boardRoot, 'hkb.mjs'))}${tasksDir ? ` --tasks ${psLiteral(tasksDir)}` : ''}`
-const shellRule = `Use the existing PowerShell tool with login:false and the supplied isolated workdir. Put commands directly in cmd: never prefix bare -NoProfile and never wrap them in nested pwsh -Command. Poll a running check's existing session; do not launch a duplicate. Use the check's documented timeout and observed failure; do not invent new timeouts or retry an unchanged failure without diagnosis. Keep full logs in evidence and return a bounded result, not repeated full logs.`
+const shellRule = `Use the existing PowerShell tool with login:false and the supplied isolated workdir. Put commands directly in cmd: never prefix bare -NoProfile and never wrap them in nested pwsh -Command. Poll a running check's existing session; do not launch a duplicate. Use the check's documented timeout and observed failure; do not invent new timeouts or retry an unchanged failure without diagnosis. Keep full logs in evidence and return a bounded result, not repeated full logs. Never run npm ci or npm install in a card checkout: its node_modules is a link to the shared install, and installing through it empties every other card's packages (Tradeflow TF103/TF107). Missing packages are [operational]; if the card itself changes package.json or a lockfile, first remove only the link with cmd /c rmdir node_modules, then install.`
 
 // The kanban manager always holds this herdr agent name, in this session — that
 // pair IS its address (see _roles/KANBAN_MANAGER.md). herdr looks names up per
