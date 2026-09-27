@@ -17,6 +17,10 @@ test('Codex workers get the board profile listing the curated plugin skills', as
     writeCodexBoardProfile()
     const toml = readFileSync(CODEX_BOARD_PROFILE, 'utf8')
     assert.match(toml, /\[\[skills\.config\]\]\npath = '.+nextjs[\\/]SKILL\.md'\nenabled = false/)
+    // The npm guard (bin/) goes first on the shell PATH, keeping the rest of PATH.
+    const { NPM_SHIM_DIR, boardAgentPath } = await import('./lib/herdr.mjs')
+    assert.equal(toml.match(/\[shell_environment_policy\.set\]\nPATH = (".*")\n/)?.[1], JSON.stringify(boardAgentPath()))
+    assert.deepEqual(boardAgentPath(`C:\\a;${NPM_SHIM_DIR};C:\\b`).split(';'), [NPM_SHIM_DIR, 'C:\\a', 'C:\\b'])
     const args = agentStartArgs({ name: 'b-t-1', paneId: 'w:p1', model: 'gpt-6-luna', engine: { kind: 'codex' }, workspacePath: 'C:/x', browser: false })
     assert.deepEqual(args.slice(args.indexOf('-p'), args.indexOf('-p') + 2), ['-p', 'board'])
     assert.ok(args.join(' ').length < 1500, 'start command stays short')

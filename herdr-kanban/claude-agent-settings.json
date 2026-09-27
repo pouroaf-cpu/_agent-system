@@ -12,6 +12,12 @@
     "agent-coms@pouroa-plugins": false
   },
   "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/bin/npm-guard.mjs --env", "timeout": 10 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/bin/npm-guard.mjs --hook", "timeout": 10 }] }
+    ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/agent-stop-hook.mjs", "timeout": 30 }] }
     ]

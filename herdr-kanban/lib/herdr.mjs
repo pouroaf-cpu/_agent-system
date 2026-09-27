@@ -25,6 +25,13 @@ const CLAUDE_BOARD_TOOLS = 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch
 // board agents). Those plugins are enabled account-side, so only per-SKILL.md entries work, and
 // passing them with -c made a 7.8 KB start command. Rewritten at each Codex start so a plugin
 // update's new version folder is covered; its entries add to the user's own skills.config list.
+// bin/ first on board agents' PATH: its npm refuses installs through a card checkout's shared
+// node_modules link (Tradeflow TF103/TF105, 2026-09-27). Codex takes PATH literally (no
+// expansion), so it is the board's own PATH with bin/ in front. Claude's shells ignore a
+// settings PATH: claude-agent-settings.json prepends bin/ for Bash (CLAUDE_ENV_FILE) and a
+// PreToolUse hook runs the same check on PowerShell commands.
+export const NPM_SHIM_DIR = fileURLToPath(new URL('../bin', import.meta.url))
+export const boardAgentPath = (path = process.env.PATH || '') => [NPM_SHIM_DIR, ...path.split(';').filter(p => p && p !== NPM_SHIM_DIR)].join(';')
 const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex')
 export const CODEX_BOARD_PROFILE = join(CODEX_HOME, 'board.config.toml')
 export function writeCodexBoardProfile() {
@@ -34,7 +41,9 @@ export function writeCodexBoardProfile() {
     list(join(cache, plugin, version, 'skills')).map(skill => join(cache, plugin, version, 'skills', skill, 'SKILL.md'))))
     .filter(path => existsSync(path))
   const toml = '# Written by herdr-kanban for board agents (codex -p board). Do not edit.\n' +
-    skills.map(path => `\n[[skills.config]]\npath = '${path}'\nenabled = false\n`).join('')
+    skills.map(path => `\n[[skills.config]]\npath = '${path}'\nenabled = false\n`).join('') +
+    // JSON string escapes are valid TOML basic-string escapes.
+    `\n[shell_environment_policy.set]\nPATH = ${JSON.stringify(boardAgentPath())}\n`
   try { if (readFileSync(CODEX_BOARD_PROFILE, 'utf8') === toml) return } catch {}
   writeFileSync(CODEX_BOARD_PROFILE, toml)
 }
