@@ -30,7 +30,7 @@ const stuck = async () => {
 
 const done = line => { console.log(line); process.exit(0) }
 const seen = new Set(cards())
-const lines = inboxLines().length
+let lines = inboxLines().length
 let stuckBefore = await stuck() ?? {}, rising = new Set()
 const started = Date.now()
 
@@ -40,6 +40,7 @@ for (let tick = 0; ; tick++) {
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
   const inbox = inboxLines()
   if (inbox.length > lines) done(`INBOX ${inbox.slice(lines).join('\n')}`)
+  lines = inbox.length // after a trim, the next alert must still wake the Manager
   if (tick % 6 === 5) {
     const now = await stuck()
     if (now) {
