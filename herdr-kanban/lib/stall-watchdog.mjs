@@ -10,7 +10,7 @@ import { readBoard, moveCard, columnByKey, waitingOnPrerequisites } from './card
 import { readBindings } from './bindings.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneEnteredAt } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneEnteredAt, lastBlockerLanded } from './card-history.mjs'
 import { readUsage } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
 import { sessionOf } from './herdr.mjs'
@@ -87,7 +87,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   for (const card of byId.values()) {
     if (['pou', 'owner'].includes(card.column)) continue
     if (busy(card.id)) { reset(card.id); continue }
-    const since = sinceOf(card)
+    const since = Math.max(sinceOf(card), lastBlockerLanded(tasksDir, card, board, registry))
     if (now - since >= minutes * 60000) idle.set(card.id, { card, since })
   }
 

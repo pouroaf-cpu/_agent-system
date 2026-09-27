@@ -145,6 +145,14 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   return path.replaceAll('\\', '/')
 }
 
+// When the card's last Blocked-by card landed (integrated, else archived), or 0. The stuck
+// clock and the stall watchdog start there: a card that waited hours behind a blocker read as
+// idle the moment it landed (I341, I344 stuck alerts; I352 moved to Owner 28 s later, 2026-09-27).
+export const lastBlockerLanded = (tasksDir, card, board, registry) => Math.max(0, ...(card.blockedBy || []).map(id => {
+  const archived = board.archive.find(c => c.id === id)
+  return Date.parse(registry[id]?.integratedAt ?? '') || (archived ? laneEnteredAt(tasksDir, id, 'archive') ?? archived.mtime : 0)
+}))
+
 export function writeCurrentFeedback(tasksDir, card, heading, note) {
   const text = readFileSync(card.path, 'utf8')
   const event = appendHistory(tasksDir, card.id, { event: 'feedback', heading, note, text })

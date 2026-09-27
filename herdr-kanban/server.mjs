@@ -18,7 +18,7 @@ import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './li
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
-import { historyPath, appendHistory, laneEnteredAt } from './lib/card-history.mjs'
+import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
@@ -333,11 +333,6 @@ function boardPayload(project) {
 
 // --- project chat reads: stuck cards and summary ---------------------------
 
-// When the card's last Blocked-by card landed (integrated, else archived), or 0.
-const lastBlockerLanded = (tasksDir, card, board, registry) => Math.max(0, ...(card.blockedBy || []).map(id => {
-  const archived = board.archive.find(c => c.id === id)
-  return Date.parse(registry[id]?.integratedAt ?? '') || (archived ? laneEnteredAt(tasksDir, id, 'archive') ?? archived.mtime : 0)
-}))
 
 // Every non-archived card with its minutes in lane, the live agent working on it and
 // why it waits, from the same lane times, holds and stage indicators the board shows.
