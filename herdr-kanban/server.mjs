@@ -1431,8 +1431,9 @@ const handleRequest = async (req, res) => {
       for (const id of result.cards) activity(p, id, 'reviewer-start', 'Reviewer started')
       json(res, 200, { ok: true, reviewer: result })
     } catch (err) {
-      // 409: the tick or another click is already spawning one; not a failure.
-      if (!err.busy) activity(p, '-', 'failure', err.message, 'error')
+      // 409: the tick or another click is already spawning one; not a failure. An empty
+      // Issues lane is not one either: the 15-minute sweep task logged it on every project.
+      if (!err.busy && !/nothing in Issues/.test(err.message)) activity(p, '-', 'failure', err.message, 'error')
       json(res, err.busy ? 409 : 400, { ok: false, error: err.message })
     }
     broadcastBoard(p)
