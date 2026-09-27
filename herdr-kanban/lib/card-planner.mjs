@@ -42,7 +42,7 @@ export function requestPlannerCorrection(dir, cardId) {
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
 // restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
-  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null })
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
 // Board Approve button on a Pou or Owner card: record the decision, add the operator-only
@@ -73,6 +73,8 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
   return { card: moved, investigation }
 }
 export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
+// A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
+export const ESCALATION_MODEL = 'claude-opus-4-6'
 const PLANNER_NO_HANDOFF = /^Planner session \S+ ended without a valid handoff/
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
@@ -89,8 +91,10 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     const board = readBoard(tasksDir)
     // Save the old Planner's output, revoke its pane and close it. The card, its
     // saved correction and all counters carry over to the fresh Planner.
-    const plannerEngine = card => assignmentForCard?.(card, 'planning')?.engine ?? engineKind(engine)
-    const plannerModel = card => assignmentForCard?.(card, 'planning')?.model ?? model
+    const escalation = card => readWorkflow(tasksDir)[card.id]?.plannerEscalation
+    const selectedFor = card => { const base = assignmentForCard?.(card, 'planning'), esc = escalation(card); return esc ? { ...base, engine: 'claude', model: esc.model } : base }
+    const plannerEngine = card => selectedFor(card)?.engine ?? engineKind(engine)
+    const plannerModel = card => selectedFor(card)?.model ?? model
     const retire = async (card, owner, agent, reason) => {
       const output = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).slice(-4000) : ''
       appendHistory(tasksDir, card.id, { event: 'planner-retired', stage: 'planning', reason, assignment: owner, pane: agent || null, output })
@@ -140,7 +144,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       await waitForPrompt(paneId, { session })
       assertPlannerAssignment(tasksDir, card.id, owner)
       bindCardRunAssignment(project, [card.id], 'planner', paneId)
-      const selected = assignmentForCard?.(card, 'planning')
+      const selected = selectedFor(card)
       owner.model = selected?.model ?? model
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
@@ -162,7 +166,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, issuesSweeperPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')

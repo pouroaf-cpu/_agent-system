@@ -25,7 +25,8 @@ import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
-import { requestPlannerCorrection } from './lib/card-planner.mjs'
+import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
+import { approvedManagedModel } from './lib/herdr.mjs'
 import { assertReviewHandoff, assertReviewInputs } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
@@ -142,6 +143,7 @@ let previousColumn
 let approvalWait = false
 let prerequisiteWait = false
 let plannerIssues = 0
+let escalated = false
 let auditNotReady = ''
 try {
   const current = findCard(tasksDir, cardId)
@@ -235,8 +237,19 @@ try {
     // each ran 25 overnight, worded differently every time. The third in a row is the
     // operator's question.
     if (current.column === 'planning' && target === 'planning') {
-      plannerIssues = (readWorkflow(tasksDir)[current.id]?.plannerIssues || 0) + 1
-      updateWorkflow(tasksDir, current.id, { plannerIssues })
+      const saved = readWorkflow(tasksDir)[current.id]
+      plannerIssues = (saved?.plannerIssues || 0) + 1
+      // Operator 2026-09-27: a Codex Planner gets one try; its first blocker hands the card to
+      // Claude Opus planners for the rest of the three. Every Codex failure is logged for review.
+      const codex = readCardPlanners(tasksDir)[current.id]?.engine === 'codex'
+      if (codex) {
+        appendFileSync(join(tasksDir, 'codex-planner-failures.log'), `${new Date().toISOString()}	${current.id}	${note.replace(/\s+/g, ' ').slice(0, 300)}
+`)
+        activityLog({ tasksDir, project: basename(dirname(tasksDir)), cardId: current.id, event: 'codex-planner-failure', message: note })
+      }
+      escalated = !!saved?.plannerEscalation
+      const escalate = codex && !escalated && plannerIssues < 3 && approvedManagedModel('p-t-1')?.includes(ESCALATION_MODEL)
+      updateWorkflow(tasksDir, current.id, { plannerIssues, ...(escalate ? { plannerEscalation: { model: ESCALATION_MODEL, at: new Date().toISOString() } } : {}) })
       if (plannerIssues >= 3) target = 'owner'
     }
   }
@@ -265,7 +278,7 @@ try {
   target = card.column
   // Only a plan the check accepted clears the blocker count: resetting it before a refused
   // move let Injectbuddy I267 loop six Planners past the three-in-a-row cap (2026-09-26).
-  if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null })
+  if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null, plannerEscalation: null })
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
   // a fresh Planner. Left "submitted" it was counted as a no-handoff and sent to Owner
@@ -283,7 +296,7 @@ try {
 }
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
-else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
+else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready${escalated ? ` (after one Codex Planner, the ${ESCALATION_MODEL} escalation Planners also failed)` : ''}. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
 else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {
   const tail = capped
