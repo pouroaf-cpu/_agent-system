@@ -69,6 +69,18 @@ test('brief generation preserves original card/history and pause state without t
   assert.equal(readFileSync(config, 'utf8'), '{"maxConcurrentAgents":0,"paused":true}')
   assert.throws(() => writeBrief(tasks, { id: 'T-1', path: cardPath }, 'builder', { maxChars: 20 }), /exceeds/)
   assert.doesNotMatch(readFileSync(path, 'utf8'), /Current project constraints/, 'no PROJECT-CONSTRAINTS.md, no section')
+  assert.match(readFileSync(path, 'utf8'), /^## Project constraints\r?\nNever reset account data/m, 'without a current copy the card keeps its own')
+})
+
+test('an API note appended after a history marker still reaches the Builder and Planner briefs', () => {
+  const card = '# T-5 — Note\n## Approved brief\nPad the button.\n## Implementation\nOld.\n\n**Failed return 1** 2026-09-27T10:00:00.000Z\n\nPadding wrong.\n\n**Decision** 2026-09-27T11:00:00.000Z\n\nUse 6px.\n'
+  for (const role of ['builder', 'planner']) {
+    const brief = focusedText(card, role)
+    assert.match(brief, /## Decisions and notes\n\*\*Decision\*\* 2026-09-27T11:00:00\.000Z\nUse 6px\./, role)
+    assert.doesNotMatch(brief, /Padding wrong/, `${role}: history markers stay out`)
+  }
+  const inline = focusedText('# T-6\n## Approved brief\nX.\n\n**Decision** 2026-09-27T11:00:00.000Z\n\nKeep it.\n', 'builder')
+  assert.equal(inline.match(/Keep it\./g).length, 1, 'a note already in a kept section is not repeated')
 })
 
 test('every role brief carries the current PROJECT-CONSTRAINTS.md, not only the creation-time copy', async () => {
@@ -83,6 +95,7 @@ test('every role brief carries the current PROJECT-CONSTRAINTS.md, not only the 
     const brief = readFileSync(writeBrief(tasks, card, role), 'utf8')
     assert.match(brief, /## Current project constraints\n[\s\S]*Card checkouts have NO \.env files\.[\s\S]*Code rule\./, role)
     assert.doesNotMatch(brief.split('## Current project constraints')[1], /UI rule/, 'other categories stay out')
+    assert.doesNotMatch(brief, /^## Project constraints\r?$/m, `${role}: the current copy replaces the card's old one`)
   }
   writeFileSync(constraints, '## all\nNewest rule.\n')
   assert.match(readFileSync(writeBrief(tasks, card, 'builder'), 'utf8'), /Newest rule/, 'a later edit changes the brief revision')
@@ -92,7 +105,7 @@ test('PowerShell literals survive spaces/apostrophes; generated handoff is direc
   const root = mkdtempSync(join(tmpdir(), 'command-brief-')), board = join(root, "board O'Brien")
   mkdirSync(board); writeFileSync(join(board, 'hkb.mjs'), 'console.log(JSON.stringify(process.argv.slice(2)))')
   const tasks = join(root, "task O'Brien"), card = { id: 'T-1', path: join(root, 'T-1.md'), workspace: '.' }
-  const worker = workerPrompt({ card, projectPath: root, boardRoot: board, tasksDir: tasks })
+  const worker = workerPrompt({ card, projectPath: root, boardRoot: board, tasksDir: tasks, engine: 'codex' })
   assert.match(worker, /login:false/); assert.match(worker, /never prefix bare -NoProfile/)
   const command = `node ${psLiteral(join(board, 'hkb.mjs'))} --tasks ${psLiteral(tasks)} done T-1`
   assert.ok(worker.includes(command))

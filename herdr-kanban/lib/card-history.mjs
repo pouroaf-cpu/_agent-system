@@ -85,8 +85,12 @@ export function laneEnteredAt(tasksDir, id, column) {
   }
   return entered.get(path).at
 }
-const historyMarker =/^\*\*(?:Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \d+|Technical recovery|Diagnostic recovery|Dirty snapshot)\*\*/m
-export function focusedText(text, role) {
+const HISTORY_LABELS = 'Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \\d+|Technical recovery|Diagnostic recovery|Dirty snapshot'
+const historyMarker = new RegExp(`^\\*\\*(?:${HISTORY_LABELS})\\*\\*`, 'm')
+const notLabel = new RegExp(`^(?:${HISTORY_LABELS}|Needs you)$`)
+// A POST /api/card note (lib/cards.mjs updateCard): "**<Heading>** <ISO time>", blank line, plain body.
+const NOTE = /^\*\*([^*\r\n]+)\*\* (\d{4}-\d\d-\d\dT[\d:.]+Z)\r?\n\r?\n([\s\S]*?)(?=^\*\*|^## |^---|$(?![\s\S]))/gm
+export function focusedText(text, role, { skip = [] } = {}) {
   // Project the whole card, not just the prefix before the first attempt. Legacy
   // approved Return N corrections can appear AFTER history markers.
   const historical = new Set(['History', 'Transcript', 'Previous attempts', 'Launch prompt'])
@@ -100,7 +104,7 @@ export function focusedText(text, role) {
   const sections = new Map()
   for (const chunk of chunks) {
     const heading = chunk.match(/^## ([^\r\n]+)/)?.[1]
-    if (heading && historical.has(heading)) continue
+    if (heading && (historical.has(heading) || skip.includes(heading))) continue
     const returned = heading?.match(/^Return (\d+) (.+)/)
     if (returned && Number(returned[1]) !== latestBySection.get(returned[2].toLowerCase())) continue
     // Reviewer sees current Builder result/evidence, never a previous verdict.
@@ -110,7 +114,12 @@ export function focusedText(text, role) {
     if (body) sections.set(heading || 'header', body)
   }
   const feedback = sections.has('Current feedback') ? null : [...text.matchAll(/^\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n+([\s\S]*?)(?=^## |^\*\*|^---|$(?![\s\S]))/gm)].at(-1)?.[1]?.trim()
-  return [...sections.values(), ...(feedback ? [`## Current feedback\n${feedback}`] : []),
+  // Notes are appended at the card's end, usually after a history marker that cuts
+  // them out of their section above, so they are collected here, oldest first.
+  const kept = [...sections.values()].join('\n\n')
+  const notes = [...text.matchAll(NOTE)].filter(m => !notLabel.test(m[1]) && m[3].trim() && !kept.includes(m[3].trim()))
+    .map(m => `**${m[1]}** ${m[2]}\n${m[3].trim()}`)
+  return [...sections.values(), ...(notes.length ? [`## Decisions and notes\n${notes.join('\n\n')}`] : []), ...(feedback ? [`## Current feedback\n${feedback}`] : []),
     ...(latestReturn ? [`Latest correction: Return ${latestReturn}; still-current sections from earlier returns remain above until explicitly replaced. Preserve approved constraints and acceptance criteria; do not replay finished implementation. Superseded sections and verdicts are history, not a fresh pass.`] : [])].join('\n\n')
 }
 // `## all` plus the card's category section of TASKS/PROJECT-CONSTRAINTS.md, or null.
@@ -125,7 +134,8 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   // The card's own copy is taken at creation; rules added later reach live cards
   // only through here (Injectbuddy I265). The brief revision hash carries the change.
   const constraints = projectConstraints(tasksDir, card.category)
-  const text = focusedText(source, role) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
+  // The current copy replaces the card's creation-time one (builder audit F8).
+  const text = focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })

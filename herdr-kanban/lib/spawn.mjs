@@ -2,7 +2,7 @@
 // A half-spawned tab is worse than no tab, so any failure closes the pane it made.
 
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList } from './herdr.mjs'
-import { workerPrompt, paneLabel, agentName } from './prompt.mjs'
+import { workerPrompt, paneLabel, agentName, isCodex } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
@@ -130,14 +130,16 @@ export async function submitStaged(paneId, text, session, { read, sendKeys, list
 // (Injectbuddy I149, Tradeflow TF56/T-36): the full task goes in a file and only a
 // short one-line pointer is typed. Its revision lets resumeDeliveries see a change.
 export const MAX_TYPED = 500
-export function typedPrompt(text, file) {
+// This read runs before the agent has seen the prompt's shell rule, so a Codex agent
+// is told login:false here or its profile prints errors (builder audit F10).
+export function typedPrompt(text, file, engine) {
   if (text.length < MAX_TYPED) return { text }
-  return { text: `Read ${file} (revision ${createHash('sha256').update(text).digest('hex')}) and follow it exactly; it is your complete task.`, file, full: text }
+  return { text: `Read ${file} (revision ${createHash('sha256').update(text).digest('hex')})${isCodex(engine) ? ' (use the PowerShell tool with login:false)' : ''} and follow it exactly; it is your complete task.`, file, full: text }
 }
 
-export async function deliver(paneId, fullText, session, builderGuard = null) {
+export async function deliver(paneId, fullText, session, builderGuard = null, { engine } = {}) {
   const runId = cardRunContext()?.runId
-  const { text, file, full } = typedPrompt(fullText, promptPath(session, paneId))
+  const { text, file, full } = typedPrompt(fullText, promptPath(session, paneId), engine)
   const key = deliveryKey(text)
   const prior = readDelivery(session, paneId)
   if (prior?.key === key && prior.status === 'confirmed') return
@@ -250,7 +252,7 @@ export async function spawnForCard({
       .filter((c) => (c.blockedBy || []).includes(card.id)).length
     // Codex receives --cd separately: its actual working context must be isolated,
     // while the parent shell stays stable for Windows worktree cleanup.
-    const codex = (typeof engine === 'string' ? engine : engine?.kind) === 'codex'
+    const codex = isCodex(engine)
     created = resume ? { root_pane: resume, tab: { tab_id: resume.tab_id } } : await tabCreate({ cwd: codex ? projectPath : prepared.workspacePath, label: paneLabel(card, holdsUp), focus: false, workspace, session })
   } catch (err) {
     cleanupPreparedWorktree({ tasksDir, prepared })
@@ -302,7 +304,7 @@ export async function spawnForCard({
     const environment = gitSettings?.envFile
       ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing.`
       : ''
-    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath }) + correctionNote + environment, session)
+    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, engine }) + correctionNote + environment, session, null, { engine })
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })

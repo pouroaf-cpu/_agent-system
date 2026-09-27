@@ -765,7 +765,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
           role: 'reviewer', paneId, tabId: created?.tab?.tab_id, model: selectedModel, name, agentSession: agent?.agent_session,
         })
       } catch {}
-      await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path }), session)
+      await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path, engine: reviewerEngine }), session, null, { engine: reviewerEngine })
       updateReviewClaim(reviewRoot, claim.id, { phase: 'running', submittedAt: Date.now() })
       for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
     } catch (err) {
@@ -850,7 +850,7 @@ export async function spawnIssuesSweeper({ project, projectPath, tasksDir, board
           role: 'planner', paneId, tabId: created?.tab?.tab_id, model, name, agentSession: agent?.agent_session,
         })
       } catch {}
-      await deliver(paneId, issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, manager }), session)
+      await deliver(paneId, issuesSweeperPrompt({ cards, projectPath, boardRoot, tasksDir, manager, engine: selectedEngine }), session, null, { engine: selectedEngine })
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
       throw new Error(`issues sweeper spawn failed: ${err.message}`)

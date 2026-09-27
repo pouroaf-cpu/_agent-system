@@ -234,12 +234,16 @@ test('audit cards use the evidence-gated Auditor prompt and status-aware handoff
 
 test('the worker prompt stays inside the card scope and one proportional check', () => {
   const card = { id: 'T-04', title: 'x', workspace: 'TASKS/workspaces/android', path: 'C:\\p\\TASKS\\queue\\T-04-x.md' }
-  const text = workerPrompt({ card, projectPath: 'C:\\p', boardRoot: 'C:\\board' })
+  const text = workerPrompt({ card, projectPath: 'C:\\p', boardRoot: 'C:\\board', engine: { kind: 'codex' } })
   assert.match(text, /Read .*BUILDER\.md.*exact listed files/i)
   assert.match(text, /one proportional check type/i)
   assert.match(text, /Rerun the same check after fixing implementation, setup, or harness errors/i)
   assert.match(text, /Stop after three identical unresolved failures/i)
   assert.match(text, /login:false.*never prefix bare -NoProfile/)
+  assert.match(text, /Start checks with yield_time_ms 30000 and poll with yield_time_ms 30000; never poll faster/, 'Codex polls re-send the whole context')
+  assert.match(text, /git diff --stat \/ --numstat.*max_output_tokens 1500/)
+  assert.match(text, /Do not print the authoritative card/)
+  assert.match(text, /Never run npm ci or npm install in a card checkout/)
   assert.match(text, /Workspace root: C:\/p\/TASKS\/workspaces\/android/i)
   assert.match(text, /git -C '?C:\/p\/TASKS\/workspaces\/android/i)
   assert.doesNotMatch(text, /ORCHESTRATION\.md|CLAUDE\.md|browser behaviour|journal step/i)
@@ -803,6 +807,20 @@ test('the Lead Planner prompt is single-line, specialist-scoped, and returns rea
   assert.match(text, /Projects\/_roles\/PLANNER\.md/, 'planner uses the compact shared role')
   assert.match(text, /Projects\/_roles\/PLANNER-UI\.md/, 'planner receives only its category overlay')
   assert.doesNotMatch(text, /PLANNER-AUTH-SECURITY/, 'unrelated specialist overlays stay out of context')
+})
+
+test('a Claude Planner gets no Codex shell wording and no audit rules for an ordinary card', () => {
+  const card = { id: 'T-07', title: 'x', path: 'C:\\p\\TASKS\\planning\\T-07-x.md' }
+  const claude = issuesSweeperPrompt({ cards: [card], projectPath: 'C:\\p', boardRoot: 'C:\\board' })
+  assert.doesNotMatch(claude, /FINDINGS audits/)
+  assert.doesNotMatch(claude, /login:false|yield_time_ms|max_output_tokens/)
+  assert.match(claude, /with the Read tool, one file per call; never concatenate them/)
+  assert.match(claude, /Never run npm ci or npm install in a card checkout/)
+  assert.match(claude, /git diff --stat/)
+  const codex = issuesSweeperPrompt({ cards: [{ ...card, audit: true }], projectPath: 'C:\\p', boardRoot: 'C:\\board', engine: 'codex' })
+  assert.match(codex, /FINDINGS audits/)
+  assert.match(codex, /login:false/)
+  assert.match(codex, /one file per command/)
 })
 
 test('trivial cards use the lightweight builder model and engine', async () => {

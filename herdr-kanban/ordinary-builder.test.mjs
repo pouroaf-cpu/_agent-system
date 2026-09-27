@@ -42,8 +42,10 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
   assert.equal(calls.find(c => c[0] === 'start')[1].guardArgs, undefined)
   const typed = calls.find(c => c[0] === 'prompt')[1]
   assert.equal(typed.match(/^Read (.+?\.md) \(revision/)?.[1], join(root, 'fixture-pane.md'))
+  assert.match(typed, /\) \(use the PowerShell tool with login:false\) and follow it exactly/, 'the first Codex read skips the profile')
   const prompt = readFileSync(join(root, 'fixture-pane.md'), 'utf8')
   assert.match(prompt, /login:false/)
+  assert.match(prompt, /yield_time_ms 30000/)
   assert.match(prompt, /done T-1/)
   assert.doesNotMatch(prompt, /Restricted Builder|builder-guard|base64url|Approved command IDs/)
   assert.equal(existsSync(join(tasks, '.builder-guard')), false)

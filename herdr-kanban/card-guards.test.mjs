@@ -83,7 +83,7 @@ test('two genuinely different live cards with one id are still held', t => {
 
 test('the Builder prompt keeps Builders to their own sections and stays one line', () => {
   const prompt = workerPrompt({ card: { id: 'T-1', path: 'C:/x/TASKS/working/T-1.md' }, projectPath: 'C:/x', boardRoot: 'C:/board' })
-  assert.match(prompt, /Edit only your own Implementation and Evidence sections of the card; never rewrite/)
+  assert.match(prompt, /Do not print the authoritative card; the briefing already holds its current text\. Replace only the Implementation and Evidence section bodies .*; never rewrite, reorder or delete any other section/)
   assert.doesNotMatch(prompt, /\n/)
 })
 
