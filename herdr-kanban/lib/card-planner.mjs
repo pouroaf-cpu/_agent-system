@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites } from './cards.mjs'
+import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites, unmetBlockers } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
@@ -24,13 +24,14 @@ export function correctionFingerprint(text) {
   return createHash('sha256').update(lastCorrection(text).replace(/\d{4}-\d\d-\d\dT[^\s]+/g, '').trim()).digest('hex')
 }
 
-export function requestPlannerCorrection(dir, cardId) {
+// correction: false ends the session as a handoff without marking a correction (hkb wait).
+export function requestPlannerCorrection(dir, cardId, { correction = true } = {}) {
   const owners = readCardPlanners(dir)
   const owner = owners[String(cardId).toUpperCase()]
   if (!owner || ['retired', 'retiring'].includes(owner.lifecycle)) return false
   owner.submitted = false
   owner.replacementAttempts = 0
-  owner.correctionRequestedAt = new Date().toISOString()
+  if (correction) owner.correctionRequestedAt = new Date().toISOString()
   delete owner.error
   delete owner.handoffRetried
   delete owner.inactiveSince
@@ -42,7 +43,7 @@ export function requestPlannerCorrection(dir, cardId) {
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
 // restart the workflow-limit counters, and give Planning/Issues a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
-  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null })
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null, waitFor: null })
   if (['planning', 'issues'].includes(to)) requestPlannerCorrection(tasksDir, cardId)
 }
 // Board Approve button on a Pou or Owner card: record the decision, add the operator-only
@@ -227,6 +228,15 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           appendHistory(tasksDir, card.id, { event: 'planner-prerequisite-wait', stage: 'planning', waitingFor })
         }
         continue
+      }
+      // A Planner's `hkb wait`: no Planner until every file exists in the integration checkout
+      // and every card has landed; then clear it and plan as normal.
+      const waitFor = card.column === 'planning' && !cardRunContext() && readWorkflow(tasksDir)[card.id]?.waitFor
+      if (waitFor) {
+        const root = resolve(projectPath, card.workspace || '.')
+        if (waitFor.files.some(f => !existsSync(resolve(root, f))) || unmetBlockers({ blockedBy: waitFor.cards }, board, readWorktrees(tasksDir)).length) continue
+        updateWorkflow(tasksDir, card.id, { waitFor: null })
+        appendHistory(tasksDir, card.id, { event: 'planner-wait-cleared', stage: 'planning', waitFor })
       }
       // An uncertain delivery never resolves by waiting (T-41). Once its pane is gone,
       // or idle past the handoff grace, it failed: retire that Planner, start a fresh one.

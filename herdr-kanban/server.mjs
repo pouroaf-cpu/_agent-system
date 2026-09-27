@@ -346,10 +346,12 @@ function cardWaits(project, now = Date.now()) {
   try { registry = readWorktrees(tasksDir) } catch { /* no registry: blockers count as unmet by archive state alone */ }
   const cards = COLUMNS.flatMap(c => board[c.key] || []).map(card => {
     const since = Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime)
-    const waitingOn = unmetBlockers(card, board, registry)
+    // A Planner's `hkb wait`: the files or cards its plan needs that do not exist yet.
+    const wait = card.column === 'planning' && workflow[card.id]?.waitFor, needs = wait ? [...wait.cards, ...wait.files] : []
+    const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
     return { project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? (waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? (needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }

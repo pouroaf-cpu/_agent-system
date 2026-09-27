@@ -9,6 +9,7 @@
 //   node hkb.mjs move  T-02 review
 //   node hkb.mjs found T-02 "e2e/x.spec.ts fails on base too: ..."
 //   node hkb.mjs found --board T-02 "hkb refused a valid handoff: ..."
+//   node hkb.mjs wait  T-02 "public/x/y.html, T-03" "the page this plan edits is created by T-03"
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -19,7 +20,7 @@
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
+import { moveCard, columnByKey, findCard, updateCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
@@ -34,6 +35,7 @@ import { failureCategory, failureDestination, updateWorkflow, recordOperationalF
 import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
+import { CARD_ID } from './lib/ids.mjs'
 
 const args = process.argv.slice(2)
 let tasksDir = join(process.cwd(), 'TASKS')
@@ -84,6 +86,15 @@ function fail(msg) {
   process.exit(1)
 }
 
+// One line in the project's registered manager inbox, else the Kanban Manager's. Returns who got it.
+function tellManager(line, toBoard = false) {
+  const manager = !toBoard && projectSettings()?.manager
+  const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+  mkdirSync(dirname(inbox), { recursive: true })
+  appendFileSync(inbox, `- ${new Date().toISOString()} ${line}\n`)
+  return manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
+}
+
 // found: something outside this card's scope. The card doesn't move. The finding goes to the
 // project's registered manager chat (POST /api/project-manager), else to the Kanban Manager,
 // who forwards product ones. --board sends a board/process problem to the Kanban Manager
@@ -96,19 +107,48 @@ if (verb === 'found') {
   if (!id || !finding) fail('found needs the card and the finding with its evidence: hkb found [--board] T-02 "e2e/x.spec.ts fails on base too: ..."')
   const card = findCard(tasksDir, id)
   const project = basename(dirname(tasksDir))
-  const manager = !toBoard && projectSettings()?.manager
-  const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
-  mkdirSync(dirname(inbox), { recursive: true })
-  appendFileSync(inbox, `- ${new Date().toISOString()} FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}\n`)
-  const to = manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
+  const to = tellManager(`FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}`, toBoard)
   appendHistory(tasksDir, card.id, { event: 'found', note: finding, to })
   activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: `${finding} (to ${to})` })
   console.log(`hkb: ${card.id} finding sent to ${to}; carry on with your card`)
   process.exit(0)
 }
 
+// wait: the plan needs a file or card that does not exist yet and is not in Blocked by.
+// The card waits in Planning without counting as a failed plan; the board starts a fresh
+// Planner once every file exists and every card has landed, and the manager can card the
+// missing piece. 11 of 19 Planner hand-backs since 26 Sep were this, each sent as `issue`.
+if (verb === 'wait') {
+  const items = String(rest[0] || '').split(',').map(s => s.trim()).filter(Boolean)
+  const why = rest.slice(1).join(' ').replace(/\s+/g, ' ').trim()
+  if (!cardId || !items.length || !why) fail('wait needs the missing files or cards and why: hkb wait I343 "public/x/y.html, I344" "the page this plan edits is created by I344"')
+  const isCard = s => new RegExp(`^${CARD_ID}$`, 'i').test(s)
+  const cards = items.filter(isCard).map(s => s.toUpperCase()), files = items.filter(s => !isCard(s)).map(s => s.replaceAll('\\', '/'))
+  if (files.some(f => isAbsolute(f) || f.split('/').includes('..'))) fail('wait files must be repo-relative paths, e.g. public/x/y.html')
+  try {
+    const current = findCard(tasksDir, cardId)
+    if (current.column !== 'planning') fail(`wait is a Planner handoff; ${current.id} is in ${current.column}`)
+    assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
+    const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))
+    if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again.`)
+    // Cards join Blocked by, so the existing prerequisite wait covers them too.
+    if (cards.length) updateCard(tasksDir, current.id, { addBlockedBy: cards })
+    const project = basename(dirname(tasksDir)), waitFor = { cards, files, why, since: new Date().toISOString() }
+    updateWorkflow(tasksDir, current.id, { waitFor })
+    // A handoff, not a failed plan: plannerIssues, the Codex failure log and escalation stay untouched.
+    requestPlannerCorrection(tasksDir, current.id, { correction: false })
+    appendHistory(tasksDir, current.id, { event: 'planner-wait', stage: 'planning', waitFor })
+    appendHistory(tasksDir, current.id, { event: 'handoff', stage: 'planning', outcome: 'wait', note: `${items.join(', ')}: ${why}`, text: readFileSync(current.path, 'utf8') })
+    const to = tellManager(`WAIT ${project} ${current.id} (planning): needs ${items.join(', ')} — ${why}`)
+    activityLog({ tasksDir, project, cardId: current.id, event: 'planner-wait', message: `needs ${items.join(', ')}: ${why} (to ${to})` })
+    stopCardRun(project, current.id, 'Stopped at wait')
+    console.log(`${current.id} waits in Planning for ${items.join(', ')}; ${to} was told. Stop now.`)
+  } catch (err) { fail(err.message) }
+  process.exit(0)
+}
+
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 
@@ -278,7 +318,7 @@ try {
   target = card.column
   // Only a plan the check accepted clears the blocker count: resetting it before a refused
   // move let Injectbuddy I267 loop six Planners past the three-in-a-row cap (2026-09-26).
-  if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null, plannerEscalation: null })
+  if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null, plannerEscalation: null, waitFor: null })
   if (previousColumn === 'review' && target === 'planning' && !auditIntake) requestPlannerCorrection(tasksDir, card.id)
   // A Planner's issue keeps the card in Planning; it is a handoff, so the next round gets
   // a fresh Planner. Left "submitted" it was counted as a no-handoff and sent to Owner
