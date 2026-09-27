@@ -32,6 +32,21 @@ test('Builder fallback routes Working to Planning and preserves assignment/workt
   assert.equal(existsSync(join(tasks, 'issues')), false, 'nothing lands in Issues')
 })
 
+test('Builder fallback holds a question in Planning for the operator instead of requeueing', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-safeguards-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-9.md'), '# T-9 — saved work\n**Workflow:** card-owned\n## Files\n- `app.mjs`\n')
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-9', reason: 'Session pane-9 is missing without a valid Builder handoff from Working', evidence: 'Should I use approach (a) or (b)?' })
+  assert.equal(moved.column, 'planning', 'still parked in Planning, where a decision hold is enforced')
+  assert.doesNotMatch(readFileSync(moved.path, 'utf8'), /Kicked back/, 'not treated as a plan failure')
+  assert.match(readFileSync(moved.path, 'utf8'), /Needs you[\s\S]*Should I use approach \(a\) or \(b\)\?/)
+  assert.deepEqual(readWorkflow(tasks)['T-9'].waitFor, { cards: [], files: [], decision: true, why: 'Should I use approach (a) or (b)?', since: readWorkflow(tasks)['T-9'].waitFor.since })
+  assert.match(readFileSync(join(tasks, '.history', 'T-9.jsonl'), 'utf8'), /agent-question-captured/)
+  assert.doesNotMatch(readFileSync(join(tasks, '.history', 'T-9.jsonl'), 'utf8'), /builder-no-handoff/)
+})
+
 test('Planner and Builder prompts require prerequisite verification and one handoff', () => {
   const card = { id: 'T-2', title: 'check prerequisites', path: 'T-2.md', trivial: false }
   const builder = workerPrompt({ card, projectPath: '.', boardRoot: '.', tasksDir: '' })

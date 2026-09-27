@@ -2,7 +2,9 @@ import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
-import { appendHistory } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { looksLikeAQuestion } from './agent-question.mjs'
+import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 // The spawner. Watches one column — Queue — and nothing else.
 //
@@ -11,7 +13,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 // exceeds the concurrency cap, and never retries a card that failed to start.
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
@@ -61,6 +63,17 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
   unbind(tasksDir, card.id)
   const moved = moveCard(tasksDir, card.id, 'planning')
+  // Nobody reads a stopped Builder's pane, so a question or blocker left there as plain
+  // text otherwise just gets requeued/replanned into the same silence (38 of the last 100
+  // bounces, 2026-09-27). Hold it for a person instead of kicking it back to a fresh Planner.
+  if (looksLikeAQuestion(String(evidence).slice(-1000))) {
+    const question = String(evidence).trim().slice(-2000)
+    updateWorkflow(tasksDir, moved.id, { waitFor: { cards: [], files: [], decision: true, why: question, since: new Date(now).toISOString() } })
+    writeCurrentFeedback(tasksDir, moved, 'Needs you', `${question}\n\nRecord the answer on the card, then move it to Planning (or Planned).\n`)
+    appendHistory(tasksDir, card.id, { event: 'agent-question-captured', stage: 'working', reason: detail, evidence })
+    activityLog({ tasksDir, project: basename(dirname(tasksDir)), cardId: card.id, event: 'agent-question-captured', message: question })
+    return moved
+  }
   appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
   appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   requestPlannerCorrection(tasksDir, card.id, { failure: true })

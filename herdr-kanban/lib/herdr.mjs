@@ -3,9 +3,9 @@
 
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
@@ -46,6 +46,31 @@ export function writeCodexBoardProfile() {
     `\n[shell_environment_policy.set]\nPATH = ${JSON.stringify(boardAgentPath())}\n`
   try { if (readFileSync(CODEX_BOARD_PROFILE, 'utf8') === toml) return } catch {}
   writeFileSync(CODEX_BOARD_PROFILE, toml)
+}
+
+// Board-only Codex Stop hook: nobody reads a board agent's chat, so a question or
+// blocker left there as plain text stalls the card (scripts/codex-stop-hook.mjs has
+// the policy). ~/.codex/hooks.json is off limits, and a board.config.toml profile's
+// hooks.state can only toggle a hook already discovered elsewhere, not define a new
+// one (confirmed empirically, 2026-09-27) — so this is registered the one place Codex
+// discovers a hook scoped to a single directory: <workspacePath>/.codex/hooks.json.
+// Every card's workspace is its own disposable git worktree (lib/worktrees.mjs), so
+// this never reaches the operator's own Codex chats, which never cd into one.
+// Idempotent merge: a project's own committed .codex/hooks.json, if any, keeps its
+// other hooks; only our Stop entry is added or replaced.
+const CODEX_STOP_HOOK = fileURLToPath(new URL('../scripts/codex-stop-hook.mjs', import.meta.url))
+export function writeCodexWorkspaceHooks(workspacePath) {
+  if (!workspacePath) return
+  const file = join(workspacePath, '.codex', 'hooks.json')
+  const command = `node ${JSON.stringify(CODEX_STOP_HOOK)}`
+  let doc
+  try { doc = JSON.parse(readFileSync(file, 'utf8')) } catch { doc = {} }
+  const kept = (doc.hooks?.Stop || []).filter(entry => !(entry.hooks?.length === 1 && entry.hooks[0].command === command))
+  const next = { ...doc, hooks: { ...doc.hooks, Stop: [...kept, { hooks: [{ type: 'command', command, timeout: 30 }] }] } }
+  const text = JSON.stringify(next, null, 2)
+  try { if (readFileSync(file, 'utf8') === text) return } catch {}
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, text)
 }
 
 const CONFIG = (() => {
@@ -412,6 +437,9 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
       const hooks = ['user_prompt_submit:0:0', 'post_tool_use:0:0', 'stop:1:0'].map(id => String.raw`'C:\Users\PFrew\.codex\hooks.json:` + id + `'={enabled=false}`)
       args.push('-c', `hooks.state={${hooks.join(',')}}`)
       if (existsSync(CODEX_BOARD_PROFILE)) args.push('-p', 'board')
+      // The workspace's own .codex/hooks.json (writeCodexWorkspaceHooks) carries the board
+      // Stop hook; unattended board agents can't answer its one-time hook-trust prompt.
+      args.push('--dangerously-bypass-hook-trust')
     }
     // Browser MCPs start ~4 node processes per Codex agent; 27 idle agents' worth
     // overloaded herdr (2026-09-24). Agents whose cards don't browse start without them.
@@ -456,7 +484,10 @@ export async function agentStart({ name, paneId, model, engine, kind, workspaceP
   assertPromptAllowed(session)
   name = await freeName(name, paneId, session)
   try {
-    if ((kind || (typeof engine === 'string' ? engine : engine?.kind)) === 'codex') { try { writeCodexBoardProfile() } catch { /* no profile: the agent starts without it */ } }
+    if ((kind || (typeof engine === 'string' ? engine : engine?.kind)) === 'codex') {
+      try { writeCodexBoardProfile() } catch { /* no profile: the agent starts without it */ }
+      if (!/orchestrator/i.test(name || '')) { try { writeCodexWorkspaceHooks(workspacePath) } catch { /* no Stop hook: the agent starts without it */ } }
+    }
     const args = agentStartArgs({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs, browser })
     return { ...(await hold(paneId, () => herdr(args, { timeout: timeoutMs + 15000, session }))), name }
   } catch (err) {
