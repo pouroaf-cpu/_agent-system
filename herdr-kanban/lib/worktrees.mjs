@@ -75,7 +75,8 @@ export const clean = (cwd) => !operationInProgress(cwd) && semanticDirtyFiles(cw
 // Agent tool output (Playwright MCP, Impeccable) lands in whatever checkout an agent
 // runs from. Untracked there, it made the Injectbuddy integration checkout "dirty" and
 // held every merge (2026-09-25). Ignore it locally for all of a repo's worktrees.
-const TOOL_OUTPUT = ['.playwright-mcp/', '.impeccable/']
+// .codex/hooks.json is the board Stop hook writeCodexWorkspaceHooks drops into each card worktree.
+const TOOL_OUTPUT = ['.playwright-mcp/', '.impeccable/', '.codex/hooks.json']
 export function ignoreToolOutput(repoRoot) {
   try {
     const common = resolve(repoRoot, git(repoRoot, ['rev-parse', '--git-common-dir']).stdout.trim())
