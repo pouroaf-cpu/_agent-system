@@ -497,9 +497,18 @@ function cardIn(cards, id) {
   return live.length > 1 ? undefined : live[0] ?? all[0]
 }
 
-export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir) }) {
-  const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
-  if (!candidate.size) return 'card not ready — no exact files listed'
+// parallelFiles (projectSettings.<project>.parallelFiles, repo-relative): big shared files
+// whose cards edit separate parts. Builders may run on them at once; integration still lands
+// one commit at a time, and a real conflict is rebased and goes back to a Builder once.
+const notParallel = (projectPath, parallelFiles = []) => {
+  const listed = new Set(parallelFiles.map(f => norm(resolve(projectPath, f))))
+  return (file) => !listed.has(file)
+}
+
+export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), parallelFiles }) {
+  const all = filesFor(card, resolve(projectPath, card.workspace || '.'))
+  if (!all.length) return 'card not ready — no exact files listed'
+  const candidate = new Set(all.filter(notParallel(projectPath, parallelFiles)))
   const cards = Object.values(board).flat()
   const registry = readWorktrees(tasksDir)
   for (const [id, entry] of Object.entries(registry)) {
@@ -526,8 +535,8 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
 }
 
 // Read-only visualization of persisted exact-file locks, never prose guesses.
-export function recordedOverlapBlockers(card, projectPath, registry) {
-  const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')))
+export function recordedOverlapBlockers(card, projectPath, registry, parallelFiles) {
+  const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')).filter(notParallel(projectPath, parallelFiles)))
   return Object.entries(registry).filter(([id, entry]) => id !== card.id && entry.state !== 'integrated'
     && (entry.files || []).some(file => [...candidate].some(c => filesOverlap(c, norm(file))))).map(([id]) => id)
 }

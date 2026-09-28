@@ -140,7 +140,7 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
   if (backoff) return backoff
   const unmet = unmetBlockers(card, board, tasksDir ? readWorktrees(tasksDir) : {})
   if (unmet.length) return `waiting for unique integrated or archived prerequisite ${unmet.join(', ')}`
-  const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath, board })
+  const overlap = gitSettings && overlapHoldReason({ tasksDir, card, projectPath, board, parallelFiles: gitSettings.parallelFiles })
   if (overlap) return overlap
   if (gitSettings?.integrationPath) {
     try {

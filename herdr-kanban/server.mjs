@@ -274,7 +274,7 @@ function boardPayload(project) {
     const registry = readWorktrees(tasksDirOf(project))
     for (const card of Object.values(board).flat()) blockerIds[card.id] = [...new Set([
       ...unmetBlockers(card, board, registry),
-      ...(card.column === 'queue' ? recordedOverlapBlockers(card, integrationPathOf(project), registry) : []),
+      ...(card.column === 'queue' ? recordedOverlapBlockers(card, integrationPathOf(project), registry, projectSettingsOf(project)?.parallelFiles) : []),
     ])]
   } catch { /* Unknown lock state must not invent visual relationships. */ }
   return {

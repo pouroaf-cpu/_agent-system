@@ -88,6 +88,8 @@ test('exact overlapping card files are held while unrelated files are free', () 
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), null)
     moveCard(f.tasks, 'T-1', 'working')
     assert.match(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), /held by T-1/)
+    // A project's parallelFiles may be built on at once; integration serializes them.
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration, parallelFiles: ['app.js'] }), null)
     writeFileSync(join(f.integration, 'other.js'), 'other\n')
     const third = f.addCard('T-3', 'other.js')
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: third, projectPath: f.integration }), null)
