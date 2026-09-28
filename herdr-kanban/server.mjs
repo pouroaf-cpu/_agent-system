@@ -483,7 +483,7 @@ async function pollProject(project) {
       actingPolls.add(project)
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
-        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project), ...quotaHoldsOf(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
+        const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project), ...quotaHoldsOf(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk || controlState(project, CONFIG_PATH).paused, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)

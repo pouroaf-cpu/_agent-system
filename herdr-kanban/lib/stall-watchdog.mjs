@@ -94,7 +94,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // Allowed waits: capacity, an unfinished prerequisite, or files held by another live
   // card. Only the stuck prerequisite is escalated, never the cards queued behind it.
   const allowedWait = (card) => {
-    if (paused) return true // low-disk pause: nothing may start, so nothing is stuck
+    if (paused) return true // paused (low disk, operator or release): nothing may start, so nothing is stuck (I393/I398/I401/I404 went to Owner mid-release, 2026-09-28)
     // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
     if (isRetryHold(holds[card.id]) || inBackoff(workflow[card.id]?.startFailure, now)) return true
     if (card.column === 'queue') {
