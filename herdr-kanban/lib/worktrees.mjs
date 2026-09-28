@@ -729,12 +729,26 @@ function rebaseCardOnto(entry, head) {
 
 export const updateWorktree = updateEntry
 
+// A conflict someone resolved by hand (Owner, 2 failed tries) and moved to Completed: the
+// worktree's one card commit now sits on integrated history, so integrate it again instead of
+// skipping the card forever (Injectbuddy I387, 2026-09-28).
+function resumeResolvedConflict(tasksDir, entry) {
+  if (entry?.state !== 'conflict') return entry
+  const parent = git(entry.worktreePath, ['rev-parse', 'HEAD^'], { allowFailure: true }).stdout.trim()
+  const status = git(entry.worktreePath, ['status', '--porcelain', '--untracked-files=no'], { allowFailure: true })
+  // Still on its old base means nobody resolved it: never retry that in a loop.
+  if (!parent || parent === entry.baseCommit || status.status !== 0 || status.stdout.trim()) return entry
+  if (git(entry.repoRoot, ['merge-base', '--is-ancestor', parent, 'HEAD'], { allowFailure: true }).status !== 0) return entry
+  return updateEntry(tasksDir, entry.cardId, { state: 'building', baseCommit: parent, rebaseTarget: null, reason: null })
+}
+
 // Bring a Completed card's one commit up to the integration HEAD in its own
 // worktree, so a project integrationCheck tests exactly what would land.
 // Null when reconcile should judge the card itself (not Completed, invalid commit).
 export function rebaseCompletedOntoIntegration(tasksDir, cardId) {
-  let entry = readWorktrees(tasksDir)[cardId]
   const card = readBoard(tasksDir).completed.find((c) => c.id === cardId)
+  let entry = readWorktrees(tasksDir)[cardId]
+  if (card) entry = resumeResolvedConflict(tasksDir, entry)
   if (!entry || !card || !['building', 'ready', 'issue', 'rebased'].includes(entry.state)) return null
   if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {
     entry = updateEntry(tasksDir, cardId, { baseCommit: entry.rebaseTarget, rebaseTarget: null })
@@ -772,7 +786,8 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
         continue
       }
       const card = completed.get(entry.cardId)
-      if (!card || !['building', 'ready', 'issue', 'integrating'].includes(entry.state)) continue
+      if (card) entry = resumeResolvedConflict(tasksDir, entry)
+      if (!card ||!['building', 'ready', 'issue', 'integrating'].includes(entry.state)) continue
       try {
         // A Builder that resolved a conflict rebased its one commit onto rebaseTarget.
         if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {

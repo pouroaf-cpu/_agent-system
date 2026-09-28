@@ -148,9 +148,7 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
     writeFileSync(join(prepared.workspacePath, 'app.js'), 'integration\nbuilder\n')
     git(prepared.workspacePath, 'add', 'app.js')
     git(prepared.workspacePath, '-c', 'core.editor=true', 'rebase', '--continue')
-    const entries = JSON.parse(readFileSync(join(f.tasks, '.board-worktrees.json'), 'utf8'))
-    entries['T-1'].state = 'building' // prepareCardWorktree resumes a returned card this way
-    writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify(entries))
+    // No Builder resume needed: a hand-resolved conflict moved back to Completed integrates (Injectbuddy I387).
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
     assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'integration\nbuilder\n')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
