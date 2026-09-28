@@ -1269,6 +1269,8 @@ const handleRequest = async (req, res) => {
           throw new Error('maxConcurrentAgents must be a whole number from 0 to 10')
         }
         config.maxConcurrentAgents = n
+        // Keep a lowered cap through the next project pause/resume.
+        if (n > 0) config.resumeMaxConcurrentAgents = n
       }
       if ('mode' in patch) {
         if (!['auto', 'manager'].includes(patch.mode)) throw new Error("mode must be 'auto' or 'manager'")
