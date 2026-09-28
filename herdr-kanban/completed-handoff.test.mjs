@@ -262,7 +262,7 @@ test('reviewer snapshot contains the integrated card commit and a real PASS surv
   assert.throws(() => assertReviewInputs(root, tasksDir, 'T-1'), /must run again/)
 })
 
-test('integration conflicts never loop: one Builder resolution, then Owner; a clean rebase must pass the recorded check', async t => {
+test('integration conflicts never loop: a Builder resolution, one fresh re-apply, then Owner; a clean rebase must pass the recorded check', async t => {
   const { runRecordedCheck } = await import('./lib/completed-handoff.mjs')
   const root = mkdtempSync(join(tmpdir(), 'integration-conflict-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -285,11 +285,15 @@ test('integration conflicts never loop: one Builder resolution, then Owner; a cl
   let text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
   assert.match(text, /Kicked back: Integration conflict with master[\s\S]*git rebase --onto h1 b0, fix app\.js[\s\S]*<<<<<<< HEAD/)
   assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].state, 'conflict')
-  // The Builder hands off again but it still conflicts: one plain question to Owner.
+  // It conflicts again: one fresh re-apply on the new base (Injectbuddy I387/I388/I390), then Owner.
   moveCard(tasksDir, 'T-1', 'completed'); registry({ 'T-1': 'building' })
   const [second] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
-  assert.equal(second.to, 'owner')
-  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 still does not integrate with master after 2 tries[\s\S]*\?/)
+  assert.equal(second.to, 'queue')
+  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /start fresh on the new base[\s\S]*git branch kanban-backup\/T-1-2 HEAD, git reset --hard h1/)
+  moveCard(tasksDir, 'T-1', 'completed'); registry({ 'T-1': 'building' })
+  const [third] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
+  assert.equal(third.to, 'owner')
+  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 still does not integrate with master after 3 tries[\s\S]*\?/)
 
   // Clean rebase: the recorded check gates integration.
   registry({ 'T-2': 'rebased', 'T-3': 'rebased' })

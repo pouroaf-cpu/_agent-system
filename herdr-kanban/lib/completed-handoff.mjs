@@ -67,14 +67,16 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   return null
 }
 
-// A conflict goes back to a Builder once, with the files and hunks to resolve in
-// its own worktree; a second failed resolution asks the operator. Never a loop.
+// A conflict goes back to a Builder with the files and hunks to resolve in its own worktree.
+// A second rebase conflict goes back once more to start fresh on the new base and re-apply
+// the change (what the Injectbuddy chat did by hand for I387, I388, I390); a third asks the
+// operator. A failed integration check still asks after two. Never a loop.
 export function returnIntegrationConflict(tasksDir, cardId, { reason, files = [], hunks = '', head, output }) {
   const entry = readWorktrees(tasksDir)[cardId]
   const failures = (entry.conflictFailures || 0) + 1
   const target = head || entry.rebaseTarget || entry.baseCommit
   updateWorktree(tasksDir, cardId, { state: 'conflict', conflictFailures: failures, reason, rebaseTarget: target })
-  const to = failures >= 2 ? 'owner' : 'queue'
+  const to = failures >= (output ? 2 : 3) ? 'owner' : 'queue'
   const moved = moveCard(tasksDir, cardId, to)
   const summary = reason.split('\n')[0]
   const diff = hunks ? `\n\n\`\`\`diff\n${hunks}\n\`\`\`` : ''
@@ -82,6 +84,7 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   writeCurrentFeedback(tasksDir, moved, to === 'owner' ? 'Needs you' : 'Kicked back', to === 'owner'
     ? `${cardId} still does not integrate with master after ${failures} tries (${summary}). Its commit and worktree are kept at ${entry.worktreePath}. Should an agent try again with a narrower change, or will you fix it yourself?`
     : output ? `${summary}. Your worktree ${entry.worktreePath} is already rebased onto current master: fix the failures there, keep exactly one card commit, re-run the check, then hkb done.${log}`
+    : failures >= 2 ? `Integration conflict with master again: ${summary}. Stop resolving it and start fresh on the new base. In your worktree ${entry.worktreePath}: git rebase --abort if one is in progress, git branch kanban-backup/${cardId}-${failures} HEAD, git reset --hard ${target}, then re-apply the same change by hand using git show kanban-backup/${cardId}-${failures} as the reference. In shared list files add only your own entry at the end; leave other entries and shared helpers alone unless the card needs them. Keep exactly one card commit, run your check once, then hkb done.${diff}`
     : `Integration conflict with master: ${summary}. Resolve it in your own worktree ${entry.worktreePath}: git rebase --onto ${target} ${entry.baseCommit}, fix ${files.join(', ') || 'the conflicting files'}, keep exactly one card commit, re-run your check, then hkb done.${diff}`)
   // Not an 'implementation' correction: that would demand the retired Builder pane back.
   updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null })
