@@ -107,6 +107,10 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     }
     checkPlanPaths(planRoot, section('Files'), section('Prerequisites'), section('Implementation plan'))
     if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
+    // Most Builder kick-backs were plans whose own check did not match the code: a wrong
+    // selector (I427), a screenshot count the script never produced (I432), a zero-reference
+    // AC that files outside ## Files made impossible (I445). Running the check once first catches them.
+    if (readiness === 'build-ready' && !/^\*\*Base check:\*\*[ 	]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Base check:** line: run the Check once on the current integration checkout and record the command and what it printed (a regression check should fail there; a count, selector or file it relies on must exist). If it cannot run before the change (it tests a file this card creates), say why.')
   }
 }
 

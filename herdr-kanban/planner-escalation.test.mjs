@@ -94,6 +94,7 @@ Observed cause: helper is missing.
 Evidence: src/app.mjs does not exist.
 Inspected current revision/state: git revision abc123; working tree clean.
 **Callers checked:** none
+**Base check:** node check.mjs on base: 1 failing as expected
 Changes: add helper() and its test.
 Setup: none; use the existing Node runtime.
 Check: node --test test/app.test.mjs
