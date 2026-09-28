@@ -93,6 +93,11 @@ export function stagedInput(pane, text = '') {
   const input = inputText(String(pane).split(/\r?\n/))
   return input != null && (/Pasted Content/i.test(input) || typedOnInput(input, text))
 }
+// A pane whose input line still holds the board's delivery pointer: the task was typed but
+// never submitted (Injectbuddy I401, 2026-09-28: Codex idle as "done", no tool work).
+export function unsubmittedDelivery(pane) {
+  return /\.deliveries[\\/]/.test(inputText(String(pane).split(/\r?\n/)) ?? '')
+}
 // The last input line plus the indented lines it wraps onto, up to a blank line or
 // the box rule. Claude wraps a long prompt (Injectbuddy I213: `❯ Read` then the path),
 // breaking mid-word or at a space, so the match ignores whitespace.

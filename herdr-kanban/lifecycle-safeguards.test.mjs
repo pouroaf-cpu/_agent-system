@@ -62,6 +62,19 @@ test('Builder fallback judges only the agent\'s last message in a scraped pane (
   assert.equal(readWorkflow(tasks)['T-8'].waitFor.why, 'Should I keep the old selector or rename it?', 'ask text is the agent\'s question, not the pane')
 })
 
+test('a Builder whose task pointer was never submitted is a failed start, back to Queue (I401)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-safeguards-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-5.md'), '# T-5 — build-ready\n')
+  const pane = '│ >_ OpenAI Codex (v0.156.1) │\n╰──────╯\n\n  Tip: New Use /fast.\n\n\n› Read C:/Users/PFrew/Projects/herdr-kanban/.deliveries/f2d4.md (revision\n  60c8) (use the PowerShell tool with login:false) and follow it exactly; it is your\n  complete task.\n\n\n  GPT-6-Sol medium · ~\\cards\\t-5'
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-5', reason: 'finished with status=done without a valid Builder handoff', evidence: pane, io: { readDelivery: () => null, saveDelivery: () => {} } })
+  assert.equal(moved.column, 'queue', 'a fresh Builder, not a Planner correction')
+  assert.doesNotMatch(readFileSync(moved.path, 'utf8'), /Kicked back/)
+  assert.match(readFileSync(join(tasks, '.history', 'T-5.jsonl'), 'utf8'), /builder-delivery-failed/)
+})
+
 test('Planner and Builder prompts require prerequisite verification and one handoff', () => {
   const card = { id: 'T-2', title: 'check prerequisites', path: 'T-2.md', trivial: false }
   const builder = workerPrompt({ card, projectPath: '.', boardRoot: '.', tasksDir: '' })

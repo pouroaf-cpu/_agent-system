@@ -17,7 +17,7 @@ import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
-import { spawnForCard, deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
+import { spawnForCard, deliver, unsubmittedDelivery, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
 import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
@@ -52,11 +52,11 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   // Builder, not a failed build (Tradeflow T-36; I157, TF50: machine load, not a strike).
   const paneId = readBindings(tasksDir)[card.id]?.pane_id || readWorkflow(tasksDir)[card.id]?.builder?.pane_id
   const delivery = paneId && io.readDelivery(session, paneId)
-  if (delivery?.status === 'uncertain') {
-    io.saveDelivery(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain delivery resolved as failed; a fresh Builder takes over' })
+  if (delivery?.status === 'uncertain' || unsubmittedDelivery(evidence)) {
+    if (delivery) io.saveDelivery(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain or unsubmitted delivery resolved as failed; a fresh Builder takes over' })
     unbind(tasksDir, card.id)
     const moved = moveCard(tasksDir, card.id, 'queue')
-    appendHistory(tasksDir, card.id, { event: 'builder-delivery-failed', paneId, deliveryAt: delivery.at || null })
+    appendHistory(tasksDir, card.id, { event: 'builder-delivery-failed', paneId, deliveryAt: delivery?.at || null })
     recordStartFailure(tasksDir, card.id, 'builder', 'Builder prompt was never submitted')
     return moved
   }
