@@ -47,6 +47,21 @@ test('Builder fallback holds a question in Planning for the operator instead of 
   assert.doesNotMatch(readFileSync(join(tasks, '.history', 'T-9.jsonl'), 'utf8'), /builder-no-handoff/)
 })
 
+test('Builder fallback judges only the agent\'s last message in a scraped pane (I385)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-safeguards-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  const pane = (last) => `+194 lines\n\n• Reading the brief.\n\n• Ran Get-Content skill.md\n  │ … +5 lines\n  └ Should you ask? You cannot.\n\n• ${last}\n\n  Worked for 1m 15s · 3:30 PM\n\n\n› Ask Codex to do anything\n\n  GPT-6-Luna medium`
+  writeFileSync(join(working, 'T-7.md'), '# T-7 — plan gap\n**Workflow:** card-owned\n')
+  const gap = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-7', reason: 'no handoff', evidence: pane('[planning] The delivery requires extracting\n  the flow machinery; recording the blocker.') })
+  assert.equal(readWorkflow(tasks)['T-7']?.waitFor ?? null, null, 'plan gap goes to the Planner, not a person')
+  assert.match(readFileSync(gap.path, 'utf8'), /Kicked back/)
+  writeFileSync(join(working, 'T-8.md'), '# T-8 — question\n**Workflow:** card-owned\n')
+  routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-8', reason: 'no handoff', evidence: pane('Should I keep the old\n  selector or rename it?') })
+  assert.equal(readWorkflow(tasks)['T-8'].waitFor.why, 'Should I keep the old selector or rename it?', 'ask text is the agent\'s question, not the pane')
+})
+
 test('Planner and Builder prompts require prerequisite verification and one handoff', () => {
   const card = { id: 'T-2', title: 'check prerequisites', path: 'T-2.md', trivial: false }
   const builder = workerPrompt({ card, projectPath: '.', boardRoot: '.', tasksDir: '' })

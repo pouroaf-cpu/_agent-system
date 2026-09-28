@@ -3,7 +3,7 @@ import { assertPromptAllowed, controlState, projectEnvironment } from './project
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
-import { looksLikeAQuestion } from './agent-question.mjs'
+import { looksLikeAQuestion, lastAgentMessage } from './agent-question.mjs'
 import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 // The spawner. Watches one column — Queue — and nothing else.
@@ -66,8 +66,11 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   // Nobody reads a stopped Builder's pane, so a question or blocker left there as plain
   // text otherwise just gets requeued/replanned into the same silence (38 of the last 100
   // bounces, 2026-09-27). Hold it for a person instead of kicking it back to a fresh Planner.
-  if (looksLikeAQuestion(String(evidence).slice(-1000))) {
-    const question = String(evidence).trim().slice(-2000)
+  // Judge only the agent's own last message, not tool output in the pane (I385 was held on
+  // a skill file's text). A [planning]/[implementation] tag is a plan gap for the Planner.
+  const said = lastAgentMessage(evidence)
+  if (looksLikeAQuestion(said) && !/^\[(planning|implementation)\]/i.test(said)) {
+    const question = said.slice(-2000)
     updateWorkflow(tasksDir, moved.id, { waitFor: { cards: [], files: [], decision: true, why: question, since: new Date(now).toISOString() } })
     writeCurrentFeedback(tasksDir, moved, 'Needs you', `${question}\n\nRecord the answer on the card, then move it to Planning (or Planned).\n`)
     appendHistory(tasksDir, card.id, { event: 'agent-question-captured', stage: 'working', reason: detail, evidence })
