@@ -273,9 +273,12 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         // only the holder is escalated, never the cards queued behind it (Tradeflow T-35).
         const fileHolder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
         const allowedFileWait = !!fileHolder && fileHolder !== freshCard.id && liveCards(fresh).some(c => c.id === fileHolder)
-        const transient = ['slots full', 'cooling down after failed spawn'].includes(hold)
+        // Waiting for a free Builder slot is not the card's fault: no expiry clock. Expiring it sent
+        // Injectbuddy I389 back to Planning as its fifth failed return, then to Owner (2026-09-28, cap 5).
+        const slotWait = hold === 'slots full'
+        const transient = hold === 'cooling down after failed spawn'
         const workflow = readWorkflow(tasksDir)[freshCard.id] || {}
-        if (allowedDependencyWait || allowedFileWait || hold.startsWith('installing dependencies in ') || isRetryHold(hold)) {
+        if (allowedDependencyWait || allowedFileWait || slotWait || hold.startsWith('installing dependencies in ') || isRetryHold(hold)) {
           held[freshCard.id] = hold
           delete workflow.queueHoldSince
           updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })

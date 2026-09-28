@@ -1,4 +1,5 @@
 // node --test test.mjs
+import { readWorkflow } from './lib/workflow-state.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs'
@@ -622,18 +623,15 @@ test('T-9 keeps an allowed Owner prerequisite wait visible in Queue', async () =
   rmSync(root, { recursive: true, force: true })
 })
 
-test('T-9 sends a continuous full-slot hold to Planning only after three stall windows', async () => {
+test('T-9 keeps a full-slot hold in Queue however long it lasts (Injectbuddy I389)', async () => {
   const { tasks, root } = fixture()
   moveCard(tasks, 'T-17', 'working')
   bind(tasks, 'T-17', { pane_id: 'w1:p1' })
   const args = { project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [{ pane_id: 'w1:p1', agent_status: 'working' }], max: 1, stallSeconds: 1 }
   await autoSpawn({ ...args, now: 1000 })
-  await autoSpawn({ ...args, now: 4000 })
-  assert.equal(findCard(tasks, 'T-04').column, 'queue', 'exactly three windows stays in Queue')
-  await autoSpawn({ ...args, now: 4001 })
-  const routed = findCard(tasks, 'T-04')
-  assert.equal(routed.column, 'planning')
-  assert.match(readFileSync(routed.path, 'utf8'), /\[planning\] Queue hold expired[\s\S]*continuously held for 3 seconds/)
+  await autoSpawn({ ...args, now: 3600000 })
+  assert.equal(findCard(tasks, 'T-04').column, 'queue', 'waiting for a Builder slot is not a failure')
+  assert.equal(readWorkflow(tasks)['T-04']?.queueHoldSince ?? null, null, 'no expiry clock on a slot wait')
   rmSync(root, { recursive: true, force: true })
 })
 
