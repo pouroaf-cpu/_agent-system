@@ -345,6 +345,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         slots--
       } catch (err) {
         if (err.paused) { held[moved.id] = err.message; continue }
+        // Someone else moved the card during the boot: leave it where they put it.
+        if (err.movedAway) { unbind(tasksDir, moved.id); log?.(err.message); onChange?.(); continue }
         // Dependency drift in the card workspace: install there in the background and wait.
         const installing = err.installIn && startDependencyInstall({ folder: err.installIn, tasksDir })
         if (installing && !installing.startsWith('installing dependencies in ')) err.message = installing // low disk or two failures: Owner

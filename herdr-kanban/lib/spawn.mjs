@@ -303,6 +303,15 @@ export async function spawnForCard({
     throw Object.assign(new Error(`agent start failed: ${err.message}`), { preservePane: err.preservePane, startFailed: startFailed(err).startFailed })
   }
 
+  // Booting takes minutes; a person or project chat may move the card meanwhile. A Builder
+  // handed a card no longer in Working reads a missing brief and kicks it back (I398, 2026-09-28).
+  let column
+  try { column = findCard(tasksDir, card.id).column } catch {}
+  if (column !== 'working') {
+    await paneClose(paneId, session).catch(() => {})
+    throw Object.assign(new Error(`${card.id} left Working (now ${column || 'gone'}) before its Builder got the task`), { movedAway: true })
+  }
+
   // Submission is keystrokes, so it can silently land in the input box without
   // being sent. --wait makes herdr confirm the agent actually started working.
   try {

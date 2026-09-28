@@ -635,6 +635,20 @@ test('T-9 keeps a full-slot hold in Queue however long it lasts (Injectbuddy I38
   rmSync(root, { recursive: true, force: true })
 })
 
+test('a card moved out of Working while its Builder boots stays where it was moved (I398)', async () => {
+  const { tasks, root } = fixture()
+  const spawn = async ({ card, onPane }) => {
+    onPane({ pane_id: 'w1:p9', tab_id: 't9', name: 'b-t04' })
+    moveCard(tasks, card.id, 'planned') // a project chat moves it mid-boot
+    throw Object.assign(new Error('T-04 left Working'), { movedAway: true })
+  }
+  await autoSpawn({ project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'sonnet', agents: [], max: 1, spawn })
+  assert.equal(findCard(tasks, 'T-04').column, 'planned', 'not pulled back to Queue')
+  assert.equal(readBindings(tasks)['T-04'], undefined, 'the closed Builder holds no claim')
+  assert.equal(readWorkflow(tasks)['T-04']?.operational ?? null, null, 'not a card failure')
+  rmSync(root, { recursive: true, force: true })
+})
+
 test('a preserved pane reservation consumes the remaining autoSpawn slot for the tick', async () => {
   const { tasks, root } = fixture()
   writeFileSync(join(tasks, 'queue', 'T-18-second.md'), '# T-18 — Second\n\n**Priority** 6/10\n')

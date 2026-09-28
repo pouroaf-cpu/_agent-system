@@ -9,7 +9,7 @@ import { join } from 'node:path'
 test('implementation correction: missing prior Builder gets a fresh Builder with the feedback; a live legacy pane is resumed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'builder-correction-')), tasks = join(root, 'TASKS')
   mkdirSync(tasks)
-  const card = { id: 'T-1', title: 'Fixture', path: join(tasks, 'T-1.md') }
+  const card = { id: 'T-1', title: 'Fixture', path: join(tasks, 'T-1.md'), column: 'working' }
   writeFileSync(card.path, '# T-1\n## Files\n- app.js\n')
   let agents = []
   const calls = [], logs = [], deliveries = new Map()

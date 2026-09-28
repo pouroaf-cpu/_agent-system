@@ -7,7 +7,7 @@ import { join } from 'node:path'
 test('ordinary spawn delivers real current prompt without experimental hooks; explicit experiment and pause refuse before preparation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ordinary-builder-')), tasks = join(root, 'TASKS')
   mkdirSync(tasks)
-  const card = { id: 'T-1', title: 'Fixture', path: join(tasks, 'T-1.md') }
+  const card = { id: 'T-1', title: 'Fixture', path: join(tasks, 'T-1.md'), column: 'working' }
   writeFileSync(card.path, '# T-1\n## Files\n- app.js\n## Acceptance criteria\nExact result\n')
   const calls = [], deliveries = new Map(); let working = false, paused = false
   const agent = () => ({ pane_id: 'fixture-pane', tab_id: 'fixture-tab', agent_session: 'fixture-session', agent_status: working ? 'working' : 'idle' })
