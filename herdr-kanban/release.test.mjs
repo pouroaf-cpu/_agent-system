@@ -58,15 +58,26 @@ test('finish refuses a dirty checkout, an unreleased commit, a diverged HEAD and
   assert.throws(() => finishRelease({ integrationPath: r.integ, commit: git(r.dev, 'rev-parse', 'HEAD') }), /not on origin\/master/)
   assert.throws(() => finishRelease({ integrationPath: r.integ, commit: 'deadbeefdeadbeef' }), /not found/)
 
-  writeFileSync(join(r.integ, 'd.txt'), 'integrated after release\n'); git(r.integ, 'add', '.'); git(r.integ, 'commit', '-m', 'late card')
-  const diverged = git(r.integ, 'rev-parse', 'HEAD')
-  assert.throws(() => finishRelease({ integrationPath: r.integ, commit: r.release }), /not an ancestor/)
-  assert.equal(git(r.integ, 'rev-parse', 'HEAD'), diverged)
-  assert.notEqual(before, r.release)
-
+  assert.equal(git(r.integ, 'rev-parse', 'HEAD'), before)
   const plain = join(r.root, 'plain'); mkdirSync(plain)
   assert.throws(() => finishRelease({ integrationPath: plain, commit: r.release }), /no git integration checkout/i)
   assert.throws(() => finishRelease({ integrationPath: undefined, commit: r.release }), /no git integration checkout/i)
+})
+
+test('finish merges a partial release in, keeping cards integrated after it; a conflict changes nothing', t => {
+  const r = repos(t)
+  writeFileSync(join(r.integ, 'd.txt'), 'integrated after release\n'); git(r.integ, 'add', '.'); git(r.integ, 'commit', '-m', 'late card')
+  const late = git(r.integ, 'rev-parse', 'HEAD')
+  finishRelease({ integrationPath: r.integ, commit: r.release })
+  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', r.release, 'HEAD']).status, 0)
+  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', late, 'HEAD']).status, 0)
+
+  const c = repos(t)
+  writeFileSync(join(c.integ, 'sitemap.xml'), '<clash/>\n'); git(c.integ, 'add', '.'); git(c.integ, 'commit', '-m', 'clash')
+  const clash = git(c.integ, 'rev-parse', 'HEAD')
+  assert.throws(() => finishRelease({ integrationPath: c.integ, commit: c.release }), /merge aborted/)
+  assert.equal(git(c.integ, 'rev-parse', 'HEAD'), clash)
+  assert.equal(git(c.integ, 'status', '--porcelain'), '')
 })
 
 test('readiness waits on a working Builder, an unintegrated Completed card and a running integration', t => {

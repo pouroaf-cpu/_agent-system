@@ -35,10 +35,13 @@ export function finishRelease({ integrationPath, commit, branch = 'master' }) {
   if (!sha) throw new Error(`Commit ${commit} not found in ${integrationPath} after git fetch origin`)
   if (git('merge-base', '--is-ancestor', sha, `origin/${branch}`).status !== 0) throw new Error(`Commit ${commit} is not on origin/${branch}`)
   if (!clean(integrationPath)) throw new Error(`Integration checkout ${integrationPath} has uncommitted changes or an unfinished git operation`)
-  if (git('merge-base', '--is-ancestor', 'HEAD', sha).status !== 0) {
-    throw new Error(`Integration checkout HEAD ${git('rev-parse', '--short', 'HEAD').stdout.trim()} is not an ancestor of ${commit}: it has commits the release does not include`)
+  // A partial release leaves out cards integrated after it (Injectbuddy I488/I496 held for an
+  // operator preview, 2026-09-29): merge the release in and keep them for the next release.
+  const partial = git('merge-base', '--is-ancestor', 'HEAD', sha).status !== 0
+  const merged = partial ? git('merge', '--no-edit', sha) : git('merge', '--ff-only', sha)
+  if (merged.status !== 0) {
+    if (partial) git('merge', '--abort')
+    fail(partial ? `Integration HEAD has commits the release ${commit} leaves out, and merging the release in failed (merge aborted, nothing changed)` : 'git merge --ff-only failed', merged)
   }
-  const merged = git('merge', '--ff-only', sha)
-  if (merged.status !== 0) fail('git merge --ff-only failed', merged)
   return git('rev-parse', '--short', 'HEAD').stdout.trim()
 }
