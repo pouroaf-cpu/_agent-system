@@ -344,7 +344,17 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         started.push(moved.id)
         slots--
       } catch (err) {
-        if (err.paused) { held[moved.id] = err.message; continue }
+        // Paused between the poll and the start: nothing ran, so the card waits in Queue. Left in
+        // Working, its empty pane read as a missing session and cost a Planning return (I496).
+        if (err.paused) {
+          const paneId = readBindings(tasksDir)[moved.id]?.pane_id
+          unbind(tasksDir, moved.id)
+          if (paneId) await paneClose(paneId, sessionOf(project)).catch(() => {})
+          moveCard(tasksDir, moved.id, 'queue')
+          held[moved.id] = err.message
+          onChange?.()
+          continue
+        }
         // Someone else moved the card during the boot: leave it where they put it.
         if (err.movedAway) { unbind(tasksDir, moved.id); log?.(err.message); onChange?.(); continue }
         // Dependency drift in the card workspace: install there in the background and wait.

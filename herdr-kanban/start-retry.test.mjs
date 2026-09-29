@@ -184,6 +184,17 @@ test('Builder: a failed start returns the card to Queue without a hold, retries 
   assert.match(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), /The Builder for T-1 failed to start twice in a row[\s\S]*Drag it back to Queue/)
 })
 
+test('Builder: a start refused by a pause returns the card to Queue and closes its pane, counting nothing (I496)', async () => {
+  const tasks = project()
+  mkdirSync(join(tasks, 'queue')); writeFileSync(join(tasks, 'queue', 'T-1.md'), '# T-1 — task\n' + plan)
+  const spawn = async ({ onPane }) => { onPane({ pane_id: 'paused-pane', name: 'b-t-1' }); throw Object.assign(new Error('Project p is paused; assignment retained pending Start'), { paused: true, preservePane: true }) }
+  await autoSpawn({ project: 'PausedStart', projectPath: join(tasks, '..'), tasksDir: tasks, max: 2, agents: [], spawn })
+  assert.equal(findCard(tasks, 'T-1').column, 'queue')
+  assert.ok(herdr.closed.includes('paused-pane'))
+  herdr.closed.length = 0
+  assert.equal(readWorkflow(tasks)['T-1']?.startFailure ?? null, null)
+})
+
 test('transient start failures (unsubmitted prompt, start timeout) back off with a visible retry time, Owner only after the budget (I157, TF50)', async () => {
   const { checkStalls } = await import('./lib/stall-watchdog.mjs')
   const tasks = project()
