@@ -343,6 +343,9 @@ try {
 } catch (err) {
   fail(err.message)
 }
+// The board may already have moved the card on (planned -> queue) since moveCard returned:
+// I539 exited ENOENT reading the stale backlog path.
+card = findCard(tasksDir, card.id)
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
 else if (decisionWait) writeCurrentFeedback(tasksDir, card, 'Needs you', `${note}
