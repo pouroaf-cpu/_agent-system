@@ -66,6 +66,21 @@ export function builderHandedOff(tasksDir, id) {
   }
   return handedOff
 }
+// I519: an issue is a handoff too, but only for the Builder that reported it.
+export function builderIssue(tasksDir, id, started) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return null
+  let issue = null
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    try {
+      const e = JSON.parse(line)
+      if (e.event === 'transition' && e.to === 'working') issue = null
+      if (started && Date.parse(e.at) < Date.parse(started)) continue
+      if (e.stage === 'working' && (e.event === 'failure' || (e.event === 'handoff' && e.outcome === 'issue'))) issue = e
+    } catch { /* torn line */ }
+  }
+  return issue
+}
 // When the card last moved into `column` (ms), from its history transitions; null when
 // history does not say. Histories reach ~0.5MB and every poll asks, so the answer is
 // cached per file size+mtime.

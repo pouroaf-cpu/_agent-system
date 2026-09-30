@@ -2,7 +2,7 @@ import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, builderIssue } from './card-history.mjs'
 import { looksLikeAQuestion, lastAgentMessage } from './agent-question.mjs'
 import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
@@ -60,6 +60,10 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     recordStartFailure(tasksDir, card.id, 'builder', 'Builder prompt was never submitted')
     return moved
   }
+  // I519: a Builder that filed hkb issue and then exited did hand off. Kick back with its own
+  // note, or three different causes all read as one repeated "session missing" failure.
+  const issue = builderIssue(tasksDir, card.id, (readBindings(tasksDir)[card.id] || readWorkflow(tasksDir)[card.id]?.builder)?.started)
+  if (issue) { reason = `Builder reported: ${issue.note}`; evidence = '' }
   const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
   unbind(tasksDir, card.id)
   const moved = moveCard(tasksDir, card.id, 'planning')

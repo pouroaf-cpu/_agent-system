@@ -32,6 +32,29 @@ test('Builder fallback routes Working to Planning and preserves assignment/workt
   assert.equal(existsSync(join(tasks, 'issues')), false, 'nothing lands in Issues')
 })
 
+test('Builder that filed hkb issue then exited is kicked back with its own note, not a generic one (I519)', async t => {
+  const { appendHistory } = await import('./lib/card-history.mjs')
+  const { correctionFingerprint } = await import('./lib/card-planner.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-issue-'))
+  const tasks = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const prints = []
+  for (const note of ['[evidence] Unmeasured opacity at Skip 0', '[operational] Signed-in /account/ route must load']) {
+    mkdirSync(join(tasks, 'working'), { recursive: true })
+    writeFileSync(join(tasks, 'working', 'T-1.md'), '# T-1 — issue\n**Workflow:** card-owned\n')
+    writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'p', started: new Date(Date.now() - 60000).toISOString() } } }))
+    appendHistory(tasks, 'T-1', { event: 'failure', stage: 'working', category: note.slice(1, note.indexOf(']')), note })
+    const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Session unknown is missing without a valid Builder handoff from Working' })
+    const text = readFileSync(moved.path, 'utf8')
+    assert.equal(moved.column, 'planning')
+    assert.match(text, new RegExp(`Builder reported: ${note.replace(/[[\]/]/g, '\\$&')}`))
+    assert.doesNotMatch(text, /Session unknown is missing/)
+    prints.push(correctionFingerprint(text))
+    rmSync(join(tasks, 'planning'), { recursive: true, force: true })
+  }
+  assert.notEqual(prints[0], prints[1], 'two different causes are not "the same failure"')
+})
+
 test('Builder fallback holds a question in Planning for the operator instead of requeueing', t => {
   const root = mkdtempSync(join(tmpdir(), 'lifecycle-safeguards-'))
   const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
