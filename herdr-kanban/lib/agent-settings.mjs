@@ -8,7 +8,7 @@ export const STAGES = ['planning', 'working', 'review', 'trivial']
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 export const SUPPORTED = {
   codex: {
-    models: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-6-astra'],
+    models: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-6-astra'],
     reasoning: REASONING,
   },
   claude: {
