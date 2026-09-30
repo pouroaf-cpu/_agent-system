@@ -11,7 +11,9 @@ const HOUR = 3600000
 const LIMIT = /hit your (?:usage )?limit|usage limit reached|limit will reset|limit reached\W+resets/i
 // A model's own cap ("Opus weekly limit reached"), unlike the shared 5-hour session limit.
 const MODEL_CAP = /\b(?:opus|sonnet|haiku|weekly|7-day)\b[^.|]{0,20}\blimit\b/i
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+const CAPACITY = /model is at capacity/i
+const CAPACITY_WAIT_MS = 15 * 60000
+const MONTHS =['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const h24 = (h, ap) => (Number(h) % 12) + (/p/i.test(ap) ? 12 : 0)
 
 // The reset time an engine printed, read as local time, or null.
@@ -36,6 +38,9 @@ function resetAt(text, now) {
 // card about usage limits must not block its engine.
 export function usageLimit(screen, now = Date.now()) {
   const tail = String(screen || '').trimEnd().split(/\r?\n/).slice(-20).join(' ').replace(/\s+/g, ' ')
+  // Codex "Selected model is at capacity": the model's servers are busy, not our usage
+  // (I534, 2026-09-30, sent a passing Builder back to Planning). Wait a short while on that model.
+  if (CAPACITY.test(tail)) return { until: now + CAPACITY_WAIT_MS, modelCap: true }
   if (!LIMIT.test(tail)) return null
   const at = resetAt(tail, now)
   return { until: at > now ? at : now + HOUR, ...(MODEL_CAP.test(tail) && { modelCap: true }) }
