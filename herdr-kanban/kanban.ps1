@@ -75,8 +75,11 @@ if ($alive) {
     # conhost --headless: a WMI-created console app otherwise opens a visible Windows Terminal window.
     $logOut = Join-Path $root 'server.log'
     $logErr = Join-Path $root 'server.err.log'
+    # WMI hands the server its own stale environment, so agents missed PATH changes until a
+    # reboot (per-user PowerShell 7, I519 2026-09-30). Pass the current saved PATH explicitly.
+    $freshPath = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine      = "conhost.exe --headless cmd.exe /c $lanPrefix node server.mjs >> `"$logOut`" 2>> `"$logErr`""
+        CommandLine      = "conhost.exe --headless cmd.exe /c set `"PATH=$freshPath`" && $lanPrefix node server.mjs >> `"$logOut`" 2>> `"$logErr`""
         CurrentDirectory = $root
     }
     if ($created.ReturnValue -ne 0) { Write-Warning "board: process create failed ($($created.ReturnValue))" }
