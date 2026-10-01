@@ -37,5 +37,6 @@ try {
   if (stats.unexpected) appendFileSync(INBOX, `- FOUND Injectbuddy nightly ${line}\n`)
 } finally {
   spawnSync('taskkill', ['/pid', String(server.pid), '/t', '/f'])
+  spawnSync('cmd', ['/c', 'rmdir', join(dir, 'node_modules')]) // unlink the junction only, never delete through it
   git('worktree', 'remove', '--force', dir)
 }
