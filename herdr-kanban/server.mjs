@@ -343,7 +343,7 @@ function cardWaits(project, now = Date.now()) {
   let indicators = {}, times = {}
   try { indicators = stageIndicators({ tasksDir, reviewRoot: REVIEW_ROOT, board, planners, claims, agents, workflow }) } catch { /* as on the board: no indicator */ }
   try { times = laneTimes({ tasksDir, board, planners, workflow, claims, agents }) } catch { /* fall back to lane entry below */ }
-  const holds = { ...holdsFor(project), ...quotaHoldsOf(project, board) }
+  const quota = quotaHoldsOf(project, board), holds = { ...holdsFor(project), ...quota }
   let registry = {}
   try { registry = readWorktrees(tasksDir) } catch { /* no registry: blockers count as unmet by archive state alone */ }
   // All slots busy: a Planning/Queue card is waiting its turn, not stuck (I405, 2026-09-28).
@@ -356,7 +356,8 @@ function cardWaits(project, now = Date.now()) {
     const wait = card.column === 'planning' && workflow[card.id]?.waitFor, needs = wait ? [...wait.cards, ...wait.files] : []
     const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
     const slotWait = !!full[card.column] && !(times[card.id]?.agentActive)
-    return { ...(slotWait && { slotWait }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
+    // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
+    return { ...(slotWait && { slotWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
       reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? indicators[card.id]?.reason ?? null }
   })
@@ -366,7 +367,7 @@ function cardWaits(project, now = Date.now()) {
 // Stuck = waiting past the threshold with nobody working on it and no unfinished blocker.
 // A card an agent is on, or one queued behind another card, is moving (operator saw
 // "stuck 3" for cards waiting on I307 that were planned the minute it merged, 2026-09-26).
-const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length && !c.slotWait
+const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length && !c.slotWait && !c.quotaWait
 
 // Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
 function integrationAheadOfMaster(project) {

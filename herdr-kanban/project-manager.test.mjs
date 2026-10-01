@@ -131,6 +131,24 @@ test('a card whose blocker landed a minute ago is not stuck, however long it wai
   assert.ok((await get('/api/stuck?project=Proj&minutes=0')).body.cards.some(c => c.id === card.id && c.minutes <= 2))
 })
 
+// Injectbuddy I521 read "stuck" an hour into a three-day Codex usage limit (2026-10-01).
+test('a card held by a usage limit is not stuck; it is again once the limit is gone', async () => {
+  const card = createCard(tasks, { title: 'Quota held', brief: 'x', prefix: 'P' })
+  moveCard(tasks, card.id, 'owner')
+  moveCard(tasks, card.id, 'planning')
+  const path = historyPath(tasks, card.id)
+  writeFileSync(path, readFileSync(path, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - 3 * 3600000).toISOString()}"`))
+  const quotaFile = join(root, '.engine-quota.json')
+  writeFileSync(quotaFile, JSON.stringify({ codex: { until: Date.now() + 86400000, since: new Date().toISOString() } }))
+  try {
+    const r = await get('/api/stuck?project=Proj&minutes=60')
+    assert.equal(r.status, 200, r.body.error)
+    assert.ok(!r.body.cards.some(c => c.id === card.id), 'quota-held card listed as stuck')
+  } finally { rmSync(quotaFile, { force: true }) }
+  assert.ok((await get('/api/stuck?project=Proj&minutes=60')).body.cards.some(c => c.id === card.id), 'card not stuck after the limit cleared')
+  moveCard(tasks, card.id, 'archive', { operatorArchive: true })
+})
+
 test('hkb found goes to the registered manager inbox, to the Kanban Manager without one, and always with --board', async () => {
   mkdirSync(join(tasks, 'working'), { recursive: true })
   writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')
