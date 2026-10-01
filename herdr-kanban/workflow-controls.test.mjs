@@ -109,6 +109,19 @@ test('relevant code and acceptance changes invalidate evidence; optional caps re
   assert.match(checkWorkflowLimits(f.tasks, card.id, 'builder'), /maxRunsPerStage reached/)
 })
 
+// Injectbuddy I553 (2026-10-02): a Builder prompt lost on a slow Claude start went to Owner.
+test('a lost Builder delivery retries with a fresh tab instead of going to Owner', async t => {
+  const f = fixture(t)
+  const path = join(f.tasks, 'queue'); mkdirSync(path)
+  writeFileSync(join(path, 'T-1.md'), '# T-1 — task\n' + plan)
+  recordOperationalFailure(f.tasks, findCard(f.tasks, 'T-1'), 'Delivery unconfirmed: agent prompt stalled; inspect the existing session before retrying', join(f.root, 'Proof'))
+  let calls = 0
+  await autoSpawn({ project: 'Proof', projectPath: join(f.root, 'Proof'), tasksDir: f.tasks, max: 1, agents: [], spawn: async () => { calls++; throw Object.assign(new Error('Delivery unconfirmed: again'), { preservePane: true }) } })
+  assert.notEqual(findCard(f.tasks, 'T-1').column, 'owner')
+  assert.equal(calls, 1, 'retried once')
+  assert.equal(readWorkflow(f.tasks)['T-1'].startFailure.count, 1)
+})
+
 test('operational failure preserves pending stage and blocks unchanged redispatch until prerequisite changes', async t => {
   const f = fixture(t)
   const path = join(f.tasks, 'queue'); mkdirSync(path)

@@ -255,7 +255,18 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       const selectedModel = selected?.model ?? (freshCard.trivial ? trivialModel : model)
       const selectedEngine = selected?.engine ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : (freshCard.trivial ? trivialEngine : engine)
       const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
-      const operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
+      let operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
+      // A Builder prompt lost on a slow start (pane never went working, card back in Queue) is a
+      // failed start, not an operator decision: retry with a fresh tab like any start failure,
+      // Owner only after the second (Injectbuddy I553 on Claude Sonnet, 2026-10-02).
+      if (operational?.startsWith('Delivery unconfirmed')) {
+        const lost = operational
+        updateWorkflow(tasksDir, freshCard.id, { operational: null })
+        operational = null
+        if (recordStartFailure(tasksDir, freshCard.id, 'builder', lost, now)) { fresh = null; onChange?.(); continue }
+        const wait = startRetryHold(readWorkflow(tasksDir)[freshCard.id], 'builder', now)
+        if (wait) { held[freshCard.id] = wait; continue }
+      }
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
         || quotaHold(boardRoot, quotaKey(engineKind(selectedEngine), selectedModel), now)
         || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings, now })
