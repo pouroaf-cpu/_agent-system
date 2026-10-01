@@ -20,6 +20,7 @@ import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-hand
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
+import { TEST_RUNNERS, readTestRuns, startTestRun } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -836,6 +837,17 @@ const handleRequest = async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/audits') {
     try { return json(res, 200, { ok: true, project, audits: readAuditReports(config, project) }) }
     catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/tests') {
+    if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
+    return json(res, 200, { ok: true, project, runner: Boolean(TEST_RUNNERS[project]), ...readTestRuns(tasksDirOf(project)) })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/tests/run') {
+    if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
+    try { return json(res, 200, { ok: true, ...startTestRun({ project, tasksDir: tasksDirOf(project), boardDir: HERE }) }) }
+    catch (err) { return json(res, 409, { ok: false, error: err.message }) }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/agent-open') {
