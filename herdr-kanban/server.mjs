@@ -28,7 +28,9 @@ const PUBLIC = join(HERE, 'public')
 const CONFIG_PATH = process.env.KANBAN_CONFIG ?? join(HERE, 'board.config.json')
 const REVIEW_ROOT = dirname(CONFIG_PATH)
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
-const lanHost = process.env.KANBAN_LAN_HOST
+// cmd's `set "X=v" && node` hands node a trailing space, and "192.168.1.11 " fails to
+// listen (ENOTFOUND): the phone board was silently off (2026-10-01).
+const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard } = await import('./lib/cards.mjs')
