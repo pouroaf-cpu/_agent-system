@@ -307,3 +307,10 @@ test('every role is typed as a short one-line pointer; the file holds the task a
   await resumeDeliveries('proof')
   assert.match(readDelivery('proof', 'w12:p34@default').reason, /Brief changed/)
 })
+
+test('a pending delivery while paused waits quietly instead of aborting the poll (I553 release drain)', async t => {
+  fixture(t)
+  saveDelivery('proof', 'pane', { key: deliveryKey('assigned job'), text: 'assigned job', status: 'paused' })
+  await resumeDeliveries('proof')
+  assert.equal(pendingDeliveries('proof').length, 1)
+})

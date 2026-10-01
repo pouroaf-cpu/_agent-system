@@ -472,8 +472,9 @@ async function pollProject(project) {
     }
     // Observe usage/results during Pause, but leave assignments and recovery intact.
     // A release pause drains instead: running Builders finish and their cards integrate; nothing new starts.
+    // So does an agent cap of 0 (operator hold, 2026-10-01: I553 finished but could never integrate).
     const control = controlState(project, CONFIG_PATH)
-    if (control.paused && !control.release) { broadcastBoard(project); return }
+    if (control.paused && !control.release && config.maxConcurrentAgents !== 0) { broadcastBoard(project); return }
     // Pushover alert for every card that newly lands in Owner (one attempt each).
     alertOwnerCards({ project, tasksDir }).then(ids => { if (ids.length) activity(project, ids.join(','), 'owner-alert', 'Pushover sent') })
       .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
