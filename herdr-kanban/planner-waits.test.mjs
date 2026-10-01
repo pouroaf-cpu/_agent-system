@@ -12,7 +12,8 @@ const { createCard, findCard } = await import('./lib/cards.mjs')
 const { runCardPlanner, readCardPlanners } = await import('./lib/card-planner.mjs')
 const saveCardPlanners = (dir, data) => writeFileSync(join(dir, '.card-planners.json'), JSON.stringify(data))
 const { readDelivery, saveDelivery } = await import('./lib/delivery-state.mjs')
-const { readWorkflow, recordOperationalFailure } = await import('./lib/workflow-state.mjs')
+const { readWorkflow, recordOperationalFailure, updateWorkflow } = await import('./lib/workflow-state.mjs')
+const { startRetryHold } = await import('./lib/spawn.mjs')
 const { historyPath } = await import('./lib/card-history.mjs')
 const { checkStalls } = await import('./lib/stall-watchdog.mjs')
 const history = (dir, id) => existsSync(historyPath(dir, id)) ? readFileSync(historyPath(dir, id), 'utf8').trim().split('\n').map(JSON.parse) : []
@@ -65,16 +66,26 @@ try {
     assert.ok(readCardPlanners(dir)[card.id].revokedPaneIds.includes('gone'))
     assert.equal(readCardPlanners(dir)[card.id].deliveryFailures, undefined, 'a confirmed delivery clears the count')
   }
-  // A second fresh Planner that never takes its prompt goes to Owner, never loops.
+  // A second fresh Planner that never takes its prompt backs off instead of looping, and
+  // reaches Owner only after the 3-hour transient budget (I520: a 46 s network blip).
   {
     const { dir, log, run } = fixture('looping')
     const card = createCard(dir, { title: 'Looping', brief: 'Plan it' })
     saveCardPlanners(dir, { [card.id]: { assignmentId: 'a1', lifecycle: 'active', paneId: 'dead', submitted: true, deliveryFailures: 1, revokedPaneIds: [] } })
     saveDelivery('looping', 'dead', { text: 'x', key: 'k', status: 'uncertain' })
-    assert.equal(await run(Date.now()), null)
+    const now = Date.now()
+    assert.equal(await run(now), null)
     assert.equal(log.starts, 0)
-    assert.equal(findCard(dir, card.id).column, 'owner')
-    assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /never accepted their prompt/)
+    assert.equal(findCard(dir, card.id).column, 'planning', 'a quick second failure waits, not Owner')
+    assert.match(startRetryHold(readWorkflow(dir)[card.id], 'planner', now + 1000), /retrying at/)
+    assert.equal(await run(now + 30000), null)
+    assert.equal(log.starts, 0, 'no launch inside the backoff')
+    updateWorkflow(dir, card.id, { startFailure: { ...readWorkflow(dir)[card.id].startFailure, since: now - 4 * 3600000, nextAt: 0 } })
+    saveCardPlanners(dir, { [card.id]: { ...readCardPlanners(dir)[card.id], lifecycle: 'active', paneId: 'dead2', submitted: true, deliveryFailures: 2 } })
+    saveDelivery('looping', 'dead2', { text: 'x', key: 'k', status: 'uncertain' })
+    await run(now + 60000)
+    assert.equal(findCard(dir, card.id).column, 'owner', 'after 3 hours of failed starts it asks the operator')
+    assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /kept failing to start for 3 hours/)
   }
 
   // 5. Blocked-by prerequisites unfinished (Tradeflow TF44): wait, no Planner, no loop.

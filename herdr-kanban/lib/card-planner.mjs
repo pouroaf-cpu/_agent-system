@@ -280,11 +280,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         }
         owner.deliveryFailures = (owner.deliveryFailures || 0) + 1
         save(tasksDir, owners)
-        // Two fresh Planners in a row never took their prompt (e.g. the agent exits at
-        // start): another launch would loop, so ask the operator once.
+        // Two fresh Planners in a row never took their prompt: back off (1, 5, 15, 60 min) and
+        // ask the operator only after 3 hours. I520 sat 20 h in Owner after two failures 46 s
+        // apart during a network blip (2026-10-01).
         if (owner.deliveryFailures >= 2) {
-          const moved = moveCard(tasksDir, card.id, 'owner')
-          writeCurrentFeedback(tasksDir, moved, 'Needs you', `Two Planner sessions in a row for ${card.id} never accepted their prompt (last: ${owner.paneId}, agent ${deliveryAgent ? deliveryAgent.agent_status : 'not running'}). The agent may be exiting at start in this project; check that pane's output. Drag the card back to Planning to try again.`)
+          recordStartFailure(tasksDir, card.id, 'planner', `Planner prompt was never submitted (last: ${owner.paneId}, agent ${deliveryAgent ? deliveryAgent.agent_status : 'not running'})`, now)
           continue
         }
       }
