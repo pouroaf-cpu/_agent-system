@@ -166,3 +166,14 @@ test('a plain Pause keeps an active release marker; Start clears it', t => {
   setProjectPaused('Proof', false, config)
   assert.equal(controlState('Proof', config).release, undefined)
 })
+
+test('a release ending during an operator hold (agent cap 0) leaves the hold on', t => {
+  const root = mkdtempSync(join(tmpdir(), 'release-hold-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const config = join(root, 'board.config.json')
+  writeFileSync(config, JSON.stringify({ projects: ['Proof'], maxConcurrentAgents: 0, resumeMaxConcurrentAgents: 2 }))
+  setProjectPaused('Proof', true, config, { release: { startedAt: 'then' } })
+  setProjectPaused('Proof', false, config, {}, { liftHold: false })
+  assert.equal(JSON.parse(readFileSync(config, 'utf8')).maxConcurrentAgents, 0)
+  assert.equal(controlState('Proof', config).paused, true)
+})

@@ -25,7 +25,9 @@ export function assertPromptAllowed(project, boundary) {
   if (controlState(project).paused) throw Object.assign(new Error(`Project ${project} is paused; assignment retained pending Start`), { paused: true, preservePane: true })
 }
 // `extra` rides on the control (a release marker); a plain Pause keeps an active release, Start ends it.
-export function setProjectPaused(project, paused, path = configPath(), extra = {}) {
+// A release's finish/abort passes liftHold false: it must not undo the operator's agent cap of 0
+// (2026-10-01: an Injectbuddy release abort restarted 4 agents during a hold).
+export function setProjectPaused(project, paused, path = configPath(), extra = {}, { liftHold = true } = {}) {
   const config = JSON.parse(readFileSync(path, 'utf8'))
   if (!config.projects.includes(project) || typeof paused !== 'boolean') throw new Error('Known project and boolean paused required')
   stopCardRun(project, null, paused ? 'Paused by operator' : 'Project control changed; explicit authorization cancelled')
@@ -33,7 +35,7 @@ export function setProjectPaused(project, paused, path = configPath(), extra = {
   // Migrating the old global zero-slot stop must not resume other projects.
   if (config.maxConcurrentAgents === 0) {
     for (const name of config.projects) config.projectControls[name] = { ...config.projectControls[name], paused: true }
-    if (!paused) config.maxConcurrentAgents = config.resumeMaxConcurrentAgents || 10
+    if (!paused && liftHold) config.maxConcurrentAgents = config.resumeMaxConcurrentAgents || 10
   }
   const release = paused ? config.projectControls[project]?.release : undefined
   config.projectControls[project] = { paused, changedAt: new Date().toISOString(), ...(release && { release }), ...extra }

@@ -926,7 +926,7 @@ const handleRequest = async (req, res) => {
         const settings = projectSettingsOf(p)
         integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch })
       }
-      Object.assign(config, setProjectPaused(p, false, CONFIG_PATH))
+      Object.assign(config, setProjectPaused(p, false, CONFIG_PATH, {}, { liftHold: false }))
       broadcastBoard(p)
       return json(res, 200, { ok: true, ...(integration && { integration }), control: controlState(p, CONFIG_PATH) })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }

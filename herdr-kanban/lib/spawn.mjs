@@ -8,7 +8,7 @@ import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './card
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
 import { recordUsageFinish } from './request-usage.mjs'
 import { cleanupPreparedWorktree, prepareCardWorktree } from './worktrees.mjs'
-import { assertPromptAllowed, controlState } from './project-control.mjs'
+import { assertPromptAllowed } from './project-control.mjs'
 import { assertCardRunSelection, cardRunContext, bindCardRunAssignment } from './card-run.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries, promptPath } from './delivery-state.mjs'
@@ -168,8 +168,8 @@ export async function deliver(paneId, fullText, session, builderGuard = null, { 
 export async function resumeDeliveries(session) {
   // Paused deliveries wait for Start. Throwing here aborted every poll before integration, so a
   // release drain never integrated its finished card (Injectbuddy I553, 2026-10-01).
-  if (controlState(session).paused) return
   for (const pending of pendingDeliveries(session)) {
+    try { assertPromptAllowed(session) } catch (err) { if (err.paused) return; throw err }
     const pairs = text => [...String(text).matchAll(/((?:[A-Za-z]:[\\/]|\/)[^()\r\n]*?\.md) \(revision ([a-f0-9]{64})\)/g)]
     // One level down too: the typed pointer names the prompt file, which names the briefs.
     const briefs = pairs(pending.text).flatMap(pair => { try { return [pair, ...pairs(readFileSync(pair[1], 'utf8'))] } catch { return [pair] } })
