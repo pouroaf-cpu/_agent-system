@@ -30,7 +30,9 @@ const inboxLines = () => { try { return readFileSync(INBOX, 'utf8').split('\n').
 const stuck = async () => {
   try {
     const { projects } = await (await fetch(BOARD, { signal: AbortSignal.timeout(30000) })).json()
-    return Object.fromEntries(projects.map(p => [p.project, p.stuck || 0]))
+    // An operator hold (agent cap 0, or a paused project) leaves cards waiting on purpose: not a stall to wake for.
+    const held = JSON.parse(readFileSync(new URL('../board.config.json', import.meta.url), 'utf8')).maxConcurrentAgents === 0
+    return Object.fromEntries(projects.map(p => [p.project, held || p.paused ? 0 : p.stuck || 0]))
   } catch { return null } // board down: the watchdog writes that to the inbox
 }
 
