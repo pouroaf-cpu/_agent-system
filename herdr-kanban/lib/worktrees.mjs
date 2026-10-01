@@ -206,7 +206,14 @@ const LOCKFILES = ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.
 const sameText = (a, b) => existsSync(a) === existsSync(b) && (!existsSync(a) || readFileSync(a, 'utf8').replaceAll('\r\n', '\n') === readFileSync(b, 'utf8').replaceAll('\r\n', '\n'))
 
 function prepareDependencies(workspacePath, source) {
-  if (!existsSync(join(workspacePath, 'package.json'))) return
+  if (!existsSync(join(workspacePath, 'package.json'))) {
+    // Workspace `.` over package subfolders (Tradeflow tradesflow-website, TF109-TF118 2026-10-01):
+    // link each top-level folder that integration has installed, or Builders find no node_modules.
+    for (const d of readdirSync(workspacePath, { withFileTypes: true })) {
+      if (d.isDirectory() && d.name !== 'node_modules' && existsSync(join(workspacePath, d.name, 'package.json')) && existsSync(join(source, d.name, 'node_modules'))) prepareDependencies(join(workspacePath, d.name), join(source, d.name))
+    }
+    return
+  }
   const manifest = JSON.parse(readFileSync(join(workspacePath, 'package.json'), 'utf8'))
   const requireInstalled = (root) => {
     const missing = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).filter(name => !existsSync(join(root, 'node_modules', name, 'package.json')))
