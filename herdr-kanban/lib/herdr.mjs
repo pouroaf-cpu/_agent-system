@@ -394,8 +394,8 @@ const BOARD_MODELS = {
   r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   i: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-opus-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  b: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-sonnet-5', 'claude-haiku-4-5'],
+  p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+  b: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
 }
 
 export function approvedManagedModel(name) {
