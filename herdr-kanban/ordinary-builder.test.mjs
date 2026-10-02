@@ -17,6 +17,7 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
     agentPrompt: async (pane, text) => { calls.push(['prompt', text]); working = true },
     paneClose: async () => {}, agentWorkspaceOr: async p => p, waitForPrompt: async () => {},
     paneRead: async () => '', paneSendKeys: async () => {}, agentList: async () => [agent()],
+    beginSpawn: () => {}, endSpawn: () => {},
   } })
   mock.module('./lib/worktrees.mjs', { namedExports: {
     prepareCardWorktree: () => { calls.push(['prepare']); return { workspacePath: root } }, cleanupPreparedWorktree: () => {},

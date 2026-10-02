@@ -36,7 +36,7 @@ const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard } = await import('./lib/cards.mjs')
-const { agentList, agentsForProject, isRunning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { agentList, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -520,13 +520,14 @@ async function pollProject(project) {
     // Only herdr knows a pane died; drop bindings it no longer lists, then
     // deterministically recover its worktree instead of leaving Working stuck.
     const beforeReap = readBindings(tasksDir)
-    const reaped = Object.entries(beforeReap).filter(([, binding]) => !agents.some(agent => agent.pane_id === binding.pane_id) && !(binding.spawning && Date.now() - Date.parse(binding.started) < 300000)).map(([id]) => id)
+    const starting = binding => isSpawning(binding.pane_id) || (binding.spawning && Date.now() - Date.parse(binding.started) < 300000)
+    const reaped = Object.entries(beforeReap).filter(([, binding]) => !agents.some(agent => agent.pane_id === binding.pane_id) && !starting(binding)).map(([id]) => id)
     const staleFinished = []
     const liveByPane = new Map(agents.map((agent) => [agent.pane_id, agent]))
     for (const [id, binding] of Object.entries(beforeReap)) {
       const agent = liveByPane.get(binding.pane_id)
       const key = `${project}:${id}`
-      if (!agent || !['done', 'idle'].includes(agent.agent_status)) {
+      if (starting(binding) || !agent || !['done', 'idle'].includes(agent.agent_status)) {
         finishedBindingSince.delete(key)
         continue
       }
@@ -571,7 +572,7 @@ async function pollProject(project) {
           session: sessionOf(project),
         })
         // Requeued (usage limit or a prompt that never landed): its idle pane is of no further use.
-        if (routed.column === 'queue' && agent) await paneClose(agent.pane_id, sessionOf(project)).catch(() => {})
+        if (routed.column === 'queue' && beforeReap[id]?.pane_id) await paneClose(beforeReap[id].pane_id, sessionOf(project)).catch(() => {})
       } catch (err) {
         if (!ambiguousHold(project, err)) activity(project, id, 'block', `recovery needs attention: ${err.message}`, 'error')
       }

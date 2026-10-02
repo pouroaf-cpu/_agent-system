@@ -21,6 +21,7 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
     agentPrompt: async (pane, text) => { calls.push(['prompt', pane, text]); for (const a of agents) if (a.pane_id === pane) a.agent_status = 'working' },
     paneClose: async () => {}, agentWorkspaceOr: async p => p, waitForPrompt: async () => {},
     paneRead: async () => '', paneSendKeys: async () => {}, agentList: async () => agents,
+    beginSpawn: () => {}, endSpawn: () => {},
   } })
   mock.module('./lib/worktrees.mjs', { namedExports: {
     prepareCardWorktree: () => ({ git: true, workspacePath: join(root, 'wt'), created: false, entry: { worktreePath: join(root, 'wt'), workspacePath: join(root, 'wt') } }),

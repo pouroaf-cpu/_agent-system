@@ -38,6 +38,8 @@ import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, f
 export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', boardRoot, engine, model, session, io = { readDelivery, saveDelivery }, now = Date.now() }) {
   const card = findCard(tasksDir, cardId)
   if (card.column !== 'working') return card
+  const binding = readBindings(tasksDir)[card.id]
+  if (binding?.pane_id && isSpawning(binding.pane_id)) return card
   // The engine (or just its model) ran out of usage: block it board-wide and wait in Queue,
   // where a fresh Builder continues in the same worktree once it resets. Not a failed build.
   const limit = boardRoot && usageLimit(evidence, now)
@@ -52,6 +54,14 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   // Builder, not a failed build (Tradeflow T-36; I157, TF50: machine load, not a strike).
   const paneId = readBindings(tasksDir)[card.id]?.pane_id || readWorkflow(tasksDir)[card.id]?.builder?.pane_id
   const delivery = paneId && io.readDelivery(session, paneId)
+  // I653: board restart lost the async launch, leaving a shell, not a Builder.
+  if (binding?.spawning && !delivery && /is missing/.test(reason)) {
+    unbind(tasksDir, card.id)
+    const moved = moveCard(tasksDir, card.id, 'queue')
+    appendHistory(tasksDir, card.id, { event: 'builder-start-interrupted', paneId, reason })
+    recordStartFailure(tasksDir, card.id, 'builder', 'Builder startup interrupted before prompt delivery')
+    return moved
+  }
   if (delivery?.status === 'uncertain' || unsubmittedDelivery(evidence)) {
     if (delivery) io.saveDelivery(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain or unsubmitted delivery resolved as failed; a fresh Builder takes over' })
     unbind(tasksDir, card.id)

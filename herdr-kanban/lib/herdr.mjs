@@ -503,7 +503,21 @@ export async function agentStart({ name, paneId, model, engine, kind, workspaceP
   }
 }
 
-export async function agentPrompt(target, text, { wait = false, timeoutMs = 20000, session } = {}) {
+// Codex's title is idle before its composer/MCP startup is ready; agent start
+// returning (and agent_status=idle) is not permission to type into that screen.
+// ponytail: UI text is the readiness signal; use a HERDR readiness API when exposed.
+export async function waitForAgentPrompt(paneId, { timeoutMs = 240000, everyMs = 400, session, read = paneRead } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    assertPromptAllowed(session)
+    const screen = String(await read(paneId, session).catch(() => ''))
+    if (/^\s*›/m.test(screen) && !/Starting MCP (?:servers|tools)/i.test(screen)) return
+    await sleep(everyMs)
+  }
+  throw Object.assign(new Error(`Codex input not ready in ${paneId}; startup pane retained`), { preservePane: true, notReady: true })
+}
+
+export async function agentPrompt(target, text, { wait = false, timeoutMs = 20000, session, engine } = {}) {
   assertPromptAllowed(session)
   const args = ['agent', 'prompt', target, text]
   // --wait makes herdr confirm the agent actually changed state after submission.
@@ -511,7 +525,10 @@ export async function agentPrompt(target, text, { wait = false, timeoutMs = 2000
   // identical to success.
   if (wait) args.push('--wait', '--until', 'working', '--timeout', String(timeoutMs))
   // Still idle until the prompt is submitted, so the pane needs the same cover.
-  return hold(target, () => herdr(args, { timeout: timeoutMs + 10000, session }))
+  return hold(target, async () => {
+    if ((typeof engine === 'string' ? engine : engine?.kind) === 'codex') await waitForAgentPrompt(target, { session })
+    return herdr(args, { timeout: timeoutMs + 10000, session })
+  })
 }
 
 // `agent start` requires the pane to already be at an interactive shell prompt.

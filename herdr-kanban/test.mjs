@@ -1655,9 +1655,9 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
     `state.events.push(['tab create', pane]);\n` +
     `save();\n` +
     `console.log(JSON.stringify({ result: { root_pane: { pane_id: pane, tab_id: tab }, tab: { tab_id: tab } } }));\n`)
-  writeFileSync(join(root, 'pane'),
+  writeFileSync(join(root, 'pane'), stateStub +
     `const args = process.argv.slice(2);\n` +
-    `if (args[0] === 'read') console.log(JSON.stringify({ result: { output: 'PS test>' } }));\n` +
+    `if (args[0] === 'read') console.log(JSON.stringify({ result: { output: state.agents.some(a => a.pane_id === args[1]) ? '› Ask Codex to do anything' : 'PS test>' } }));\n` +
     `else console.log(JSON.stringify({ result: {} }));\n`)
   writeFileSync(join(root, 'log'), `console.log(JSON.stringify({ result: {} }));\n`)
 

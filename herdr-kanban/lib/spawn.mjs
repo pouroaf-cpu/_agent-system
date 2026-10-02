@@ -1,7 +1,7 @@
 // Spawn a herdr agent for one card: new tab -> agent start -> prompt.
 // A half-spawned tab is worse than no tab, so any failure closes the pane it made.
 
-import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList } from './herdr.mjs'
+import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
 import { workerPrompt, paneLabel, agentName, isCodex } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
@@ -52,21 +52,27 @@ export function confirmLateDeliveries({ tasksDir, session, agents }) {
   return cleared
 }
 
-export async function deliverWith({
-  paneId, text, session, prompt = agentPrompt, read = paneRead, sendKeys = paneSendKeys, list = agentList, confirmMs = 10000,
+export async function deliverWith(options) {
+  beginSpawn(options.paneId)
+  try { return await submitWith(options) } finally { endSpawn(options.paneId) }
+}
+
+async function submitWith({
+  paneId, text, session, engine, prompt = agentPrompt, read = paneRead, sendKeys = paneSendKeys, list = agentList, confirmMs = isCodex(engine) ? 30000 : 10000,
 }) {
   if (/\n/.test(text)) throw new Error('prompt contains a newline; it would submit early')
   try {
-    await prompt(paneId, text, { wait: true, timeoutMs: 20000, session })
+    await prompt(paneId, text, { wait: true, timeoutMs: 20000, session, engine })
     if (!(await list(session)).some(a => a.pane_id === paneId && a.agent_status === 'working')) throw new Error('Transport succeeded without confirmed working state')
     // Codex can flash `working` while it takes the paste and then sit idle with the
     // prompt still on the input line (Injectbuddy I149): that is not a delivery.
     if (stagedInput(await read(paneId, session).catch(() => ''), text)) throw Object.assign(new Error('prompt still on the input line after a brief working state'), { stillStaged: true })
   } catch (first) {
-    if (first.paused) throw first
+    if (first.paused || first.notReady) throw first
     // herdr's own stall check gives up after 5s, but Codex can take longer to start
     // working; one immediate look marked real deliveries unconfirmed (Injectbuddy I157).
-    if (!first.stillStaged && await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs })) return
+    if (!first.stillStaged && await waitPaneWorking(paneId, session, { list, timeoutMs: confirmMs }) &&
+      !stagedInput(await read(paneId, session).catch(() => ''), text)) return
     if (stagedPrompt(await read(paneId, session).catch(() => ''), text)) {
       const result = await submitStaged(paneId, text, session, { read, sendKeys, list, confirmMs })
       if (result === 'working') return
@@ -105,7 +111,7 @@ const INPUT = /^[\s│|]*[›❯]/
 function inputText(lines) {
   const at = lines.findLastIndex(line => INPUT.test(line))
   if (at < 0) return null
-  const strip = line => line.replace(/^[\s│|]*[›❯]?/, '').replace(/[\s│|]+$/, '')
+  const strip = line => line.replace(/^[\s│|]*[›❯]?[⠁⠂⠄⠈⠐⠠⡀⢀]?/, '').replace(/[\s│|]+$/, '')
   const wrapped = []
   for (const line of lines.slice(at + 1)) {
     if (!/^[\s│|]/.test(line) || !strip(line) || /^[─━╭╮╰╯]/.test(strip(line))) break
@@ -157,7 +163,7 @@ export async function deliver(paneId, fullText, session, builderGuard = null, { 
       assertGuardActive(builderGuard, agent?.agent_session)
     }
     saveDelivery(session, paneId, { text, key, status: 'uncertain', ...(builderGuard ? { builderGuard } : {}), ...(runId ? { runId } : {}) })
-    await deliverWith({ paneId, text, session })
+    await deliverWith({ paneId, text, session, engine })
     saveDelivery(session, paneId, { text, key, status: 'confirmed', ...(runId ? { runId } : {}) })
   } catch (err) {
     if (err.paused) saveDelivery(session, paneId, { text, key, status: runId ? 'cancelled' : 'paused', staged: !!err.staged, ...(runId ? { runId } : {}) })
