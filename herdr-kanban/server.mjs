@@ -20,7 +20,7 @@ import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-hand
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
-import { TEST_RUNNERS, readTestRuns, startTestRun } from './lib/test-runs.mjs'
+import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -460,6 +460,16 @@ async function pollProject(project) {
   projectPolls.add(project)
   try {
     const tasksDir = tasksDirOf(project)
+    if (TEST_RUNNERS[project] && !readTestRuns(tasksDir).running && !busyRequest(tasksDir)) {
+      const request = dueRequest(tasksDir)
+      if (request) {
+        const file = join(tasksDir, 'test-lab', 'requests', request.id + '.json')
+        const child = spawn(process.execPath, [join(HERE, 'scripts/test-request.mjs'), file], { cwd: HERE, detached: true, stdio: 'ignore', windowsHide: true })
+        writeFileSync(file, JSON.stringify({ ...request, state: 'writing', pid: child.pid }))
+        child.on('error', err => { request.state = 'failed'; request.error = err.message; writeFileSync(file, JSON.stringify(request)) })
+        child.unref()
+      }
+    }
     const gitSettings = projectSettingsOf(project)
     if (archiveNoReview(project, tasksDir)) broadcastBoard(project)
     const { agents, herdrUp } = await pollAgents(project)
@@ -841,7 +851,24 @@ const handleRequest = async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/tests') {
     if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
-    return json(res, 200, { ok: true, project, runner: Boolean(TEST_RUNNERS[project]), ...readTestRuns(tasksDirOf(project)) })
+    return json(res, 200, { ok: true, project, runner: Boolean(TEST_RUNNERS[project]), ...readTestRuns(tasksDirOf(project)), requests: listRequests(tasksDirOf(project)).slice(0, 20) })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/tests/routes') {
+    try {
+      if (!config.projects.includes(project) || !TEST_RUNNERS[project]) throw new Error('No e2e audit writer for this project')
+      return json(res, 200, { routes: staticAppRoutes(join(integrationPathOf(project), 'app')), types: Object.keys(TEST_TYPES) })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/tests/request') {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try {
+      const input = JSON.parse(body)
+      if (!config.projects.includes(input.project) || !TEST_RUNNERS[input.project]) throw new Error('No e2e audit writer for this project')
+      return json(res, 200, { ok: true, request: addRequest(tasksDirOf(input.project), input, join(integrationPathOf(input.project), 'app')) })
+    } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/tests/run') {

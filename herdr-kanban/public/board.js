@@ -577,6 +577,8 @@ const dependencyHover = createDependencyHover({
 let audits = { loading: true, error: '', items: [] };
 let tests = { runner: false, running: null, runs: [], error: '' };
 let testsPoll = null;
+let testRoutes = { routes: [], types: [], error: '' };
+let testDraft = null;
 
 
 
@@ -671,6 +673,13 @@ async function loadAudits() {
     if (!response.ok || !result.ok || result.project !== PROJECT) throw new Error(result.error || 'Could not load audits');
     audits = { loading: false, error: '', items: result.audits || [] };
   } catch (err) { audits = { loading: false, error: err.message, items: [] }; }
+  testDraft = null;
+  try {
+    const response = await fetch('/api/tests/routes?project=' + encodeURIComponent(PROJECT));
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not load pages');
+    testRoutes = { ...result, error: '' };
+  } catch (err) { testRoutes = { routes: [], types: [], error: err.message }; }
   await loadTests();
 }
 
@@ -679,10 +688,10 @@ async function loadTests() {
     const response = await fetch('/api/tests?project=' + encodeURIComponent(PROJECT));
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result.error || 'Could not load test runs');
-    tests = { runner: result.runner, running: result.running, runs: result.runs || [], error: '' };
+    tests = { runner: result.runner, running: result.running, runs: result.runs || [], requests: result.requests || [], error: '' };
   } catch (err) { tests = { runner: false, running: null, runs: [], error: err.message }; }
   clearTimeout(testsPoll);
-  if (tests.running && view === 'audits') testsPoll = setTimeout(loadTests, 30000); // until the run finishes
+  if (view === 'audits' && (tests.running || tests.requests?.some(r => ['scheduled', 'writing', 'running'].includes(r.state)))) testsPoll = setTimeout(loadTests, 30000);
   if (view === 'audits') renderScreen();
 }
 
@@ -721,10 +730,73 @@ function renderTestRuns() {
     }
   }
   const run = document.createElement('button'); run.type = 'button'; run.className = 'btn audit-open';
-  run.textContent = tests.running ? 'Run in progress' : 'Run tests now'; run.disabled = Boolean(tests.running);
+  const busy = tests.running || tests.requests?.some(r => ['writing', 'running'].includes(r.state));
+  run.textContent = busy ? 'Run in progress' : 'Run tests now'; run.disabled = Boolean(busy);
   run.addEventListener('click', () => runTestsNow(run));
   card.append(run);
   for (const old of tests.runs.slice(1, 6)) line(when(old.finished) + ': ' + (old.error ? 'did not finish' : old.passed + ' passed, ' + old.failed + ' failed'));
+  el.screenBody.append(card);
+  renderTestRequest();
+}
+
+function renderTestRequest() {
+  const card = document.createElement('article'); card.className = 'audit-card test-card';
+  const title = document.createElement('h2'); title.textContent = 'Request e2e audit'; card.append(title);
+  if (testRoutes.error) card.append(note(testRoutes.error));
+  else {
+    if (!testDraft) {
+      const now = new Date();
+      testDraft = { type: testRoutes.types[0], pages: [], at: new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16) };
+    }
+    const form = document.createElement('form'); form.className = 'test-request-form';
+    const typeLabel = document.createElement('label'); typeLabel.textContent = 'Audit type';
+    const type = document.createElement('select');
+    for (const name of testRoutes.types) { const option = document.createElement('option'); option.value = name; option.textContent = name; type.append(option); }
+    type.value = testDraft.type; type.addEventListener('change', () => { testDraft.type = type.value; });
+    typeLabel.append(type); form.append(typeLabel);
+    const pages = document.createElement('fieldset');
+    const legend = document.createElement('legend'); legend.textContent = 'Pages'; pages.append(legend);
+    const boxes = [];
+    const checkbox = (name, checked, change) => {
+      const label = document.createElement('label'), input = document.createElement('input');
+      input.type = 'checkbox'; input.checked = checked; input.addEventListener('change', change);
+      label.append(input, document.createTextNode(name)); pages.append(label); return input;
+    };
+    const all = checkbox('All pages', testDraft.pages.length === testRoutes.routes.length, () => {
+      testDraft.pages = all.checked ? [...testRoutes.routes] : [];
+      for (const box of boxes) box.checked = all.checked;
+    });
+    for (const route of testRoutes.routes) {
+      const box = checkbox(route, testDraft.pages.includes(route), () => {
+        testDraft.pages = boxes.filter(b => b.checked).map(b => b.value);
+        all.checked = testDraft.pages.length === testRoutes.routes.length;
+      });
+      box.value = route; boxes.push(box);
+    }
+    form.append(pages);
+    const timeLabel = document.createElement('label'); timeLabel.textContent = 'Date and time';
+    const time = document.createElement('input'); time.type = 'datetime-local'; time.required = true; time.value = testDraft.at;
+    time.addEventListener('input', () => { testDraft.at = time.value; }); timeLabel.append(time); form.append(timeLabel);
+    const button = document.createElement('button'); button.type = 'submit'; button.className = 'btn audit-open'; button.textContent = 'Request'; form.append(button);
+    const error = document.createElement('p'); error.setAttribute('role', 'alert'); form.append(error);
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); button.disabled = true; error.textContent = '';
+      try {
+        if (!testDraft.pages.length) throw new Error('Select at least one page');
+        const response = await fetch('/api/tests/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, ...testDraft, at: new Date(testDraft.at).toISOString() }) });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Could not request audit');
+        await loadTests();
+      } catch (err) { error.textContent = err.message; button.disabled = false; }
+    });
+    card.append(form);
+  }
+  for (const request of tests.requests || []) {
+    const line = document.createElement('p');
+    line.textContent = request.type + ' · ' + request.pages.length + ' pages · ' + new Date(request.at).toLocaleString() + ' · ' + request.state;
+    card.append(line);
+    if (request.error) card.append(note(request.error));
+  }
   el.screenBody.append(card);
 }
 

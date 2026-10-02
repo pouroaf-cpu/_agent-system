@@ -65,6 +65,10 @@ try {
   const line = `${new Date().toISOString()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   if (stats.unexpected) appendFileSync(INBOX, `- FOUND Injectbuddy nightly ${line}\n`)
+  if (run.status !== 0) {
+    console.error(parsed.errors?.map(e => e.message).join('\n') || `${stats.unexpected} Playwright tests failed; report: ${report}`)
+    process.exitCode = 1
+  }
 } catch (err) {
   record({ error: err.message })
   console.error(err.message)

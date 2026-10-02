@@ -1,12 +1,50 @@
 // Test runs for the Audits page (operator, 2026-10-02): when each project's nightly e2e last ran,
 // what failed, and a Run now button. The runner script writes TASKS/e2e/running.json while it
 // runs and appends one JSON line per finished run to TASKS/e2e/runs.jsonl.
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { join, relative } from 'node:path'
 
 // ponytail: one runner per project, hard-coded; move to board.config.json when a second project gets one.
 export const TEST_RUNNERS = { Injectbuddy: 'scripts/e2e-nightly.mjs' }
+export const TEST_INTEGRATION = 'C:/Users/PFrew/KanbanProjects/.worktrees/Injectbuddy/integration'
+export const TEST_TYPES = {
+  'console-errors': 'no console errors, uncaught page errors or failed responses on each page; collect console messages of type error, pageerror events, and every response with status >= 400 as "<status> <url>", show them all on failure',
+  'phone-layout': 'at a 390x844 viewport, no horizontal scroll (document.scrollingElement.scrollWidth <= innerWidth) and no element wider than the viewport',
+  'broken-links': 'every same-origin <a href> on each page returns status < 400; resolve hrefs against the page URL, dedupe hrefs, and use page.request.get',
+  axe: 'no serious or critical axe violations, using @axe-core/playwright',
+}
+
+export function listRequests(tasksDir) {
+  const dir = join(tasksDir, 'test-lab', 'requests')
+  let files
+  try { files = readdirSync(dir) } catch (err) { if (err.code === 'ENOENT') return []; throw err }
+  return files.filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')))
+    // Its process died (crash, reboot): report it failed so nothing waits on it.
+    .map(r => ['writing', 'running'].includes(r.state) && r.pid && !alive(r.pid) ? { ...r, state: 'failed', error: r.error || 'the run stopped before finishing' } : r)
+    .sort((a, b) => b.created.localeCompare(a.created))
+}
+
+export function addRequest(tasksDir, { type, pages, at }, appDir = join(TEST_INTEGRATION, 'app')) {
+  if (!Object.hasOwn(TEST_TYPES, type)) throw new Error('Unknown e2e audit type')
+  if (!Array.isArray(pages) || !pages.length) throw new Error('Select at least one page')
+  const routes = staticAppRoutes(appDir)
+  if (pages.some(p => !routes.includes(p))) throw new Error('Unknown page')
+  if (typeof at !== 'string' || !Number.isFinite(Date.parse(at))) throw new Error('Invalid date/time')
+  const request = { id: randomUUID(), type, pages: [...new Set(pages)], at: new Date(at).toISOString(), state: 'scheduled', created: new Date().toISOString() }
+  const dir = join(tasksDir, 'test-lab', 'requests')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, request.id + '.json'), JSON.stringify(request))
+  return request
+}
+
+export function dueRequest(tasksDir, now = Date.now()) {
+  return listRequests(tasksDir).filter(r => r.state === 'scheduled' && Date.parse(r.at) <= new Date(now).getTime())
+    .sort((a, b) => a.at.localeCompare(b.at) || a.created.localeCompare(b.created))[0] ?? null
+}
+
+export const busyRequest = tasksDir => listRequests(tasksDir).find(r => ['writing', 'running'].includes(r.state)) ?? null
 
 const alive = pid => { try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' } }
 
@@ -26,7 +64,7 @@ export function readTestRuns(tasksDir, { limit = 20 } = {}) {
 export function startTestRun({ project, tasksDir, boardDir }) {
   const script = TEST_RUNNERS[project]
   if (!script) throw new Error(`${project} has no test runner`)
-  if (readTestRuns(tasksDir).running) throw new Error('A test run is already going')
+  if (readTestRuns(tasksDir).running || busyRequest(tasksDir)) throw new Error('A test run is already going')
   const child = spawn(process.execPath, [join(boardDir, script)], { cwd: boardDir, detached: true, stdio: 'ignore', windowsHide: true })
   child.unref()
   return { pid: child.pid }

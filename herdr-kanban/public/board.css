@@ -255,6 +255,12 @@ select {
 .audit-card .audit-status { color: var(--text); }
 .screen-section { margin: 8px 0 12px; font-size: 15px; }
 .test-card { max-width: 640px; margin-bottom: 24px; }
+.test-request-form { display: grid; gap: 12px; }
+.test-request-form > label { display: grid; gap: 4px; min-width: 0; }
+.test-request-form select, .test-request-form input[type="datetime-local"] { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; font: inherit; }
+.test-request-form fieldset { min-width: 0; margin: 0; }
+.test-request-form fieldset label { display: flex; align-items: center; gap: 8px; min-height: 36px; overflow-wrap: anywhere; }
+.test-card p { overflow-wrap: anywhere; }
 .test-card .test-pass { color: var(--ok); }
 .test-card .test-fail { color: var(--problem); }
 .test-failures { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
