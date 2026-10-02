@@ -33,6 +33,7 @@ async function fixture(t) {
   writeFileSync(join(root, 'watchdog-alert.ps1'), readFileSync(join(HERE, 'watchdog-alert.ps1'), 'utf8') + `
 function Send-Push { param([string]$Title, [string]$Message) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
 function Get-LanAddress { $env:TEST_LAN_ADDRESS }
+function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
 `)
   writeFileSync(join(root, 'board.config.json'), JSON.stringify({ port: server.address().port }))
   writeFileSync(join(root, 'kanban.ps1'), `Add-Content (Join-Path $PSScriptRoot 'kanban-calls.txt') 'kanban'`)

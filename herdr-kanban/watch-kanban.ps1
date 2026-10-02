@@ -36,9 +36,25 @@ try {
         if (-not $lan) {
             "$(Get-Date -Format o) LAN - no 192.168.1.x address; phone board unreachable" | Out-File -Append -Encoding utf8 $log
         } else {
-            Update-BoardOutage -Healthy $lanUp -StatePath (Join-Path $root '.watchdog-lan-outage') -Send {
+            # A slow HTTP request is not evidence that DHCP moved the listener.
+            # Only restart when the loopback board no longer owns the current LAN socket.
+            $lanBound = $false
+            if (-not $lanUp) {
+                $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+                $boardPids = @($listeners | Where-Object LocalAddress -eq '127.0.0.1' | Select-Object -ExpandProperty OwningProcess)
+                $lanBound = @($listeners | Where-Object {
+                    $_.LocalAddress -in $lan, '0.0.0.0', '::' -and $_.OwningProcess -in $boardPids
+                }).Count -gt 0
+            }
+            if (-not $lanUp -and $lanBound) {
+                "$(Get-Date -Format o) LAN - no HTTP answer on ${lan}:$port; board still owns listener; keeping server" | Out-File -Append -Encoding utf8 $log
+            }
+            Update-BoardOutage -Healthy ($lanUp -or $lanBound) -StatePath (Join-Path $root '.watchdog-lan-outage') -Send {
                 "$(Get-Date -Format o) LAN - no answer on ${lan}:$port; relaunching with -Lan" | Out-File -Append -Encoding utf8 $log
                 & (Join-Path $root 'restart-kanban.ps1') -Lan
+                Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+                Invoke-WebRequest "http://${lan}:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+                Update-BoardOutage -Healthy $true -StatePath (Join-Path $root '.watchdog-lan-outage') -Send { }
             }
         }
     }
