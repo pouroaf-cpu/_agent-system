@@ -525,10 +525,17 @@ export function hasBuilderPass(card) {
     const text = readFileSync(card.path, 'utf8')
     const result = ['Implementation', 'Evidence']
       .map((name) => text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\\s\\S]*?-->/g, '') ?? '')
-      .join('\n').replaceAll('**', '')
-    return /^Stage:\s*builder\s*$/mi.test(result) && /^Outcome:\s*PASS\s*$/mi.test(result)
+      .join('\n')
+    return builderPassIn(builderResult(result))
   } catch { return false }
 }
+
+// Builders also write "- Stage: builder, Outcome: PASS, Files: ..." on one line and
+// "Outcome: PASS: <note>"; read those the same (Injectbuddy I556 stalled on the format).
+export const BUILDER_FIELDS = ['Stage', 'Outcome', 'Files', 'Check', 'Result', 'Evidence', 'Blocker']
+export const builderResult = text => text.replaceAll('**', '').replace(/^[ \t]*[-*][ \t]+/gm, '')
+  .replace(new RegExp(`[,;][ \\t]*(?=(?:${BUILDER_FIELDS.join('|')}):)`, 'g'), '\n')
+export const builderPassIn = result => /^Stage:\s*builder\s*$/mi.test(result) && /^Outcome:\s*PASS(?:\s*$|\s*[:.;—–-]\s*\S)/mi.test(result)
 
 export function canArchive(card) {
   return (!card.cardOwned && !card.mission) || card.reviewPassed || !!card.audit || hasOperatorCompletion(card) ||

@@ -314,3 +314,16 @@ test('a pending delivery while paused waits quietly instead of aborting the poll
   await resumeDeliveries('proof')
   assert.equal(pendingDeliveries('proof').length, 1)
 })
+
+test('version-2 done reads one-line comma fields and "Outcome: PASS: note" the same (Injectbuddy I556)', t => {
+  const f = fixture(t)
+  const card = createCard(f.tasks, { title: 'comma result', brief: 'correct result' })
+  writeFileSync(card.path, `# ${card.id} — comma\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`)
+  moveCard(f.tasks, card.id, 'working')
+  const done = () => spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
+  const write = (impl, ev) => { const c = findCard(f.tasks, card.id); writeFileSync(c.path, readFileSync(c.path, 'utf8').replace(/Changed app\.mjs|- Stage:.*/, impl).replace(/node check\.mjs passed; evidence: check-output\.txt|Check: node check.*/, ev)) }
+  write('- Stage: builder, Outcome: FAIL, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: failed, Evidence: check-output.txt')
+  assert.match(done().stderr, /requires Stage: builder and Outcome: PASS/)
+  write('- Stage: builder, Outcome: PASS: fixed the toggle, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: 3 passed, Evidence: check-output.txt')
+  assert.equal(done().status, 0, done().stderr)
+})

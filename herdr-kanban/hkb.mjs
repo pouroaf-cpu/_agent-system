@@ -20,7 +20,7 @@
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, updateCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites } from './lib/cards.mjs'
+import { moveCard, columnByKey, findCard, updateCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
@@ -315,11 +315,11 @@ try {
       sections.push(content)
     }
     if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
-      const result = sections.join('\n').replaceAll('**', '')
-      for (const field of ['Stage', 'Outcome', 'Files', 'Check', 'Result', 'Evidence', 'Blocker']) {
+      const result = builderResult(sections.join('\n'))
+      for (const field of BUILDER_FIELDS) {
         if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) fail(`version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`)
       }
-      if (!/^Stage:\s*builder\s*$/mi.test(result) || !/^Outcome:\s*PASS\s*$/mi.test(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
+      if (!builderPassIn(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
     }
   }
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
