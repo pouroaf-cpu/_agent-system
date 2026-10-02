@@ -120,6 +120,9 @@ export function projectAgents(session, legacy, all, labels) {
 }
 
 export const sessionServerArgs = (session) => ['--session', session, 'server']
+// herdr's panes inherit its env: a server started from a Claude chat gave every agent pane
+// that chat's CLAUDE_CODE_HOST_SESSION_ID, so its state hooks treated agents as that chat (2026-10-02).
+export const cleanEnv = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([k]) => !/^CLAUDE/i.test(k)))
 
 const sessionStarts = new Map()
 const sessionBlocked = new Map()
@@ -142,7 +145,7 @@ async function ensureSessionReady(session) {
 
     let child
     try {
-      child = spawn(HERDR, sessionServerArgs(session), { detached: true, stdio: 'ignore', windowsHide: true })
+      child = spawn(HERDR, sessionServerArgs(session), { detached: true, stdio: 'ignore', windowsHide: true, env: cleanEnv() })
       const launchErr = await new Promise((resolve) => {
         child.once('error', resolve)
         child.once('spawn', () => resolve(null))
