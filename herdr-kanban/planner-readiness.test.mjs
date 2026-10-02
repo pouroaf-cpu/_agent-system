@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { test } from 'node:test'
 import { validatePlan } from './lib/cards.mjs'
 
 const realistic = `**Workflow version:** 2
@@ -30,6 +31,51 @@ Existing Node runtime; no additional access.
 `
 
 validatePlan(realistic)
+test('I556: plan checks cannot depend on a card lane path', async () => {
+  const paths = [
+    ...['pou', 'owner', 'planning', 'backlog', 'queue', 'working', 'issues', 'review', 'completed', 'archive'].map(lane => `TASKS/${lane}/I556-approved-job.md`),
+    'C:/Users/PFrew/KanbanProjects/Injectbuddy/TASKS/planning/I556-approved-job.md',
+    String.raw`C:\Users\PFrew\KanbanProjects\Injectbuddy\TASKS\working\I556-approved-job.md`,
+    './tasks/queue/T-148-check.md',
+    'TASKS/backlog/TF121-*.md',
+    'TASKS/planning/HK14.md',
+  ]
+  for (const path of paths) {
+    for (const heading of ['Implementation plan', 'Outcome checks', 'Prerequisites', 'Acceptance criteria']) {
+      const plan = realistic.replace(`## ${heading}\n`, `## ${heading}\nCheck: \`node inspect.mjs "${path}"\`\n`)
+      assert.throws(() => validatePlan(plan), /card files move between lanes.*lane-independent.*hkb show <id>.*card id/i, `${heading}: ${path}`)
+    }
+  }
+  for (const command of ['hkb show I556', 'node inspect.mjs --card I556', 'node TASKS/.evidence/I556/check.mjs', 'node TASKS/planning/README.md']) {
+    validatePlan(realistic.replace('Check: node --test test/keyboard.test.mjs', `Check: ${command}`))
+  }
+  validatePlan(realistic.replace('Deliver the agreed keyboard behavior.', 'Reported stale path: TASKS/planning/I556-approved-job.md.'))
+
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const { findCard } = await import('./lib/cards.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'plan-lane-')), tasks = join(root, 'TASKS')
+  try {
+    mkdirSync(join(tasks, 'planning'), { recursive: true })
+    const path = join(tasks, 'planning', 'I556-approved-job.md')
+    const plan = `# I556 — lane check\n**Workflow:** card-owned\n${realistic}`
+      .replaceAll('` —', '` (new) —')
+      .replace('Changes:', '**Callers checked:** none\n**Base check:** regression fails on base\nChanges:')
+    const move = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'I556', 'planned'], { encoding: 'utf8' })
+    writeFileSync(path, plan.replace('Check: node --test test/keyboard.test.mjs', `Check: node inspect.mjs "${path}"`))
+    const refused = move()
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /card files move between lanes.*hkb show <id>/i)
+    assert.equal(findCard(tasks, 'I556').column, 'planning')
+    writeFileSync(path, plan.replace('Check: node --test test/keyboard.test.mjs', 'Check: hkb show I556'))
+    const accepted = move()
+    assert.equal(accepted.status, 0, accepted.stderr)
+    assert.equal(findCard(tasks, 'I556').column, 'planned')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 // TF121: an escaped pipe inside a cell is still one cell; a short row names its AC.
 validatePlan(realistic.replace('handleKeyDown(event)', String.raw`handleKeyDown(event) for a \| b`))
 assert.throws(() => validatePlan(realistic.replace(' | remove the handler branch and the check fails', '')), /no 4-column row for AC1/)

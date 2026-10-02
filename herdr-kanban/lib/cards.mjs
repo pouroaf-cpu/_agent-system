@@ -35,6 +35,11 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   for (const name of ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']) {
     if (!section(name)) throw new Error(`Plan incomplete: fill ## ${name} before handoff; keep the template headings`)
   }
+  // I556: a check tied to Planning stops working as soon as the card moves.
+  const commands = ['Implementation plan', 'Outcome checks', 'Prerequisites', 'Acceptance criteria'].map(section).join('\n').replaceAll('\\', '/')
+  if (new RegExp(String.raw`\bTASKS/(?:${ALL.map(c => c.dir).join('|')})/${CARD_ID}(?:-[^/\s]+)?\.md\b`, 'i').test(commands)) {
+    throw new Error('Plan check failed: card files move between lanes. Use a lane-independent check such as hkb show <id> or the card id, instead of TASKS/<lane>/<ID>-*.md in check commands.')
+  }
   if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
     const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
     const checks = section('Outcome checks')
