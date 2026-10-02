@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { failedTests } from '../lib/test-runs.mjs'
+import { failedTests, staticAppRoutes } from '../lib/test-runs.mjs'
 
 const INTEG = 'C:/Users/PFrew/KanbanProjects/.worktrees/Injectbuddy/integration'
 const ENV = 'C:/Users/PFrew/Projects/Injectbuddy/.env.local'
@@ -46,6 +46,10 @@ try {
     if (!up) await new Promise(r => setTimeout(r, 3000))
   }
   if (!up) throw new Error(`dev server did not start: ${logTail()}`)
+  // Compile every page once, one at a time, so no spec's goto waits on a first compile.
+  for (const route of staticAppRoutes(join(dir, 'app'))) {
+    try { await fetch(base + route, { signal: AbortSignal.timeout(120000) }) } catch {}
+  }
   const report = join(OUT, `${stamp}.json`)
   const run = spawnSync(process.execPath, ['node_modules/@playwright/test/cli.js', 'test', '--reporter=json', `--workers=${workers}`, ...filters],
     { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, env: { ...process.env, E2E_BASE_URL: base } })

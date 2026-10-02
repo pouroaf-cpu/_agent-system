@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTestRuns, startTestRun, failedTests } from './lib/test-runs.mjs'
+import { readTestRuns, startTestRun, failedTests, staticAppRoutes } from './lib/test-runs.mjs'
 
 test('reads runs newest first, skips bad lines, drops a dead running marker', () => {
   const tasks = mkdtempSync(join(tmpdir(), 'test-runs-')), dir = join(tasks, 'e2e')
@@ -22,4 +22,11 @@ test('lists failed tests from a nested Playwright JSON report', () => {
   const report = { suites: [{ specs: [{ file: 'a.spec.ts', title: 'ok', tests: [{ status: 'expected' }] }],
     suites: [{ specs: [{ file: 'a.spec.ts', title: 'breaks', tests: [{ status: 'unexpected', projectName: 'phone' }, { status: 'flaky' }] }] }] }] }
   assert.deepEqual(failedTests(report), ['a.spec.ts › breaks [phone]'])
+})
+
+test('lists static app routes for warming, skipping dynamic and private folders', () => {
+  const app = mkdtempSync(join(tmpdir(), 'app-'))
+  for (const p of ['', 'calendar', '(marketing)/about', 'guides/[slug]', '_lib', 'api/x']) mkdirSync(join(app, p), { recursive: true })
+  for (const p of ['page.tsx', 'calendar/page.tsx', '(marketing)/about/page.tsx', 'guides/[slug]/page.tsx', '_lib/page.tsx', 'api/x/route.ts']) writeFileSync(join(app, p), '')
+  assert.deepEqual(staticAppRoutes(app), ['/', '/about', '/calendar'])
 })

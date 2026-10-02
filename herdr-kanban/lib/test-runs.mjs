@@ -1,9 +1,9 @@
 // Test runs for the Audits page (operator, 2026-10-02): when each project's nightly e2e last ran,
 // what failed, and a Run now button. The runner script writes TASKS/e2e/running.json while it
 // runs and appends one JSON line per finished run to TASKS/e2e/runs.jsonl.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 // ponytail: one runner per project, hard-coded; move to board.config.json when a second project gets one.
 export const TEST_RUNNERS = { Injectbuddy: 'scripts/e2e-nightly.mjs' }
@@ -41,4 +41,16 @@ export function failedTests(report) {
   }
   for (const suite of report.suites || []) walk(suite)
   return out
+}
+
+// Static Next app routes ("/", "/calendar", ...) from app/**/page.*, for warming the dev server:
+// a page's first compile can outlast Playwright's goto (ERR_ABORTED on /calendar, 2026-10-02).
+// Route groups "(x)" drop out of the URL; dynamic "[x]" and private "_x" folders are skipped.
+export function staticAppRoutes(appDir) {
+  return readdirSync(appDir, { recursive: true, withFileTypes: true })
+    .filter(d => d.isFile() && /^page\.[jt]sx?$/.test(d.name))
+    .map(d => relative(appDir, d.parentPath).split(/[\\/]/).filter(s => s && !/^\(.*\)$/.test(s)))
+    .filter(parts => !parts.some(s => s.includes('[') || s.startsWith('_')))
+    .map(parts => '/' + parts.join('/'))
+    .sort()
 }
