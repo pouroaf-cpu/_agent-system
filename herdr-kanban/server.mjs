@@ -7,6 +7,7 @@ import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
 import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
+import { plannersStarting } from './lib/planner-state.mjs'
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
@@ -356,7 +357,7 @@ function cardWaits(project, now = Date.now()) {
     // A Planner's `hkb wait`: the files or cards its plan needs that do not exist yet.
     const wait = card.column === 'planning' && workflow[card.id]?.waitFor, needs = wait ? [...wait.cards, ...wait.files] : []
     const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
-    const slotWait = !!full[card.column] && !(times[card.id]?.agentActive)
+    const slotWait = (!!full[card.column] || (card.column === 'planning' && plannersStarting(planners, now, card.id))) && !(times[card.id]?.agentActive)
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
     return { ...(slotWait && { slotWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,

@@ -114,3 +114,9 @@ export async function reconcilePlannerAssignment({ project, tasksDir, cardId, re
   appendHistory(tasksDir, cardId, { event: 'planner-reconciled', agent: 'board-maintenance', sourceHistoryId: history.id, recovery, reason, retiredPane: owner.paneId })
   return owner
 }
+// The Planner pass starts one card per poll, so a deep Planning lane drains at that pace with
+// slots to spare. While Planners keep starting, the rest are waiting their turn, not stuck
+// (Injectbuddy: 68 Planning cards read as 45 stuck and two went to Owner, 2026-10-02).
+// `except` leaves out the card's own Planner: one that started and died is not its turn.
+export const plannersStarting = (planners, now = Date.now(), except = null, withinMs = 15 * 60000) =>
+  Object.entries(planners).some(([id, p]) => id !== except && now - Date.parse(p?.createdAt) < withinMs)

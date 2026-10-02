@@ -9,6 +9,7 @@ import { basename, join, resolve } from 'node:path'
 import { readBoard, moveCard, columnByKey, waitingOnPrerequisites } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
+import { plannersStarting } from './planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneEnteredAt, lastBlockerLanded } from './card-history.mjs'
 import { readUsage } from './request-usage.mjs'
@@ -112,8 +113,8 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
     // A Planner's `hkb wait` for a file or card that does not exist yet.
     if (card.column === 'planning' && workflow[card.id]?.waitFor) return true
-    // Waiting for one of the capped Planner slots (card-planner maxPlanners).
-    if (card.column === 'planning' && plannerSlotsFree <= 0 && !agents.some(a => a.pane_id === planners[card.id]?.paneId)) return true
+    // Waiting for one of the capped Planner slots (card-planner maxPlanners), or its turn while Planners keep starting.
+    if (card.column === 'planning' && (plannerSlotsFree <= 0 || plannersStarting(planners, now, card.id)) && !agents.some(a => a.pane_id === planners[card.id]?.paneId)) return true
     // Legacy Completed cards with no board worktree wait for the operator's disposition by design.
     if (card.column === 'completed' && !registry[card.id]) return true
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational

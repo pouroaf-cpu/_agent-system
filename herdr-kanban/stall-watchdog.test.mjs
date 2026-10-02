@@ -241,3 +241,12 @@ test('time the board could not act is not a stall; the clock restarts when polli
   assert.equal(stall.action, 'moved to Owner', '20 minutes of healthy polling still escalates as before')
   assert.match(stall.reason, /no change for 20m/)
 })
+test('Planning cards wait their turn while the one-per-poll Planner pass keeps starting others (Injectbuddy, 2026-10-02)', t => {
+  const { tasks, put } = board(t)
+  put('planning', 'T-1'); put('planning', 'T-2')
+  const now = T + 70 * MIN // past the never-started grace of three windows
+  writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ 'T-2': { paneId: 'p2', createdAt: new Date(now - 5 * MIN).toISOString() } }))
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [{ pane_id: 'p2', agent_status: 'working' }], plannerSlotsFree: 3, now }).map(s => s.id), [], 'a Planner started 5 min ago: T-1 is queued')
+  // The card's own recent Planner, gone without a pane, is not its turn.
+  assert.deepEqual(checkStalls({ tasksDir: tasks, plannerSlotsFree: 3, now: now + 61 * MIN }).map(s => s.id).sort(), ['T-1', 'T-2'], 'no Planner started for an hour: both are stuck')
+})
