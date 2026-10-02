@@ -579,6 +579,7 @@ let tests = { runner: false, running: null, runs: [], error: '' };
 let testsPoll = null;
 let testRoutes = { routes: [], types: [], error: '' };
 let testDraft = null;
+let pageSearch = '';
 
 
 
@@ -688,7 +689,7 @@ async function loadTests() {
     const response = await fetch('/api/tests?project=' + encodeURIComponent(PROJECT));
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result.error || 'Could not load test runs');
-    tests = { runner: result.runner, running: result.running, runs: result.runs || [], requests: result.requests || [], error: '' };
+    tests = { runner: result.runner, running: result.running, runs: result.runs || [], requests: result.requests || [], pageHistory: result.pageHistory || [], types: result.types || [], error: '' };
   } catch (err) { tests = { runner: false, running: null, runs: [], error: err.message }; }
   clearTimeout(testsPoll);
   if (view === 'audits' && (tests.running || tests.requests?.some(r => ['scheduled', 'writing', 'running'].includes(r.state)))) testsPoll = setTimeout(loadTests, 30000);
@@ -737,6 +738,69 @@ function renderTestRuns() {
   for (const old of tests.runs.slice(1, 6)) line(when(old.finished) + ': ' + (old.error ? 'did not finish' : old.passed + ' passed, ' + old.failed + ' failed'));
   el.screenBody.append(card);
   renderTestRequest();
+  renderPageHistory();
+}
+
+function renderPageHistory() {
+  const card = document.createElement('article'); card.className = 'audit-card page-history';
+  const title = document.createElement('h2'); title.textContent = 'Page history'; card.append(title);
+  const label = document.createElement('label'); label.textContent = 'Search pages';
+  const search = document.createElement('input'); search.type = 'search'; search.value = pageSearch;
+  label.append(search); card.append(label);
+  const scroll = document.createElement('div'); scroll.className = 'usage-table-scroll'; scroll.tabIndex = 0;
+  scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Page history table');
+  const table = document.createElement('table'); table.className = 'usage-table';
+  const types = [...new Set(['nightly', ...(tests.types || []), ...(tests.pageHistory || []).flatMap(row => Object.keys(row.types))])];
+  const header = table.createTHead().insertRow();
+  for (const name of ['Page', ...types]) { const th = document.createElement('th'); th.scope = 'col'; th.textContent = name; header.append(th); }
+  const body = table.createTBody();
+  const history = new Map((tests.pageHistory || []).map(row => [row.route, row.types]));
+  const rows = [];
+  for (const route of [...new Set([...testRoutes.routes, ...history.keys()])].sort()) {
+    const row = body.insertRow();
+    const th = document.createElement('th'); th.scope = 'row';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'page-history-toggle'; button.textContent = route;
+    button.setAttribute('aria-expanded', 'false'); th.append(button); row.append(th);
+    for (const type of types) {
+      const cell = row.insertCell(), results = history.get(route), result = results && Object.hasOwn(results, type) ? results[type] : null;
+      if (result) {
+        const status = document.createElement('span'); status.className = 'test-' + result.status; status.textContent = result.status;
+        const date = document.createElement('span'); date.className = 'usage-detail'; date.textContent = new Date(result.finished).toLocaleString();
+        cell.append(status, date);
+      }
+    }
+    const detail = body.insertRow(); detail.hidden = true;
+    const content = detail.insertCell(); content.colSpan = types.length + 1;
+    rows.push({ route, row, detail, button });
+    row.addEventListener('click', async () => {
+      detail.hidden = !detail.hidden; button.setAttribute('aria-expanded', String(!detail.hidden));
+      if (detail.hidden || content.childNodes.length) return;
+      content.textContent = 'Loading runs…';
+      try {
+        const response = await fetch('/api/tests/page?project=' + encodeURIComponent(PROJECT) + '&route=' + encodeURIComponent(route));
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Could not load page runs');
+        content.textContent = '';
+        for (const run of result.runs) {
+          const line = document.createElement('p');
+          line.textContent = new Date(run.finished).toLocaleString() + ' · ' + run.type + ' · ' + run.status + ' · ' + run.head;
+          content.append(line);
+        }
+        if (!result.runs.length) content.textContent = 'No runs yet.';
+      } catch (err) { content.textContent = err.message; }
+    });
+  }
+  const filter = () => {
+    pageSearch = search.value;
+    for (const { route, row, detail, button } of rows) {
+      row.hidden = !route.toLowerCase().includes(pageSearch.toLowerCase());
+      detail.hidden = row.hidden || button.getAttribute('aria-expanded') !== 'true';
+    }
+  };
+  search.addEventListener('input', filter); filter();
+  scroll.append(table); card.append(scroll);
+  if (!rows.length) card.append(note('No pages found.'));
+  el.screenBody.append(card);
 }
 
 function renderTestRequest() {

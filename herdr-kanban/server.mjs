@@ -20,7 +20,7 @@ import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-hand
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
-import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest } from './lib/test-runs.mjs'
+import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -851,7 +851,13 @@ const handleRequest = async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/tests') {
     if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
-    return json(res, 200, { ok: true, project, runner: Boolean(TEST_RUNNERS[project]), ...readTestRuns(tasksDirOf(project)), requests: listRequests(tasksDirOf(project)).slice(0, 20) })
+    const { running, runs } = readTestRuns(tasksDirOf(project), { limit: Infinity })
+    return json(res, 200, { ok: true, project, runner: Boolean(TEST_RUNNERS[project]), running, runs: runs.slice(0, 20), pageHistory: pageHistory(runs), types: Object.keys(TEST_TYPES), requests: listRequests(tasksDirOf(project)).slice(0, 20) })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/tests/page') {
+    if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
+    return json(res, 200, { ok: true, runs: pageRuns(readTestRuns(tasksDirOf(project), { limit: Infinity }).runs, url.searchParams.get('route')) })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/tests/routes') {

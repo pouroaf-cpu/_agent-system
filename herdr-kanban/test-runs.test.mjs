@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest } from './lib/test-runs.mjs'
+import { readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns } from './lib/test-runs.mjs'
 
 test('reads runs newest first, skips bad lines, drops a dead running marker', () => {
   const tasks = mkdtempSync(join(tmpdir(), 'test-runs-')), dir = join(tasks, 'e2e')
@@ -29,6 +29,43 @@ test('lists static app routes for warming, skipping dynamic and private folders'
   for (const p of ['', 'calendar', '(marketing)/about', 'guides/[slug]', '_lib', 'api/x']) mkdirSync(join(app, p), { recursive: true })
   for (const p of ['page.tsx', 'calendar/page.tsx', '(marketing)/about/page.tsx', 'guides/[slug]/page.tsx', '_lib/page.tsx', 'api/x/route.ts']) writeFileSync(join(app, p), '')
   assert.deepEqual(staticAppRoutes(app), ['/', '/about', '/calendar'])
+})
+
+test('derives per-page results from nested titles, with any unexpected test failing the route', () => {
+  const spec = (title, ...statuses) => ({ title, tests: statuses.map(status => ({ status })) })
+  const report = { suites: [{ specs: [spec('/', 'expected'), spec('checks /about-us', 'unexpected'), spec('unrelated test', 'unexpected')],
+    suites: [{ specs: [spec('console errors on /calendar', 'expected', 'flaky'), spec('/calendar', 'unexpected'),
+      spec('/about-us', 'expected'), spec('checks "/about" on phone', 'expected'), spec('/empty')] }] }] }
+  assert.deepEqual(pageResults(report, ['/', '/about', '/about-us', '/calendar', '/empty', '/missing']),
+    { '/': 'pass', '/about-us': 'fail', '/calendar': 'fail', '/about': 'pass' })
+  assert.deepEqual(pageResults({ suites: [{ specs: [spec('/calendar/details', 'unexpected')] }] }, ['/', '/calendar']), {})
+  assert.deepEqual(pageResults({}, ['/']), {})
+})
+
+test('page history keeps the latest per route and type, ignoring old lines and retaining unknown types', () => {
+  const older = { type: 'nightly', finished: '2026-10-01T00:00:00Z', report: 'old.json', head: 'a', pages: { '/': 'fail', '/about': 'pass' } }
+  const newer = { ...older, finished: '2026-10-02T00:00:00Z', report: 'new.json', head: 'b', pages: { '/': 'pass' } }
+  const custom = { ...newer, type: 'future-type', pages: { '/': 'fail' } }
+  const audit = { ...newer, type: 'axe', pages: { '/about': 'fail' } }
+  const runs = [older, custom, { finished: '2026-10-03T00:00:00Z' }, newer, audit, { pages: { '/': 'fail' } }]
+  assert.deepEqual(pageHistory(runs), [
+    { route: '/', types: { nightly: { status: 'pass', finished: newer.finished, report: 'new.json' }, 'future-type': { status: 'fail', finished: newer.finished, report: 'new.json' } } },
+    { route: '/about', types: { nightly: { status: 'pass', finished: older.finished, report: 'old.json' }, axe: { status: 'fail', finished: newer.finished, report: 'new.json' } } },
+  ])
+  assert.deepEqual(pageRuns(runs, '/').map(({ head, type, status }) => ({ head, type, status })), [
+    { head: 'b', type: 'future-type', status: 'fail' }, { head: 'b', type: 'nightly', status: 'pass' }, { head: 'a', type: 'nightly', status: 'fail' },
+  ])
+  assert.deepEqual(pageRuns(runs, '/missing'), [])
+  assert.deepEqual(pageHistory([]), [])
+})
+
+test('full history is available beyond the recent-run limit', () => {
+  const tasks = mkdtempSync(join(tmpdir(), 'page-runs-')), dir = join(tasks, 'e2e')
+  mkdirSync(dir)
+  const runs = Array.from({ length: 21 }, (_, i) => ({ type: 'nightly', finished: new Date(i * 1000).toISOString(), pages: { [i ? '/recent' : '/older']: 'pass' } }))
+  writeFileSync(join(dir, 'runs.jsonl'), runs.map(run => JSON.stringify(run)).join('\n'))
+  assert.equal(readTestRuns(tasks).runs.length, 20)
+  assert.equal(pageHistory(readTestRuns(tasks, { limit: Infinity }).runs).length, 2)
 })
 
 test('validates requests and picks the oldest due scheduled request', () => {

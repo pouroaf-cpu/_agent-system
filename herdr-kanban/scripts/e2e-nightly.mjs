@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { failedTests, staticAppRoutes } from '../lib/test-runs.mjs'
+import { failedTests, staticAppRoutes, pageResults, TEST_TYPES } from '../lib/test-runs.mjs'
 
 const INTEG = 'C:/Users/PFrew/KanbanProjects/.worktrees/Injectbuddy/integration'
 const ENV = 'C:/Users/PFrew/Projects/Injectbuddy/.env.local'
@@ -19,6 +19,8 @@ const INBOX = 'C:/Users/PFrew/Projects/_roles/inbox/Injectbuddy-INBOX.md'
 const PORT = 3201
 const workers = process.argv.includes('--workers') ? process.argv[process.argv.indexOf('--workers') + 1] : '4'
 const filters = process.argv.includes('--') ? process.argv.slice(process.argv.indexOf('--') + 1) : []
+const type = process.argv.includes('--type') ? process.argv[process.argv.indexOf('--type') + 1] : 'nightly'
+if (type !== 'nightly' && !Object.hasOwn(TEST_TYPES, type)) throw new Error('Unknown e2e audit type')
 const started = new Date().toISOString()
 const stamp = started.replace(/[:.]/g, '-')
 const dir = join(process.env.TEMP || '/tmp', `ib-e2e-${stamp}`)
@@ -28,7 +30,7 @@ mkdirSync(OUT, { recursive: true })
 const head = git('rev-parse', '--short', 'HEAD').stdout.trim()
 const running = join(OUT, 'running.json')
 writeFileSync(running, JSON.stringify({ pid: process.pid, started, head }))
-const record = entry => appendFileSync(join(OUT, 'runs.jsonl'), JSON.stringify({ started, finished: new Date().toISOString(), head, ...entry }) + '\n')
+const record = entry => appendFileSync(join(OUT, 'runs.jsonl'), JSON.stringify({ started, finished: new Date().toISOString(), head, type, pages: {}, ...entry }) + '\n')
 let server
 try {
   if (git('worktree', 'add', '--detach', dir, 'HEAD').status) throw new Error('worktree add failed')
@@ -47,7 +49,8 @@ try {
   }
   if (!up) throw new Error(`dev server did not start: ${logTail()}`)
   // Compile every page once, one at a time, so no spec's goto waits on a first compile.
-  for (const route of staticAppRoutes(join(dir, 'app'))) {
+  const routes = staticAppRoutes(join(dir, 'app'))
+  for (const route of routes) {
     try { await fetch(base + route, { signal: AbortSignal.timeout(120000) }) } catch {}
   }
   const report = join(OUT, `${stamp}.json`)
@@ -61,7 +64,7 @@ try {
   try { parsed = JSON.parse(run.stdout) } catch { throw new Error(`Playwright gave no report (${run.error?.message || 'exit ' + run.status}); see ${stamp}-playwright.log`) }
   const { stats } = parsed
   const failures = failedTests(parsed)
-  record({ ...(filters.length && { filters }), passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds: Math.round(stats.duration / 1000), report, failures: failures.slice(0, 50) })
+  record({ ...(filters.length && { filters }), pages: pageResults(parsed, routes), passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds: Math.round(stats.duration / 1000), report, failures: failures.slice(0, 50) })
   const line = `${new Date().toISOString()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   if (stats.unexpected) appendFileSync(INBOX, `- FOUND Injectbuddy nightly ${line}\n`)

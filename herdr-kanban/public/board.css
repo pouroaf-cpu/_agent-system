@@ -263,6 +263,13 @@ select {
 .test-card p { overflow-wrap: anywhere; }
 .test-card .test-pass { color: var(--ok); }
 .test-card .test-fail { color: var(--problem); }
+.page-history { max-width: 100%; margin-bottom: 24px; }
+.page-history > label { display: grid; gap: 4px; margin-bottom: 12px; }
+.page-history input { width: 100%; min-width: 0; padding: 8px; font: inherit; }
+.page-history .test-pass { color: var(--ok); }
+.page-history .test-fail { color: var(--problem); }
+.page-history-toggle { border: 0; background: none; color: var(--active); font: inherit; padding: 8px 0; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.page-history tbody tr:has(.page-history-toggle) { cursor: pointer; }
 .test-failures { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
 .btn.audit-open { display: flex; height: auto; min-height: 40px; margin-top: 12px; padding: 8px 14px; max-width: 100%; white-space: normal; text-align: left; line-height: 1.3; }
 

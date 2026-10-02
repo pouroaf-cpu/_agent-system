@@ -25,7 +25,7 @@ try {
   }
   run('test-writer.mjs', ['--type', request.type, '--pages', request.pages.join(','), '--out', request.spec])
   save('running')
-  run('e2e-nightly.mjs', ['--', 'e2e/test-lab/' + name])
+  run('e2e-nightly.mjs', ['--type', request.type, '--', 'e2e/test-lab/' + name])
   save('done')
 } catch (err) {
   if (request) save('failed', err.message)

@@ -81,6 +81,42 @@ export function failedTests(report) {
   return out
 }
 
+// Match whole routes, so / does not match /calendar and /about does not match /about-us.
+export function pageResults(report, routes) {
+  const pages = {}
+  const patterns = routes.map(route => [route, new RegExp(`(?<![\\w/.-])${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/.-])`)])
+  const walk = suite => {
+    for (const spec of suite.specs || []) {
+      if (!spec.tests?.length) continue
+      for (const [route, pattern] of patterns) if (pattern.test(spec.title)) {
+        pages[route] = pages[route] === 'fail' || spec.tests.some(t => t.status === 'unexpected') ? 'fail' : 'pass'
+      }
+    }
+    for (const child of suite.suites || []) walk(child)
+  }
+  for (const suite of report.suites || []) walk(suite)
+  return pages
+}
+
+export function pageRuns(runs, route) {
+  return runs.filter(run => run.type && Object.hasOwn(run.pages || {}, route))
+    .map(run => ({ ...run, status: run.pages[route] }))
+    .sort((a, b) => b.finished.localeCompare(a.finished))
+}
+
+export function pageHistory(runs) {
+  const pages = new Map()
+  for (const run of [...runs].sort((a, b) => (b.finished || '').localeCompare(a.finished || ''))) {
+    if (!run.type) continue
+    for (const [route, status] of Object.entries(run.pages || {})) {
+      if (!pages.has(route)) pages.set(route, new Map())
+      const types = pages.get(route)
+      if (!types.has(run.type)) types.set(run.type, { status, finished: run.finished, report: run.report })
+    }
+  }
+  return [...pages].sort(([a], [b]) => a.localeCompare(b)).map(([route, types]) => ({ route, types: Object.fromEntries(types) }))
+}
+
 // Static Next app routes ("/", "/calendar", ...) from app/**/page.*, for warming the dev server:
 // a page's first compile can outlast Playwright's goto (ERR_ABORTED on /calendar, 2026-10-02).
 // Route groups "(x)" drop out of the URL; dynamic "[x]" and private "_x" folders are skipped.
