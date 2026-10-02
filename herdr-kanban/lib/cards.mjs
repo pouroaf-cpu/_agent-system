@@ -38,7 +38,10 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
     const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
     const checks = section('Outcome checks')
-    if (!criteria.length || new Set(criteria).size !== criteria.length || criteria.some(id => !new RegExp(`^\\s*\\|?\\s*${id}\\s*\\|\\s*[^|]+\\|\\s*[^|]+\\|\\s*[^|]+\\|?\\s*$`, 'm').test(checks))) throw new Error('Plan incomplete: map each AC ID to change, acceptance check and negative check under Outcome checks')
+    // A cell may hold an escaped pipe, \|, as Markdown allows (Tradeflow TF121).
+    const cell = String.raw`(?:\\.|[^|\\])+`
+    const unmapped = criteria.find(id => !new RegExp(String.raw`^\s*\|?\s*${id}\s*\|${cell}\|${cell}\|${cell}\|?\s*$`, 'm').test(checks))
+    if (!criteria.length || new Set(criteria).size !== criteria.length || unmapped) throw new Error(`Plan incomplete: map each AC ID to change, acceptance check and negative check under Outcome checks${unmapped ? ` (no 4-column row for ${unmapped})` : ''}`)
     if (!section('Prerequisites')) throw new Error('Plan incomplete: state workspace prerequisites (or explicitly none)')
   }
   const fileLines = [...section('Files').matchAll(/^-\s+`([^`]+)`([^\n]*)/gm)]

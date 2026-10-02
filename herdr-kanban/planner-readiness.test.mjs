@@ -30,6 +30,9 @@ Existing Node runtime; no additional access.
 `
 
 validatePlan(realistic)
+// TF121: an escaped pipe inside a cell is still one cell; a short row names its AC.
+validatePlan(realistic.replace('handleKeyDown(event)', String.raw`handleKeyDown(event) for a \| b`))
+assert.throws(() => validatePlan(realistic.replace(' | remove the handler branch and the check fails', '')), /no 4-column row for AC1/)
 assert.throws(() => validatePlan(realistic.replace('**Plan readiness:** build-ready', ''), { requireReadiness: true }),
   /authenticated Planner handoff requires/i)
 const investigation = realistic
