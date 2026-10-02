@@ -3,6 +3,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TEST_INTEGRATION, TEST_TYPES, staticAppRoutes } from '../lib/test-runs.mjs'
 
+// A spec must contain its scope's core check: the model copies the example spec's page checks otherwise (2026-10-02).
+const MUST = { 'console-errors': /pageerror/, 'phone-layout': /scrollWidth/, 'broken-links': /request\.get/, axe: /AxeBuilder/ }
+
 try {
   const args = process.argv.slice(2)
   const option = name => args[args.indexOf(name) + 1]
@@ -12,7 +15,7 @@ try {
   const routes = staticAppRoutes(join(TEST_INTEGRATION, 'app'))
   if (pages.some(p => !routes.includes(p))) throw new Error('Unknown page')
   const prompt = `Scope: ${TEST_TYPES[type]}.
-Write ONE Playwright test file (TypeScript).
+Write ONE Playwright test file (TypeScript) that checks ONLY that scope on each page. Do not assert headings, text, URLs or page-specific selectors: you have not seen the pages.
 Routes to test: ${JSON.stringify(pages)}
 Write one test per page, titled exactly by its page path, e.g. test('/calendar', ...). Wait with page.waitForLoadState('load'), NEVER 'networkidle'.
 Match the conventions of this example spec and config. Use relative paths; base URL comes from the config.
@@ -31,6 +34,8 @@ Reply with ONLY the file contents. No prose, no code fences.`
     const problems = []
     if (!spec.includes('@playwright/test')) problems.push('missing @playwright/test import')
     if (!spec.includes('test(')) problems.push('missing test(')
+    if (!MUST[type].test(spec)) problems.push(`the test does not check the scope (${TEST_TYPES[type]})`)
+    if (/toContainText|toHaveURL|getByRole|locator\('(?!a\[href|body|html|\*)/.test(spec)) problems.push('asserts page-specific text, URLs or selectors; check only the scope')
     if (spec.includes('networkidle')) problems.push('networkidle is forbidden; use page.waitForLoadState(\'load\')')
     if (!problems.length) { writeFileSync(out, spec + '\n'); break }
     if (attempt) throw new Error('Invalid generated spec: ' + problems.join('; '))
