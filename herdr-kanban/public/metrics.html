@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Daily board health</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 24px; color: #1b2433; background: #f3f4f6; }
+    a { color: #2f5bd3; }
+    h1 { font-size: 20px; } h2 { font-size: 16px; }
+    .table-wrap { overflow-x: auto; margin-bottom: 24px; }
+    table { border-collapse: collapse; background: white; width: 100%; }
+    th, td { padding: 8px; border: 1px solid #dde1e7; text-align: right; }
+    th { font-weight: 600; } th:first-child, td:first-child { text-align: left; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <a href="/">Back to board</a>
+  <h1>Daily board health</h1>
+  <p>Last 7 UTC days, newest first. Refreshes every 5 seconds.</p>
+  <p>Finished = distinct cards integrated or archived that day. Kick-backs / finished = that day's Builder kick-backs divided by finished cards; — means none finished.</p>
+  <p>Kick-back tags come from the reason's leading tag. Planner failures include reported blockers, failed starts, failed delivery and missing handoffs. Owner escalations count entries into Owner.</p>
+  <p id="status" role="status">Loading…</p>
+  <main id="projects"></main>
+  <script src="metrics.js"></script>
+</body>
+</html>

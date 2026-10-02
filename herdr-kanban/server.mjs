@@ -20,6 +20,7 @@ import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
+import { dailyMetrics } from './lib/metrics.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment } from './lib/quota.mjs'
@@ -845,6 +846,13 @@ const handleRequest = async (req, res) => {
   const project = url.searchParams.get('project') ?? config.projects[0]
 
   if (badMutationOrigin(req)) return json(res, 403, { ok: false, error: 'invalid origin' })
+
+  if (req.method === 'GET' && url.pathname === '/api/metrics') {
+    if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })
+    const days = url.searchParams.has('days') ? Number(url.searchParams.get('days')) : 7
+    if (!Number.isInteger(days) || days < 1 || days > 366) return json(res, 400, { ok: false, error: 'days must be an integer from 1 to 366' })
+    return json(res, 200, { ok: true, project, days, timezone: 'UTC', metrics: await dailyMetrics(tasksDirOf(project), days) })
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/audits') {
     try { return json(res, 200, { ok: true, project, audits: readAuditReports(config, project) }) }
