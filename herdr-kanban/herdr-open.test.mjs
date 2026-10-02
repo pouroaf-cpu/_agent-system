@@ -7,33 +7,33 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import test from 'node:test'
-import { openProjectSession, sessionOf } from './lib/herdr.mjs'
+import { openProjectSession } from './lib/herdr.mjs'
 
-test('opens only a running project session and focuses its agents workspace', async () => {
+test('opens the shared herdr session and focuses the project workspace', async () => {
   const calls = []
   const cli = async (args, options) => {
     calls.push({ args, options })
     if (args[1] === 'list' && args[0] === 'agent') return { agents: [] }
-    if (args[1] === 'list' && args[0] === 'workspace') return { workspaces: [{ label: 'agents', workspace_id: 'w1' }] }
+    if (args[1] === 'list' && args[0] === 'workspace') return { workspaces: [{ label: 'agents', workspace_id: 'w1' }, { label: 'My Project', workspace_id: 'w2' }] }
     return {}
   }
   let spawned
   const child = new EventEmitter()
   child.unref = () => { child.unrefed = true }
 
-  await openProjectSession(sessionOf('My Project'), (...args) => { spawned = args; return child }, cli)
+  await openProjectSession('My Project', (...args) => { spawned = args; return child }, cli)
 
   assert.deepEqual(calls.map(({ args }) => args), [
-    ['agent', 'list'], ['workspace', 'list'], ['workspace', 'focus', 'w1'],
+    ['agent', 'list'], ['workspace', 'list'], ['workspace', 'focus', 'w2'],
   ])
-  assert.ok(calls.every(({ options }) => options.session === 'my-project' && options.ensureSession === false))
-  assert.deepEqual(spawned, [process.env.HERDR_BIN_PATH || 'herdr', ['session', 'attach', 'my-project'], { detached: true, stdio: 'ignore', windowsHide: false }])
+  assert.ok(calls.every(({ options }) => options.session === 'default' && options.ensureSession === false))
+  assert.deepEqual(spawned, [process.env.HERDR_BIN_PATH || 'herdr', ['session', 'attach', 'default'], { detached: true, stdio: 'ignore', windowsHide: false }])
   assert.equal(child.unrefed, true)
 })
 
-test('a stopped session reports unavailable without spawning a client', async () => {
+test('a stopped herdr reports unavailable without spawning a client', async () => {
   let spawns = 0
-  await assert.rejects(openProjectSession('stopped', () => { spawns++ }, async () => { throw new Error('server_not_running') }), /session stopped is unavailable/)
+  await assert.rejects(openProjectSession('stopped', () => { spawns++ }, async () => { throw new Error('server_not_running') }), /herdr is unavailable/)
   assert.equal(spawns, 0)
 })
 
@@ -76,7 +76,7 @@ test('POST route validates projects and returns a stopped-session error', async 
   assert.equal((await invalid.json()).error, 'Unknown project')
   const stopped = await post('herdr-kanban')
   assert.equal(stopped.status, 400)
-  assert.match((await stopped.json()).error, /session herdr-kanban is unavailable/)
+  assert.match((await stopped.json()).error, /herdr is unavailable/)
 
   const html = await readFile(join(workspace, 'public/index.html'), 'utf8')
   const board = await readFile(join(workspace, 'public/board.js'), 'utf8')

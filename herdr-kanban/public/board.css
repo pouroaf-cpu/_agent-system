@@ -253,6 +253,11 @@ select {
 .audit-card h2 { margin: 0 0 8px; font-size: 14px; }
 .audit-card p { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
 .audit-card .audit-status { color: var(--text); }
+.screen-section { margin: 8px 0 12px; font-size: 15px; }
+.test-card { max-width: 640px; margin-bottom: 24px; }
+.test-card .test-pass { color: var(--ok); }
+.test-card .test-fail { color: var(--problem); }
+.test-failures { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
 .btn.audit-open { display: flex; height: auto; min-height: 40px; margin-top: 12px; padding: 8px 14px; max-width: 100%; white-space: normal; text-align: left; line-height: 1.3; }
 
 .archive-grid, .agents-grid {

@@ -575,6 +575,8 @@ const dependencyHover = createDependencyHover({
   },
 });
 let audits = { loading: true, error: '', items: [] };
+let tests = { runner: false, running: null, runs: [], error: '' };
+let testsPoll = null;
 
 
 
@@ -603,7 +605,7 @@ function setView(next) {
 
   if (!onBoard) {
 
-    el.screenTitle.textContent = { agents: 'Agents', tasks: 'Historical requests', archive: 'Archive', audits: 'Audits', settings: 'Settings' }[next];
+    el.screenTitle.textContent = { agents: 'Agents', tasks: 'Historical requests', archive: 'Archive', audits: 'Audits & tests', settings: 'Settings' }[next];
 
     renderScreen(resetScroll);
 
@@ -669,11 +671,68 @@ async function loadAudits() {
     if (!response.ok || !result.ok || result.project !== PROJECT) throw new Error(result.error || 'Could not load audits');
     audits = { loading: false, error: '', items: result.audits || [] };
   } catch (err) { audits = { loading: false, error: err.message, items: [] }; }
+  await loadTests();
+}
+
+async function loadTests() {
+  try {
+    const response = await fetch('/api/tests?project=' + encodeURIComponent(PROJECT));
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Could not load test runs');
+    tests = { runner: result.runner, running: result.running, runs: result.runs || [], error: '' };
+  } catch (err) { tests = { runner: false, running: null, runs: [], error: err.message }; }
+  clearTimeout(testsPoll);
+  if (tests.running && view === 'audits') testsPoll = setTimeout(loadTests, 30000); // until the run finishes
   if (view === 'audits') renderScreen();
+}
+
+async function runTestsNow(button) {
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/tests/run?project=' + encodeURIComponent(PROJECT), { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Could not start the run');
+  } catch (err) { tests.error = err.message; }
+  setTimeout(loadTests, 1500); // the runner writes running.json once it starts
+}
+
+function renderTestRuns() {
+  const head = document.createElement('h2'); head.className = 'screen-section'; head.textContent = 'Test runs';
+  el.screenBody.append(head);
+  if (tests.error) el.screenBody.append(note(tests.error));
+  if (!tests.runner) return el.screenBody.append(note('No test runner is set up for ' + PROJECT + '.'));
+  const card = document.createElement('article'); card.className = 'audit-card test-card';
+  const title = document.createElement('h2'); title.textContent = 'Nightly e2e (all Playwright specs)';
+  card.append(title);
+  const line = text => { const p = document.createElement('p'); p.textContent = text; card.append(p); return p; };
+  const when = iso => new Date(iso).toLocaleString();
+  if (tests.running) line('Running since ' + when(tests.running.started) + ' on ' + tests.running.head + '…').className = 'audit-status';
+  const last = tests.runs[0];
+  if (!last) line('No runs yet.');
+  else if (last.error) { line('Last run ' + when(last.finished) + ': did not finish.').className = 'audit-status test-fail'; line(last.error); }
+  else {
+    line('Last run ' + when(last.finished) + ' on ' + last.head + ' (' + Math.round(last.seconds / 60) + ' min)');
+    line(last.passed + ' passed, ' + last.failed + ' failed, ' + last.flaky + ' flaky').className = 'audit-status' + (last.failed ? ' test-fail' : ' test-pass');
+    if (last.failures?.length) {
+      const list = document.createElement('ul'); list.className = 'test-failures';
+      for (const name of last.failures.slice(0, 10)) { const li = document.createElement('li'); li.textContent = name; list.append(li); }
+      if (last.failures.length > 10) { const li = document.createElement('li'); li.textContent = '…and ' + (last.failures.length - 10) + ' more'; list.append(li); }
+      card.append(list);
+    }
+  }
+  const run = document.createElement('button'); run.type = 'button'; run.className = 'btn audit-open';
+  run.textContent = tests.running ? 'Run in progress' : 'Run tests now'; run.disabled = Boolean(tests.running);
+  run.addEventListener('click', () => runTestsNow(run));
+  card.append(run);
+  for (const old of tests.runs.slice(1, 6)) line(when(old.finished) + ': ' + (old.error ? 'did not finish' : old.passed + ' passed, ' + old.failed + ' failed'));
+  el.screenBody.append(card);
 }
 
 function renderAuditsScreen() {
   if (audits.loading) return el.screenBody.append(note('Loading reports…'));
+  renderTestRuns();
+  const reports = document.createElement('h2'); reports.className = 'screen-section'; reports.textContent = 'Audit reports';
+  el.screenBody.append(reports);
   if (audits.error) return el.screenBody.append(note(audits.error));
   el.screenBody.append(note('Reports for ' + PROJECT + '. Read a report, then request any follow-up yourself. No findings are turned into work here.'));
   if (!audits.items.length) return el.screenBody.append(note('No audit reports found for this project.'));

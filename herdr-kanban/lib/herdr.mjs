@@ -540,15 +540,17 @@ export async function focusAgent(paneId, session) {
   return agent
 }
 
-export async function openProjectSession(session, spawnClient = spawn, cli = herdr) {
+// Projects are workspaces in the shared session (one per project label), not sessions of their own.
+export async function openProjectSession(project, spawnClient = spawn, cli = herdr) {
+  const session = SHARED_SESSION
   try {
     parseAgentList(await cli(['agent', 'list'], { session, ensureSession: false }))
   } catch (err) {
-    throw new Error(`herdr session ${session} is unavailable: ${err.message}`)
+    throw new Error(`herdr is unavailable: ${err.message}`)
   }
   const workspaces = (await cli(['workspace', 'list'], { session, ensureSession: false }))?.workspaces
   if (!Array.isArray(workspaces)) throw new Error('workspace list: malformed response')
-  const workspace = findWorkspace(workspaces, AGENT_WORKSPACE)
+  const workspace = findWorkspace(workspaces, project) || findWorkspace(workspaces, AGENT_WORKSPACE)
   if (workspace) await cli(['workspace', 'focus', workspace], { session, ensureSession: false })
   const child = spawnClient(HERDR, ['session', 'attach', session], { detached: true, stdio: 'ignore', windowsHide: false })
   child.on('error', () => {})

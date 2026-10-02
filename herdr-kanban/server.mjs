@@ -866,7 +866,7 @@ const handleRequest = async (req, res) => {
     try {
       const { project: selected } = JSON.parse(body)
       if (!config.projects.includes(selected)) throw new Error('Unknown project')
-      await openProjectSession(sessionOf(selected))
+      await openProjectSession(selected)
       return json(res, 200, { ok: true })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
