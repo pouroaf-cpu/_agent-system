@@ -363,3 +363,15 @@ test('a model cap blocks only that model; the shared 5-hour limit blocks every C
   assert.match(quotaHold(boardRoot, quotaKey('claude', 'claude-haiku-4-5'), now + 3000), /^Claude usage limit; retrying at /, 'the session limit stops every Claude agent')
   assert.deepEqual(claudeBlocks(), ['claude', 'claude:claude-opus-5-5'])
 })
+
+test('Builder: a prompt held by Pause whose pane then vanished goes back to Queue, not to a Planner (Injectbuddy I559)', async () => {
+  const { routeBuilderNoHandoff } = await import('./lib/autospawn.mjs')
+  const { recordOperationalFailure } = await import('./lib/workflow-state.mjs')
+  const tasks = project(), boardRoot = join(tasks, '..')
+  mkdirSync(join(tasks, 'working')); writeFileSync(join(tasks, 'working', 'T-1.md'), '# T-1 — task\n' + plan)
+  recordOperationalFailure(tasks, findCard(tasks, 'T-1'), 'agent start failed: Project proof is paused; assignment retained pending Start', boardRoot)
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Session b1 is missing without a valid Builder handoff from Working', boardRoot, engine: 'codex' })
+  assert.equal(moved.column, 'queue')
+  assert.equal(readWorkflow(tasks)['T-1'].operational, null, 'no operational hold left to block the restart')
+  assert.doesNotMatch(readFileSync(moved.path, 'utf8'), /Kicked back/)
+})

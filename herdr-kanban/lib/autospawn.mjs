@@ -60,6 +60,15 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     recordStartFailure(tasksDir, card.id, 'builder', 'Builder prompt was never submitted')
     return moved
   }
+  // Its prompt was held by a Pause and the pane is gone: the Builder never ran, so a fresh one
+  // starts from Queue after Start. Not a plan gap (Injectbuddy I559, 2026-10-02).
+  const op = readWorkflow(tasksDir)[card.id]?.operational
+  if (op?.stage === 'working' && /is paused; assignment retained pending Start/.test(op.reason)) {
+    unbind(tasksDir, card.id)
+    updateWorkflow(tasksDir, card.id, { operational: null })
+    appendHistory(tasksDir, card.id, { event: 'builder-paused-start-lost', paneId, reason })
+    return moveCard(tasksDir, card.id, 'queue')
+  }
   // I519: a Builder that filed hkb issue and then exited did hand off. Kick back with its own
   // note, or three different causes all read as one repeated "session missing" failure.
   const issue = builderIssue(tasksDir, card.id, (readBindings(tasksDir)[card.id] || readWorkflow(tasksDir)[card.id]?.builder)?.started)
