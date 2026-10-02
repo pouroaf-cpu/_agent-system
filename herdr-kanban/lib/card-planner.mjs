@@ -17,7 +17,8 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
+import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
+import { activityLog } from './activity.mjs'
 const busy = new Set()
 const lastCorrection = text => text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1).split(/\*\*Needs you\*\*/)[0].trim()
 export function correctionFingerprint(text) {
@@ -121,6 +122,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     const selectedFor = card => { const base = assignmentForCard?.(card, 'planning'), esc = escalation(card); return esc ? { ...base, engine: 'claude', model: esc.model } : base }
     const plannerEngine = card => selectedFor(card)?.engine ?? engineKind(engine)
     const plannerModel = card => selectedFor(card)?.model ?? model
+    const choiceFor = card => selectQuotaAssignment(boardRoot, selectedFor(card) ?? { engine: engineKind(engine), model }, now)
     const retire = async (card, owner, agent, reason) => {
       const output = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).slice(-4000) : ''
       appendHistory(tasksDir, card.id, { event: 'planner-retired', stage: 'planning', reason, assignment: owner, pane: agent || null, output })
@@ -170,12 +172,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       await waitForPrompt(paneId, { session })
       assertPlannerAssignment(tasksDir, card.id, owner)
       bindCardRunAssignment(project, [card.id], 'planner', paneId)
-      const selected = selectedFor(card)
+      const choice = choiceFor(card)
+      const selected = selectedFor(card) ? choice.assignment : null
       owner.model = selected?.model ?? model
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
       save(tasksDir, owners)
       owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
+      if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
     const submit = async (card, owner, agent) => {
@@ -420,7 +424,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       // Concurrent Planners per project are capped: 28 audit cards started 11 Codex Planners
       // at once and pinned the CPU (Injectbuddy, 2026-09-25). The rest wait for a later poll.
       if ((!owner || !agent) && !cardRunContext() && busyPlanners(agents) + launched >= maxPlanners) continue
-      if ((!owner || !agent) && quotaHold(boardRoot, quotaKey(plannerEngine(card), plannerModel(card)), now)) continue // its engine is out of usage
+      if ((!owner || !agent) && choiceFor(card).hold) continue
       if (!owner || !agent) {
         const previous = owner
         // A Planner the board closed after its handoff is not a missing replacement.

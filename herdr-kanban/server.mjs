@@ -22,7 +22,7 @@ import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/wo
 import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
-import { activeQuota, quotaHolds, quotaKey } from './lib/quota.mjs'
+import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment } from './lib/quota.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
@@ -70,7 +70,7 @@ const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPa
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
 const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
-const quotaHoldsOf = (project, board = readBoard(tasksDirOf(project))) => quotaHolds(HERE, board, (card, stage) => { const a = assignmentForCard(project, card, stage); return quotaKey(a.engine, a.model) })
+const quotaHoldsOf = (project, board = readBoard(tasksDirOf(project))) => quotaHolds(HERE, board, (card, stage) => { const { assignment: a } = selectQuotaAssignment(HERE, assignmentForCard(project, card, stage)); return quotaKey(a.engine, a.model) })
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
 
 function ensureTasks(project) {
@@ -567,8 +567,8 @@ async function pollProject(project) {
           reason: `Session ${beforeReap[id]?.pane_id || 'unknown'} ${agent ? `finished with status=${agent.agent_status}` : 'is missing'} without a valid Builder handoff from Working`,
           evidence,
           boardRoot: HERE,
-          engine: assigned.engine,
-          model: assigned.model,
+          engine: beforeReap[id]?.engine ?? assigned.engine,
+          model: beforeReap[id]?.model ?? assigned.model,
           session: sessionOf(project),
         })
         // Requeued (usage limit or a prompt that never landed): its idle pane is of no further use.

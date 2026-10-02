@@ -26,7 +26,8 @@ export function validateAssignment(value, label = 'agent setting') {
   if (!SUPPORTED[setting.engine]) throw new Error(`${label}: unsupported engine ${setting.engine || '(missing)'}`)
   if (!SUPPORTED[setting.engine].models.includes(setting.model)) throw new Error(`${label}: model ${setting.model || '(missing)'} is not supported by ${setting.engine}`)
   if (!REASONING.includes(setting.reasoning)) throw new Error(`${label}: unsupported reasoning level ${setting.reasoning || '(missing)'}`)
-  return { engine: setting.engine, model: setting.model, reasoning: setting.reasoning }
+  return { engine: setting.engine, model: setting.model, reasoning: setting.reasoning,
+    ...(setting.fallback != null ? { fallback: validateAssignment(setting.fallback, `${label} fallback`) } : {}) }
 }
 
 function legacySetting(config, stage) {
@@ -51,6 +52,7 @@ const ROLE = { planning: 'p', working: 'b', review: 'r', trivial: 'b' }
 function assertLaunchable(stage, setting) {
   const allowed = [approvedManagedModel(`${ROLE[stage]}-t-1`) ?? []].flat()
   if (allowed.length && !allowed.includes(setting.model)) throw new Error(`${stage}: model ${setting.model} is not approved for board launches (allowed: ${allowed.join(', ')})`)
+  if (setting.fallback) assertLaunchable(stage, setting.fallback)
   return setting
 }
 

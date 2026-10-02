@@ -75,6 +75,16 @@ export function quotaHold(boardRoot, key, now = Date.now(), quota = readQuota(bo
   return hit ? retryHold(`${label(hit)} usage limit`, quota[hit].until) : null
 }
 
+// Select only at launch: saved settings stay primary, so the next launch returns to it after reset.
+export function selectQuotaAssignment(boardRoot, primary, now = Date.now()) {
+  const quota = readQuota(boardRoot)
+  const hold = quotaHold(boardRoot, quotaKey(primary.engine, primary.model), now, quota)
+  const fallback = primary.fallback
+  if (!hold || !fallback || quotaHold(boardRoot, quotaKey(fallback.engine, fallback.model), now, quota)) return { assignment: primary, hold }
+  return { assignment: fallback, hold: null,
+    message: `started on fallback ${fallback.model}: ${primary.model} usage limit until ${hold.split('retrying at ')[1]}` }
+}
+
 // The blocks still in force, for the board header and the manager alert.
 export function activeQuota(boardRoot, now = Date.now()) {
   return Object.fromEntries(Object.entries(readQuota(boardRoot)).filter(([, block]) => block.until > now))

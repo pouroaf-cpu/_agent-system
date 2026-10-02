@@ -19,7 +19,7 @@ import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttem
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, unsubmittedDelivery, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
-import { usageLimit, blockEngine, quotaHold, engineKind, quotaKey } from './quota.mjs'
+import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
@@ -270,7 +270,9 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       fresh ??= readBoard(tasksDir)
       const freshCard = fresh.queue.find((c) => c.path === card.path)
       if (!freshCard) continue
-      const selected = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
+      const primary = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
+      const choice = selectQuotaAssignment(boardRoot, primary ?? { engine: engineKind(freshCard.trivial ? trivialEngine : engine), model: freshCard.trivial ? trivialModel : model }, now)
+      const selected = primary ? choice.assignment : null
       const selectedModel = selected?.model ?? (freshCard.trivial ? trivialModel : model)
       const selectedEngine = selected?.engine ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : (freshCard.trivial ? trivialEngine : engine)
       const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
@@ -287,7 +289,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         if (wait) { held[freshCard.id] = wait; continue }
       }
       const hold = limit || (operational && `Operational recovery held: ${operational}`)
-        || quotaHold(boardRoot, quotaKey(engineKind(selectedEngine), selectedModel), now)
+        || choice.hold
         || startHoldReason({ card: freshCard, board: fresh, projectPath, tasksDir, mission, log, gitSettings, now })
         || (slots <= 0 ? 'slots full' : null)
         || dependencyInstallHold({ card: freshCard, projectPath, tasksDir, gitSettings })
@@ -360,7 +362,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         const result = await spawn({
           project, projectPath, tasksDir, boardRoot, card: moved, model: selectedModel, engine: selectedEngine, gitSettings,
           onPane: (provisional) => {
-            bind(tasksDir, moved.id, provisional)
+            bind(tasksDir, moved.id, { ...provisional, engine: engineKind(selectedEngine), model: selectedModel })
             try {
               recordUsageStart({
                 tasksDir, project, requestId: moved.id, cardIds: [moved.id], role: 'builder',
@@ -371,8 +373,10 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
             onChange?.()
           },
         })
-        bind(tasksDir, moved.id, result)
-        updateWorkflow(tasksDir, moved.id, { builder: result, operational: null, startFailure: null })
+        const binding = { ...result, engine: engineKind(selectedEngine), model: selectedModel }
+        bind(tasksDir, moved.id, binding)
+        updateWorkflow(tasksDir, moved.id, { builder: binding, operational: null, startFailure: null })
+        if (choice.message) activityLog({ tasksDir, project, cardId: moved.id, event: 'builder-start', message: choice.message, now })
         clearRetries(tasksDir, moved.id)
         herdrLog(`${moved.id} → working (auto-spawn)`)
         started.push(moved.id)
@@ -688,7 +692,7 @@ export async function autoReview({ project, projectPath, tasksDir, boardRoot, re
 // One reviewer for every card sitting in Review, or — when `cardIds` is given —
 // just that subset (the review-plan batching). Batching is the point: a single
 // context reading several related cards costs far less than several contexts.
-export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, cardIds, inventory, assignmentForCard }) {
+export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, cardIds, inventory, assignmentForCard, now = Date.now() }) {
   assertCardRunSelection(project, cardIds || [], 'reviewer')
   assertPromptAllowed(project)
   // A cross-process reservation follows fresh global inventory, before launch.
@@ -706,9 +710,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (!cards.length) throw new Error('nothing in Review')
     assignedCards = cards
     assertCardRunSelection(project, cards.map(c => c.id), 'reviewer')
-    const selected = assignmentForCard?.(cards[0], 'review')
-    const quota = quotaHold(boardRoot, quotaKey(selected?.engine ?? engineKind(engine), selected?.model ?? model))
-    if (quota) throw Object.assign(new Error(quota), { busy: true })
+    const primary = assignmentForCard?.(cards[0], 'review')
+    const choice = selectQuotaAssignment(boardRoot, primary ?? { engine: engineKind(engine), model }, now)
+    const selected = primary ? choice.assignment : null
+    if (choice.hold) throw Object.assign(new Error(choice.hold), { busy: true })
     for (const card of cards) {
       const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer') || startRetryHold(readWorkflow(tasksDir)[card.id], 'reviewer')
       if (limit) throw Object.assign(new Error(limit), { busy: true })
@@ -776,6 +781,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
       await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path, engine: reviewerEngine }), session, null, { engine: reviewerEngine })
       updateReviewClaim(reviewRoot, claim.id, { phase: 'running', submittedAt: Date.now() })
       for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
+      if (choice.message) for (const card of cards) activityLog({ tasksDir, project, cardId: card.id, event: 'reviewer-start', message: choice.message, now })
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
       throw Object.assign(new Error(`reviewer spawn failed: ${err.message}`), { paused: err.paused, preservePane: err.preservePane, startFailed: err.startFailed })
@@ -784,7 +790,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     }
 
     // Reviewer ownership is in the separate global claim ledger, never Builder slots.
-    return { pane_id: paneId, tab_id: created?.tab?.tab_id, model, name, cards: cards.map((c) => c.id) }
+    return { pane_id: paneId, tab_id: created?.tab?.tab_id, model: selectedModel, name, cards: cards.map((c) => c.id) }
   } catch (err) {
     if (err.startFailed) for (const card of assignedCards) recordStartFailure(tasksDir, card.id, 'reviewer', err.message)
     else if (!err.paused && !err.busy) for (const card of assignedCards) recordOperationalFailure(tasksDir, card, err.message, projectPath)
