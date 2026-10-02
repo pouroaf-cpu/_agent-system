@@ -99,7 +99,9 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
     if (isRetryHold(holds[card.id]) || inBackoff(workflow[card.id]?.startFailure, now)) return true
     if (card.column === 'queue') {
-      if (builderSlotsFree <= 0) return true
+      // The scheduler's own 'slots full' counts too: a slot that freed since its pass is not a
+      // stall, the card starts next poll (Injectbuddy I656 went to Owner 10 s after it, 2026-10-02).
+      if (builderSlotsFree <= 0 || holds[card.id] === 'slots full') return true
       // Before the first scheduler pass after a restart the file-lock holds are unknown
       // (Injectbuddy I211 went to Owner at 04:08 while waiting on public/app.js).
       if (!holdsKnown) return true

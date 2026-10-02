@@ -87,6 +87,9 @@ test('Queue cards waiting on a prerequisite in Owner or still moving are allowed
   assert.equal(findCard(tasks, 'T-4').column, 'queue')
   assert.equal(findCard(tasks, 'T-6').column, 'queue', 'a background dependency install is a wait')
   assert.deepEqual(checkStalls({ tasksDir: tasks, agents, holds, builderSlotsFree: 0, now: T + 60 * MIN }), [], 'a full Builder cap is a wait, not a stall')
+  put('queue', 'T-7')
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents, holds: { ...holds, 'T-7': 'slots full' }, builderSlotsFree: 1, now: T + 90 * MIN }), [], "the scheduler's 'slots full' is a wait even when a slot freed since")
+  assert.equal(findCard(tasks, 'T-7').column, 'queue')
 })
 
 test('the low-disk pause is a wait and restarts every stall window', t => {
