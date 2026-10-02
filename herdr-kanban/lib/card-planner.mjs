@@ -223,11 +223,12 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       try {
       if (onlyIds && !onlyIds.includes(card.id)) continue
       // Two live copies of one id hold only that card, never the whole run (Tradeflow T-42).
-      try { findCard(tasksDir, card.id) } catch (err) {
+      try { card = findCard(tasksDir, card.id) } catch (err) {
         if (!err.ambiguous || cardRunContext()) throw err
         onHold?.(err)
         continue
       }
+      if (card.column !== 'planning') continue // A handoff may have moved it since the snapshot.
       // A legacy card in Planning has no Planner path: convert it, then plan it normally.
       if (!card.cardOwned && !card.audit) {
         card = convertLegacyCard(tasksDir, card)
@@ -364,6 +365,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         save(tasksDir, owners)
         if (now - Date.parse(owner.inactiveSince) < handoffGraceMs) continue
         const evidence = readPane ? String(await readPane(owner.paneId, session).catch(() => '')).trim().slice(-4000) : ''
+        card = findCard(tasksDir, card.id)
+        if (card.column !== 'planning') continue // A split during the pane read is a handoff.
         // The prompt still on the input line was never submitted: finish the delivery,
         // never count a no-handoff (Injectbuddy I149 went to Owner this way).
         const prompt = readDelivery(session, owner.paneId)?.text
@@ -463,6 +466,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       }
       return { cards: [card.id], pane_id: owner.paneId, spawnedNewAgent }
       } catch (error) {
+        // A concurrent handoff can rename the file between resolving it and filesystem I/O.
+        if (error.code === 'ENOENT' && error.path === card.path && !existsSync(card.path) && findCard(tasksDir, card.id).path !== card.path) continue
         // One card's failure must not end the pass: it handles one card per poll, so a card
         // that keeps failing starved every card after it (Injectbuddy I192/I193 went to Owner
         // with no Planner ever started). Explicit runs and pause still stop here.
