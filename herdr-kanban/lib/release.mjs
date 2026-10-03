@@ -24,7 +24,16 @@ export function releaseWaiting({ tasksDir, agents, herdrUp, integrating = false 
 }
 
 // Throws the exact reason on any failed check; nothing moves unless every check passes.
-export function finishRelease({ integrationPath, commit, branch = 'master', startedAt }) {
+// origin/<branch> when a release starts, so finish can tell this release's commit from one
+// shipped before it. null when there is no checkout or fetch fails (finish then skips that check).
+export function releasedHead({ integrationPath, branch = 'master' }) {
+  if (!integrationPath) return null
+  const git = (...args) => spawnSync('git', ['-C', integrationPath, ...args], { encoding: 'utf8', timeout: 120000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+  if (git('fetch', 'origin').status !== 0) return null
+  return git('rev-parse', '--verify', '--quiet', `origin/${branch}`).stdout.trim() || null
+}
+
+export function finishRelease({ integrationPath, commit, branch = 'master', masterAtStart }) {
   const git = (...args) => spawnSync('git', ['-C', integrationPath, ...args], { encoding: 'utf8', timeout: 120000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
   const fail = (what, r) => { throw new Error(`${what}: ${(r.stderr || r.stdout || r.error?.message || '').trim()}`) }
   if (!/^[0-9a-f]{4,64}$/i.test(String(commit))) throw new Error('commit must be a commit hash')
@@ -34,9 +43,10 @@ export function finishRelease({ integrationPath, commit, branch = 'master', star
   const sha = git('rev-parse', '--verify', '--quiet', `${commit}^{commit}`).stdout.trim()
   if (!sha) throw new Error(`Commit ${commit} not found in ${integrationPath} after git fetch origin`)
   if (git('merge-base', '--is-ancestor', sha, `origin/${branch}`).status !== 0) throw new Error(`Commit ${commit} is not on origin/${branch}`)
-  // A commit older than this release is a stale one (KM finished a live release with the last
-  // release's sha, 2026-10-03): refuse it rather than end a release nobody shipped.
-  if (startedAt && Number(git('log', '-1', '--format=%ct', sha).stdout) < Math.floor(Date.parse(startedAt) / 1000)) throw new Error(`Commit ${commit} predates this release (started ${startedAt}): finish with this release's commit, or abort`)
+  // A commit already on origin/<branch> when this release started was shipped by an earlier
+  // release (KM finished a live release with the last release's sha, 2026-10-03). A fast-forward
+  // release's head is older than the release but new to origin, so it passes (Tradeflow cf131a6).
+  if (masterAtStart && git('merge-base', '--is-ancestor', sha, masterAtStart).status === 0) throw new Error(`Commit ${commit} was already on origin/${branch} when this release started: finish with this release's commit, or abort`)
   if (!clean(integrationPath)) throw new Error(`Integration checkout ${integrationPath} has uncommitted changes or an unfinished git operation`)
   // A partial release leaves out cards integrated after it (Injectbuddy I488/I496 held for an
   // operator preview, 2026-09-29): merge the release in and keep them for the next release.

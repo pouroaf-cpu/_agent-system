@@ -14,7 +14,7 @@ const files = process.argv.slice(2).length ? process.argv.slice(2)
 const args = ['--test', '--test-isolation=none', '--experimental-test-module-mocks', '--test-timeout=60000']
 const SLOW = { 'worktrees.test.mjs': 300000, 'release.test.mjs': 120000, 'test.mjs': 120000, 'watchdog-herdr.test.mjs': 150000 } // test.mjs: ~35s alone, over 60s while agents build
 const limit = file => SLOW[file] ?? 60000
-const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20 },
+const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20, env: { ...process.env, KANBAN_TEST: '1' } },
   (err, stdout, stderr) => done({ file, err, out: `${stdout}${stderr}`, secs: Math.round((Date.now() - start) / 1000) }))) }
 
 // Longest first: worktrees.test.mjs started last and alone set the wall time. Half the cores: every

@@ -64,12 +64,13 @@ test('finish refuses a dirty checkout, an unreleased commit, a diverged HEAD and
   assert.throws(() => finishRelease({ integrationPath: undefined, commit: r.release }), /no git integration checkout/i)
 })
 
-test('finish refuses a commit made before the release started (a stale sha), changing nothing', t => {
+test('finish refuses a commit already on master when the release started (a stale sha), changing nothing', t => {
   const r = repos(t)
   const before = git(r.integ, 'rev-parse', 'HEAD')
-  assert.throws(() => finishRelease({ integrationPath: r.integ, commit: r.release, startedAt: new Date(Date.now() + 60e3).toISOString() }), /predates this release/)
+  assert.throws(() => finishRelease({ integrationPath: r.integ, commit: r.release, masterAtStart: r.release }), /already on origin\/master when this release started/)
   assert.equal(git(r.integ, 'rev-parse', 'HEAD'), before)
-  finishRelease({ integrationPath: r.integ, commit: r.release, startedAt: new Date(Date.now() - 3600e3).toISOString() })
+  // New to master since the start, even if its commit is older than the start (a fast-forward release).
+  finishRelease({ integrationPath: r.integ, commit: r.release, masterAtStart: git(r.dev, 'rev-parse', 'master~1') })
   assert.equal(git(r.integ, 'rev-parse', 'HEAD'), r.release)
 })
 
@@ -136,7 +137,7 @@ test('release endpoints: start pauses with a marker, finish fast-forwards and un
   assert.equal(noMarker.status, 400); assert.match(noMarker.error, /no release in progress/i)
   assert.equal((await post('abort', { project: 'Proof' })).status, 400)
 
-  await new Promise(r => setTimeout(r, 1100)) // commit times are whole seconds: r.release must predate the start
+
   const started = await post('start', { project: 'Proof' })
   assert.equal(started.status, 200); assert.equal(started.ok, true); assert.equal(started.ready, false)
   assert.match(started.waiting.join(), /herdr/) // no herdr in this test: readiness cannot be confirmed
@@ -145,7 +146,7 @@ test('release endpoints: start pauses with a marker, finish fast-forwards and un
   assert.equal((await post('start', { project: 'Proof' })).status, 200)
   assert.equal((await board('Proof')).release.startedAt, shown.release.startedAt)
   const stale = await post('finish', { project: 'Proof', commit: r.release })
-  assert.equal(stale.status, 400); assert.match(stale.error, /predates this release/)
+  assert.equal(stale.status, 400); assert.match(stale.error, /already on origin\/master/)
   // This release's own commit: a card and its --no-ff merge into master, made after start.
   git(r.dev, 'checkout', 'kanban-integration'); writeFileSync(join(r.dev, 'e.txt'), 'card 2\n'); git(r.dev, 'add', '.'); git(r.dev, 'commit', '-m', 'card 2'); git(r.dev, 'push', 'origin', 'kanban-integration')
   git(r.dev, 'checkout', 'master'); git(r.dev, 'merge', '--no-ff', 'kanban-integration', '-m', 'release 2'); git(r.dev, 'push', 'origin', 'master')

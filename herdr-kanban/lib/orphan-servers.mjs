@@ -19,6 +19,16 @@ function killTree(pid) {
   spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', timeout: 20000 })
 }
 
+// Operator-chat e2e runs work in C:/Users/PFrew/claude-e2e-* (outside the board) and leave
+// their `next dev`/`next start` running for a day (3 servers, ~2.1 GB, efficiency audit
+// 2026-10-03 F2). A server there older than maxAgeMs is abandoned: stop its tree.
+export function stopStaleE2eServers({ maxAgeMs = 4 * 3600e3, now = Date.now(), list = () => nodeProcesses({ cwd: true }), kill = killTree } = {}) {
+  const e2e = p => /[\\/]claude-e2e-/i.test(p.cwd || '') || /[\\/]claude-e2e-/i.test(p.cmd)
+  const hits = list().filter(p => p.pid !== process.pid && /\bnext\b/i.test(p.cmd) && e2e(p) && p.created && now - p.created > maxAgeMs)
+  for (const p of hits) try { kill(p.pid) } catch {}
+  return hits.map(p => p.pid)
+}
+
 // An editor's tsserver opened on a board project folder indexes TASKS/.evidence (browser
 // profiles, captures) and spins for hours: 10 CPU-hours on KanbanProjects/Injectbuddy
 // (2026-09-25) and on Tradeflow-t30 (2026-09-24). Its client restarts it on demand.
@@ -55,7 +65,7 @@ public static class ProcCwd {
   }
 }
 '@
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Created = [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds(); Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
 
 function nodeProcesses({ cwd = false } = {}) {
   if (process.platform !== 'win32') return []
@@ -63,5 +73,5 @@ function nodeProcesses({ cwd = false } = {}) {
   let rows = []
   try { rows = [JSON.parse(r.stdout || '[]')].flat() } catch {}
   // Kernel/user times are in 100 ns units.
-  return rows.map(p => ({ pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7 }))
+  return rows.map(p => ({ pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }))
 }

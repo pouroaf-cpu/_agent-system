@@ -9,14 +9,14 @@ import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
-import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
+import { stopRunawayTsservers, stopStaleE2eServers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
-import { releaseWaiting, finishRelease } from './lib/release.mjs'
+import { releaseWaiting, finishRelease, releasedHead } from './lib/release.mjs'
 import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './lib/card-run.mjs'
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
@@ -794,7 +794,11 @@ function openFeed(project) {
   const feed = { watcher: null, debounce: null, retry: null, clients: 1 }
   feeds.set(project, feed)
 
-  const onChange = () => {
+  // The board's own bookkeeping (.board.lock, .request-usage.json, .workflow-state.json,
+  // .history, .evidence, logs, *.tmp) wrote ~230 times a minute and each burst re-sent a
+  // 2.9 MB board to every tab (efficiency audit 2026-10-03 F9). Cards are .md files in lanes.
+  const onChange = (_, file) => {
+    if (file && (/(^|[\\/])\./.test(file) || /\.(tmp|log|jsonl?)$/i.test(file))) return
     clearTimeout(feed.debounce)
     feed.debounce = setTimeout(() => broadcastBoard(project), 150)
   }
@@ -1002,7 +1006,7 @@ const handleRequest = async (req, res) => {
       const action = url.pathname.slice('/api/release/'.length)
       const active = controlState(p, CONFIG_PATH).release
       if (action === 'start') {
-        if (!active) Object.assign(config, setProjectPaused(p, true, CONFIG_PATH, { release: { startedAt: new Date().toISOString() } }))
+        if (!active) Object.assign(config, setProjectPaused(p, true, CONFIG_PATH, { release: { startedAt: new Date().toISOString(), masterAtStart: releasedHead({ integrationPath: projectSettingsOf(p)?.integrationPath, branch: projectSettingsOf(p)?.releaseBranch }) } }))
         broadcastBoard(p)
         const { agents, herdrUp } = await pollAgents(p)
         const waiting = releaseWaiting({ tasksDir: tasksDirOf(p), agents, herdrUp, integrating: reconciliationPolls.has(p) })
@@ -1014,7 +1018,7 @@ const handleRequest = async (req, res) => {
       if (action === 'finish') {
         if (reconciliationPolls.has(p)) throw new Error('The board is integrating right now; try again in a few seconds')
         const settings = projectSettingsOf(p)
-        integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch, startedAt: active.startedAt })
+        integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch, masterAtStart: active.masterAtStart })
       }
       Object.assign(config, setProjectPaused(p, false, CONFIG_PATH, {}, { liftHold: false }))
       broadcastBoard(p)
@@ -1591,6 +1595,8 @@ async function startPollers() {
   setInterval(() => {
     const pids = stopRunawayTsservers(config.projectsRoot)
     if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
+    const stale = stopStaleE2eServers()
+    if (stale.length) herdrLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
   }, 10 * 60000)
 }
 

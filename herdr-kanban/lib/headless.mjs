@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { renameSync } from './fs-retry.mjs'
@@ -47,7 +48,11 @@ function tail(file, bytes = 128 * 1024) {
 const supervisor = fileURLToPath(new URL('../scripts/agent-process.mjs', import.meta.url))
 export const viewer = fileURLToPath(new URL('../scripts/agent-view.mjs', import.meta.url))
 
-export function createHeadless({ root = fileURLToPath(new URL('../.agents', import.meta.url)), command = agentCommand, trees = new PaneProcessTrees(), openTerminal = spawn } = {}) {
+// The registry lives beside the board config, so a test server with its own KANBAN_CONFIG never
+// sees the live board's agents (test.mjs found every slot full, 2026-10-03).
+const defaultRoot = () => process.env.KANBAN_CONFIG ? join(dirname(process.env.KANBAN_CONFIG), '.agents')
+  : process.env.KANBAN_TEST ? join(tmpdir(), `kanban-test-agents-${process.pid}`) : fileURLToPath(new URL('../.agents', import.meta.url))
+export function createHeadless({ root = defaultRoot(), command = agentCommand, trees = new PaneProcessTrees(), openTerminal = spawn } = {}) {
   const registry = join(root, 'registry.json')
   const load = () => {
     try { const rows = JSON.parse(readFileSync(registry, 'utf8')); if (!Array.isArray(rows)) throw new Error('Invalid headless registry'); return rows } catch (err) { if (err.code === 'ENOENT') return []; throw err }
