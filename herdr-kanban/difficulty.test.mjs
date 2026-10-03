@@ -27,7 +27,7 @@ test('difficulty defaults, legacy cards, model settings, fallbacks and local opt
   assert.equal(difficultyFromText('**Difficulty:** HARD\r\n'), 'hard')
   assert.equal(difficultyFromText('**Trivial:** yes\r\n'), 'easy')
   assert.equal(difficultyFromText('**Difficulty:** hard\n**Trivial:** yes'), 'hard')
-  assert.equal(builderDifficulty({}), 'medium')
+  assert.equal(builderDifficulty({}), 'easy') // unrated (pre-difficulty) cards stay on Luna, as planned
   for (const [difficulty, model, reasoning] of [['tiny', 'qwen3-coder', 'none'], ['easy', 'gpt-6-luna', 'low'], ['medium', 'claude-sonnet-5-5', 'medium'], ['hard', 'claude-opus-5-5', 'high']]) {
     const config = { agentSettings: { tinyEnabled: true } }
     const setting = assignmentFor(config, { difficulty }, 'working')

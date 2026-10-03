@@ -4,5 +4,5 @@ export function difficultyFromText(text) {
     || (/^\*\*Trivial:\*\*[ \t]*yes[ \t]*\r?$/im.test(text) ? 'easy' : null)
 }
 export function builderDifficulty(card, state = {}) {
-  return DIFFICULTIES[Math.max(DIFFICULTIES.indexOf(card?.difficulty || (card?.trivial ? 'easy' : 'medium')), DIFFICULTIES.indexOf(state.builderDifficulty))]
+  return DIFFICULTIES[Math.max(DIFFICULTIES.indexOf(card?.difficulty || 'easy'), DIFFICULTIES.indexOf(state.builderDifficulty))]
 }
