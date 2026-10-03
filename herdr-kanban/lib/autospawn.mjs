@@ -641,10 +641,10 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
   if (verdict === 'PASS') {
     try {
       assertReviewInputs(reviewRoot, tasksDir, card.id)
-      for (const path of [claim.snapshot.path, claim.integrationPath]) {
-        const head = spawnSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
-        if (head.status !== 0 || head.stdout.trim() !== claim.snapshot.head) throw new Error('Base changed; rerun the Check on current unchanged code')
-      }
+      // Only the checker's own checkout must be unchanged: integration moves all the time on a
+      // busy board, and comparing to it turned almost every PASS into RETRY (2026-10-03).
+      const head = spawnSync('git', ['-C', claim.snapshot.path, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+      if (head.status !== 0 || head.stdout.trim() !== claim.snapshot.head) throw new Error('Checker checkout moved; rerun the Check on its unchanged base')
       if (semanticDirtyFiles(claim.snapshot.path).length) throw new Error('Checker checkout contains code changes or untracked source')
     } catch (err) { verdict = 'RETRY'; evidence = err.message }
   }
@@ -803,7 +803,8 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
 
     const selectedModel = selected?.model ?? model
     const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
-    const reviewerEngine = auditMcpEngine(selectedEngine, cards, tasksDir)
+    // The plan checker only runs the Check; the card's audit MCP tools are for its Builder.
+    const reviewerEngine = planCheck ? selectedEngine : auditMcpEngine(selectedEngine, cards, tasksDir)
     const environment = projectEnvironment(project)
     const prepared = planCheck ? prepareCardWorktree({ projectPath, tasksDir, card: cards[0], gitSettings }) : null
     if (planCheck && !prepared.git) throw new Error('Plan check requires an isolated Git card checkout')

@@ -29,11 +29,17 @@ test('independent plan gate dispatches once, queues PASS, returns FAIL to Planne
   git(['init']); writeFileSync(join(repo, 'app.mjs'), 'export const result = false\n')
   git(['add', 'app.mjs']); git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'base'])
   const head = git(['rev-parse', 'HEAD'])
+  // Integration keeps moving while a checker runs (other cards land): a PASS must still count.
+  const moved = join(root, 'integration')
+  assert.equal(spawnSync('git', ['clone', '-q', repo, moved], { windowsHide: true }).status, 0)
+  writeFileSync(join(moved, 'other.mjs'), 'export const other = 1')
+  assert.equal(spawnSync('git', ['-C', moved, 'add', 'other.mjs'], { windowsHide: true }).status, 0)
+  assert.equal(spawnSync('git', ['-C', moved, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'landed'], { windowsHide: true }).status, 0)
   writeFileSync(join(tasksDir, 'backlog', 'T-1.md'), '# T-1 — checked plan\n**Workflow:** card-owned\n## Approved brief\nMake result true\n## Files\n- `app.mjs` result\n## Implementation plan\nCheck: node -e "assert(result)"\n**Base check:** result is false\n## Acceptance criteria\nResult true\n')
   const inventory = async () => [{ project: 'Proof', tasksDir, known: true, agents: [] }]
   const claim = () => {
     const c = reserveReview(root, { project: 'Proof', tasksDir, cards: ['T-1'], inventory: [{ project: 'Proof', tasksDir, known: true, agents: [] }] })
-    updateReviewClaim(root, c.id, { role: 'plancheck', snapshot: { path: repo, head }, integrationPath: repo,
+    updateReviewClaim(root, c.id, { role: 'plancheck', snapshot: { path: repo, head }, integrationPath: moved,
       inputFingerprints: { 'T-1': evidenceFingerprint(findCard(tasksDir, 'T-1'), repo) } })
     return c
   }
