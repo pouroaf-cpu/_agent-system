@@ -310,7 +310,7 @@ export async function agentList(session, options = {}) {
   }
   try { return [...await interactive(), ...local] } catch (err) {
     // Only an absent server is safe to treat as empty; malformed inventory fails closed.
-    if ((local.length || backendFor('planner') === 'headless' || backendFor('reviewer') === 'headless' || backendFor('plancheck') === 'headless') && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
+    if ((local.length || ['planner', 'builder', 'reviewer', 'plancheck'].some(role => backendFor(role) === 'headless')) && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
     throw err
   }
 }
@@ -397,6 +397,7 @@ const knownWorkspace = new Map() // project session key -> workspace_id
 const workspaceBackoffUntil = new Map() // project session key -> epoch ms
 
 export async function ensureAgentWorkspace(agents = [], log, session) {
+  if (['planner', 'builder', 'reviewer', 'plancheck'].every(role => backendFor(role) === 'headless') && agents.every(a => isHeadless(a.pane_id))) return null
   const label = projectLabel(session) || AGENT_WORKSPACE
   const known = knownWorkspace.get(session ?? '')
   // The label cache (refreshed at least every 30s by agentList) also proves it is

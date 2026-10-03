@@ -6,8 +6,9 @@ import { execFile } from 'node:child_process'
 import { findCard, moveCard, appendReviewPass } from './cards.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
-import { readUsage, recordUsageFinish } from './request-usage.mjs'
+import { readUsage, recordUsageFinish, agentSessionId } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
+import { isHeadless } from './headless.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration } from './worktrees.mjs'
@@ -112,11 +113,11 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       // previous Builder's session (herdr detects Codex sessions by working folder).
       // A recorded session that also belongs to another pane is stale: trust the live
       // agent at this board-named pane instead (Injectbuddy T-148).
-      if (identity && runs.some(r => r.sessionId === identity && r.paneId !== paneId) && agent?.name === builder.name) identity = agent.agent_session?.value
+      if (identity && runs.some(r => r.sessionId === identity && r.paneId !== paneId) && agent?.name === builder.name) identity = agentSessionId(agent?.agent_session?.value ?? agent?.agent_session)
       // Claude runs record no session id at start (herdr learns it later), so every Claude-built
       // card held here and went to Owner (Injectbuddy I265, 2026-09-26). Same trust as above.
-      if (!identity && agent?.name === builder.name) identity = agent.agent_session?.value
-      const matches = a => a?.pane_id === paneId && a.name === builder.name && a.agent_session?.value === identity
+      if (!identity && agent?.name === builder.name) identity = agentSessionId(agent?.agent_session?.value ?? agent?.agent_session)
+      const matches = a => a?.pane_id === paneId && a.name === builder.name && agentSessionId(a?.agent_session?.value ?? a?.agent_session) === identity
       // The handoff already landed and the pane is gone (closed while the card sat in Owner,
       // Tradeflow T-38): there is nothing left to preserve or close, so it counts as retired.
       if (!agent && saved.completedStage === 'working' && !Object.values(readBindings(tasksDir)).some(b => b.pane_id === paneId)) {
@@ -135,7 +136,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       const delivery = readDelivery(session, paneId)
       // A completed hkb done proves the prompt arrived: an 'uncertain' mark from a slow start
       // under load must not hold the merge forever (Tradeflow TF71 went to Owner).
-      if (delivery && !['confirmed', 'cancelled', 'uncertain'].includes(delivery.status)) throw new Error(`${card.id}: unresolved Builder delivery; preserve checkout`)
+      if (delivery && !['confirmed', 'cancelled', 'uncertain'].includes(delivery.status) && !(isHeadless(paneId) && delivery.status === 'launching' && builderHandedOff(tasksDir, card.id))) throw new Error(`${card.id}: unresolved Builder delivery; preserve checkout`)
       const output = await io.paneRead(paneId, session)
       if (!String(output).trim()) throw new Error(`${card.id}: cannot preserve finished output`)
       await io.recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })

@@ -3,6 +3,7 @@
 
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
 import { isHeadless } from './headless.mjs'
+import { backendFor } from './agent-backend.mjs'
 import { workerPrompt, paneLabel, agentName, isCodex } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
@@ -41,9 +42,9 @@ async function waitPaneWorking(paneId, session, { list = agentList, timeoutMs = 
 export function confirmLateDeliveries({ tasksDir, session, agents }) {
   const cleared = []
   for (const agent of agents) {
-    if (agent.agent_status !== 'working') continue
     const delivery = readDelivery(session, agent.pane_id)
-    if (delivery?.status !== 'uncertain') continue
+    const launched = isHeadless(agent.pane_id) && agent.childPid && !agent.error
+    if (!(launched && delivery?.status === 'launching') && !(agent.agent_status === 'working' && delivery?.status === 'uncertain')) continue
     saveDelivery(session, agent.pane_id, { ...delivery, status: 'confirmed', confirmedLate: true })
     const bare = String(agent.pane_id).split('@')[0]
     for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) {
@@ -157,7 +158,7 @@ export async function deliver(paneId, fullText, session, builderGuard = null, { 
   const key = deliveryKey(text)
   const prior = readDelivery(session, paneId)
   if (!force && prior?.key === key && prior.status === 'confirmed') return
-  if (prior?.status === 'uncertain') throw preservePane('Previous delivery is uncertain; verify the existing session before redispatch')
+  if (!isHeadless(paneId) && prior?.status === 'uncertain') throw preservePane('Previous delivery is uncertain; verify the existing session before redispatch')
   if (full) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, full) }
   try {
     assertPromptAllowed(session)
@@ -165,12 +166,13 @@ export async function deliver(paneId, fullText, session, builderGuard = null, { 
       const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
       assertGuardActive(builderGuard, agent?.agent_session)
     }
-    saveDelivery(session, paneId, { text, key, status: 'uncertain', ...(builderGuard ? { builderGuard } : {}), ...(runId ? { runId } : {}) })
+    saveDelivery(session, paneId, { text, key, status: isHeadless(paneId) ? 'launching' : 'uncertain', ...(builderGuard ? { builderGuard } : {}), ...(runId ? { runId } : {}) })
     await deliverWith({ paneId, text, session, engine })
     saveDelivery(session, paneId, { text, key, status: 'confirmed', ...(runId ? { runId } : {}) })
   } catch (err) {
     if (err.paused) saveDelivery(session, paneId, { text, key, status: runId ? 'cancelled' : 'paused', staged: !!err.staged, ...(runId ? { runId } : {}) })
     if (err.unsubmitted) saveDelivery(session, paneId, { text, key, status: 'failed', reason: err.message })
+    if (isHeadless(paneId) && !err.paused) saveDelivery(session, paneId, { text, key, status: 'failed', reason: err.message })
     throw err
   }
 }
@@ -189,7 +191,7 @@ export async function resumeDeliveries(session) {
     const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === pending.paneId)
     if (!agent || !['idle', 'done'].includes(agent.agent_status)) continue
     if (pending.builderGuard) assertGuardActive(pending.builderGuard, agent.agent_session)
-    if (pending.staged) {
+    if (pending.staged && !isHeadless(pending.paneId)) {
       if (!stagedPrompt(await paneRead(pending.paneId, session), pending.text)) continue
       const result = await submitStaged(pending.paneId, pending.text, session, { read: paneRead, sendKeys: paneSendKeys, list: agentList, confirmMs: 10000 })
       saveDelivery(session, pending.paneId, { ...pending, status: result === 'working' ? 'confirmed' : 'uncertain' })
@@ -249,6 +251,7 @@ export const START_TIMEOUT_MS = 240000
 export async function spawnForCard({
   project, projectPath, tasksDir, boardRoot, card, model, engine,
   startTimeoutMs = START_TIMEOUT_MS, onPane, gitSettings, restrictedBuilder = false,
+  guardArgs,
 }) {
   // The project's session key: new tabs open in the project's workspace of the
   // shared session, and a resumed legacy pane still resolves in its old session.
@@ -263,7 +266,8 @@ export async function spawnForCard({
   const prior = saved?.correction?.category === 'implementation' ? saved.builder : null
   // A bare (legacy) pane id resolves in the project's old session and a qualified
   // `id@default` one in the shared session; agentList(session) returns both forms.
-  const resume = prior && (await agentList(session, { ensureSession: false })).find(a => a.pane_id === prior.pane_id && ['done', 'idle'].includes(a.agent_status))
+  const resume = prior && (await agentList(session, { ensureSession: false })).find(a => a.pane_id === prior.pane_id && ['done', 'idle'].includes(a.agent_status) && (!isHeadless(a.pane_id) || a.agent_session))
+  const backend = backendFor('builder')
   // The prior Builder is gone or busy: a fresh Builder continues in the same card
   // worktree (prepareCardWorktree reuses it) with the correction in its prompt.
   const correctionNote = prior && !resume
@@ -272,7 +276,7 @@ export async function spawnForCard({
   if (correctionNote) activityLog({ tasksDir, project, cardId: card.id, event: 'builder-replaced', message: `prior Builder ${prior.pane_id} missing or busy; starting a fresh Builder in ${prepared.workspacePath} for the implementation correction`, level: 'warn' })
   let created
   try {
-    const workspace = await agentWorkspaceOr(projectPath, session)
+    const workspace = backend === 'headless' || (resume && isHeadless(resume.pane_id)) ? null : await agentWorkspaceOr(projectPath, session)
     // How many cards are waiting on this one, so the tab strip says which build
     // matters. Read here rather than passed in: every caller would have to compute
     // the same thing, and the board is already on disk.
@@ -281,7 +285,7 @@ export async function spawnForCard({
     // Codex receives --cd separately: its actual working context must be isolated,
     // while the parent shell stays stable for Windows worktree cleanup.
     const codex = isCodex(engine)
-    created = resume ? { root_pane: resume, tab: { tab_id: resume.tab_id } } : await tabCreate({ cwd: codex ? projectPath : prepared.workspacePath, label: paneLabel(card, holdsUp), focus: false, workspace, session })
+    created = resume ? { root_pane: resume, tab: { tab_id: resume.tab_id } } : await tabCreate({ backend, cwd: backend === 'headless' || !codex ? prepared.workspacePath : projectPath, label: paneLabel(card, holdsUp), focus: false, workspace, session })
   } catch (err) {
     cleanupPreparedWorktree({ tasksDir, prepared })
     throw new Error(`tab create failed: ${err.message}`)
@@ -309,7 +313,7 @@ export async function spawnForCard({
 
   // The shell must be at its prompt before the agent can be started into it.
   try {
-    if (!resume) await waitForPrompt(paneId, { session })
+    if (!resume && !isHeadless(paneId)) await waitForPrompt(paneId, { session })
   } catch (err) {
     await paneClose(paneId, session).catch(() => {})
     cleanupPreparedWorktree({ tasksDir, prepared })
@@ -317,7 +321,7 @@ export async function spawnForCard({
   }
 
   try {
-    if (!resume) name = (await agentStart({ name, paneId, model, engine, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session, browser: needsBrowser(card) }))?.name ?? name
+    if (!resume) name = (await agentStart({ name, paneId, model, engine, guardArgs, workspacePath: prepared.workspacePath, timeoutMs: startTimeoutMs, session, browser: needsBrowser(card) }))?.name ?? name
     const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
     if (agent) onPane?.({ pane_id: paneId, tab_id: tabId, model, name, spawning: true, agent_session: agent.agent_session, ...worktree })
   } catch (err) {
@@ -341,14 +345,21 @@ export async function spawnForCard({
     const environment = gitSettings?.envFile
       ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Signed-in check scripts (DEVTOOLS_TEST_EMAIL) load only .env.devtools.local from the project folder, never together with this envFile: both define the test account and the last --env-file wins. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing.`
       : ''
-    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, engine }) + correctionNote + environment, session, null, { engine })
+    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })
-    throw err
+    throw isHeadless(paneId) ? startFailed(err) : err
   }
 
-  const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
+  let agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
+  // Headless SessionStart arrives after launch, rather than during interactive boot.
+  const deadline = Date.now() + Math.min(startTimeoutMs, 10000)
+  while (isHeadless(paneId) && agent && !agent.agent_session && agent.agent_status === 'working' && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    agent = (await agentList(session).catch(() => [])).find(a => a.pane_id === paneId)
+  }
+  if (isHeadless(paneId) && agent?.agent_session) onPane?.({ pane_id: paneId, tab_id: tabId, model, name, spawning: true, agent_session: agent.agent_session, ...worktree })
   return { pane_id: paneId, tab_id: tabId, model, name, agent_session: agent?.agent_session, ...worktree }
 }
 

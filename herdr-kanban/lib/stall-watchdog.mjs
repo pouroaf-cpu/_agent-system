@@ -15,6 +15,7 @@ import { appendHistory, writeCurrentFeedback, laneEnteredAt, lastBlockerLanded }
 import { readUsage } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
 import { sessionOf } from './herdr.mjs'
+import { isHeadless } from './headless.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
@@ -133,7 +134,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // delivery, not an agent that finished without a handoff.
   const session = sessionOf(basename(resolve(tasksDir, '..')))
   const live = p => agents.some(a => a.pane_id === p && a.agent_status !== 'done')
-  const idleAs = (role, p) => ['uncertain', 'failed'].includes(readDelivery(session, p)?.status) ? `its ${role} ${p} is idle and never accepted its prompt (failed delivery)` : `its ${role} ${p} is idle without a handoff`
+  const idleAs = (role, p) => ['uncertain', 'failed', 'launching'].includes(readDelivery(session, p)?.status) ? `its ${role} ${p} is idle and never accepted its prompt (failed delivery)` : `its ${role} ${p} is idle without a handoff`
   const observed = (card) => {
     if (['planning', 'issues'].includes(card.column)) {
       const p = planners[card.id]?.paneId
@@ -143,6 +144,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     if (['queue', 'working'].includes(card.column)) {
       const p = bindings[card.id]?.pane_id || workflow[card.id]?.builder?.pane_id
       if (!p) return 'no Builder was ever started for this card'
+      if (isHeadless(p) && agents.some(a => a.pane_id === p && a.agent_status === 'done')) return `its Builder ${p} exited without a handoff`
       return live(p) ? idleAs('Builder', p) : `its Builder ${p} is no longer running`
     }
     if (card.column === 'review' && !mine.some(c => c.cards.includes(card.id))) return 'no Reviewer has claimed this card'

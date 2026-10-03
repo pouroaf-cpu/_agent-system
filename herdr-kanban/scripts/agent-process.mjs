@@ -10,4 +10,4 @@ const report = message => { if (process.connected) process.send(message, () => {
 const finished = value => { writeFileSync(spec.exitFile + '.tmp', JSON.stringify(value)); renameSync(spec.exitFile + '.tmp', spec.exitFile) }
 child.once('spawn', () => { report({ pid: child.pid }) })
 child.once('error', err => { console.error(err.message); finished({ exitCode: 1, error: err.message }); report({ error: err.message }); process.exitCode = 1 })
-child.once('exit', (code, signal) => { finished({ exitCode: code ?? 1, signal }); process.exitCode = code ?? 1 })
+child.once('exit', (code, signal) => { finished({ exitCode: code ?? 1, signal, childPid: child.pid }); process.exitCode = code ?? 1 })

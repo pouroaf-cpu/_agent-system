@@ -3,7 +3,7 @@ import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, builderIssue } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, builderIssue, builderHandedOff } from './card-history.mjs'
 import { looksLikeAQuestion, lastAgentMessage } from './agent-question.mjs'
 import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
@@ -18,7 +18,7 @@ import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
-import { spawnForCard, deliver, unsubmittedDelivery, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, recordPlanCheckRetry } from './spawn.mjs'
+import { spawnForCard, deliver, unsubmittedDelivery, confirmLateDeliveries, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, recordPlanCheckRetry } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
@@ -26,6 +26,7 @@ import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
 import { backendFor } from './agent-backend.mjs'
+import { isHeadless } from './headless.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
@@ -64,7 +65,7 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     recordStartFailure(tasksDir, card.id, 'builder', 'Builder startup interrupted before prompt delivery')
     return moved
   }
-  if (delivery?.status === 'uncertain' || unsubmittedDelivery(evidence)) {
+  if (delivery?.status === 'failed' || (isHeadless(paneId) && delivery?.status === 'launching') || (!isHeadless(paneId) && (delivery?.status === 'uncertain' || unsubmittedDelivery(evidence)))) {
     if (delivery) io.saveDelivery(session, paneId, { ...delivery, status: 'failed', reason: 'Uncertain or unsubmitted delivery resolved as failed; a fresh Builder takes over' })
     unbind(tasksDir, card.id)
     const moved = moveCard(tasksDir, card.id, 'queue')
@@ -106,6 +107,37 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   requestPlannerCorrection(tasksDir, card.id, { failure: true })
   return moved
+}
+
+// A process exit is definitive: no pane-idle grace or Enter recovery applies.
+// Keep the existing routing and counters, including an interrupted hkb handoff.
+export async function reconcileBuilderExits({ tasksDir, project, agents, boardRoot, now = Date.now() }) {
+  const results = [], session = sessionOf(project)
+  confirmLateDeliveries({ tasksDir, session, agents })
+  for (const [cardId, binding] of Object.entries(readBindings(tasksDir))) {
+    if (!isHeadless(binding.pane_id) || isSpawning(binding.pane_id)) continue
+    if (binding.spawning && now - Date.parse(binding.started) < 300000) continue
+    const agent = agents.find(a => a.pane_id === binding.pane_id)
+    if (!agent || agent.agent_status !== 'done') continue
+    try {
+      const card = findCard(tasksDir, cardId)
+      if (card.column !== 'working') continue
+      const evidence = await paneRead(binding.pane_id, session)
+      const handedOff = builderHandedOff(tasksDir, cardId)
+      await recordUsageFinish({ tasksDir, paneId: binding.pane_id, binding, agent, status: handedOff ? 'complete' : 'ambiguous' }).catch(() => {})
+      let routed
+      if (handedOff) {
+        routed = moveCard(tasksDir, cardId, 'completed')
+        updateWorkflow(tasksDir, cardId, { completedStage: 'working', completedAt: new Date(now).toISOString() })
+        unbind(tasksDir, cardId)
+      } else {
+        routed = routeBuilderNoHandoff({ tasksDir, cardId, reason: `Session ${binding.pane_id} exited with code=${agent.exitCode ?? 'unknown'} without a valid Builder handoff from Working`, evidence, boardRoot, engine: binding.engine, model: binding.model, session, now })
+      }
+      if (routed.column === 'queue') await paneClose(binding.pane_id, session).catch(() => {})
+      results.push({ id: cardId, to: routed.column })
+    } catch (err) { results.push({ id: cardId, status: 'held', reason: err.message }) }
+  }
+  return results
 }
 
 // A spawn blocks for ~55s. Without this, every 2s agent poll would start another.

@@ -55,11 +55,12 @@ test('headless launch, registry restart, full prompt argv, session resume and ex
 })
 
 test('Claude and Codex argv preserve model, permission flags and resume settings', () => {
-  const options = { name: 'r-T-01', paneId: 'headless-test', model: 'gpt-6-luna', workspacePath: 'C:/checkout', engine: { kind: 'codex', sandbox: 'read-only', approvalPolicy: 'never', reasoningArgs: ['-c', 'model_reasoning_effort="low"'] } }
+  const options = { name: 'r-T-01', paneId: 'headless-test', model: 'gpt-6-luna', workspacePath: 'C:/checkout', guardArgs: ['-c', 'features.multi_agent=false'], engine: { kind: 'codex', sandbox: 'read-only', approvalPolicy: 'never', reasoningArgs: ['-c', 'model_reasoning_effort="low"'] } }
   const args = launchArgs(options, 'task', 'session')
   assert.deepEqual(args.slice(0, 3), ['--ask-for-approval', 'never', 'exec'])
   assert(args.includes('--sandbox')); assert(args.includes('read-only'))
   assert(args.includes('gpt-6-luna')); assert(args.includes('model_reasoning_effort="low"'))
+  assert(args.includes('features.multi_agent=false'))
   assert.deepEqual(args.slice(-4), ['--json', 'resume', 'session', 'task'])
   const claude = launchArgs({ name: 'r-T-01', paneId: 'headless-test', engine: 'claude', model: 'claude-sonnet-5' }, 'task', 'session')
   assert.deepEqual(claude.slice(0, 5), ['-p', 'task', '--output-format', 'stream-json', '--verbose'])
@@ -109,7 +110,7 @@ test('Claude process tree closes, launch failures surface, pause blocks dispatch
   }
 })
 
-test('backend validation and live role selection keep phase 2 boundaries', () => {
+test('backend validation and live role selection include Builders', () => {
   const root = mkdtempSync(join(tmpdir(), 'backend-')), config = join(root, 'config.json'), old = process.env.KANBAN_CONFIG
   process.env.KANBAN_CONFIG = config
   try {
@@ -118,7 +119,7 @@ test('backend validation and live role selection keep phase 2 boundaries', () =>
     writeFileSync(config, JSON.stringify({ agentBackend: { reviewer: 'headless', plancheck: 'headless' } }))
     assert.equal(backendFor('reviewer'), 'headless'); assert.equal(backendFor('plancheck'), 'headless'); assert.equal(backendFor('builder'), 'herdr')
     writeFileSync(config, JSON.stringify({ agentBackend: 'headless' }))
-    assert.equal(backendFor('planner'), 'headless'); assert.equal(backendFor('builder'), 'herdr'); assert.equal(backendFor('reviewer'), 'headless')
+    assert.equal(backendFor('planner'), 'headless'); assert.equal(backendFor('builder'), 'headless'); assert.equal(backendFor('reviewer'), 'headless')
     writeFileSync(config, JSON.stringify({ agentBackend: 'herdr' })); assert.equal(backendFor('reviewer'), 'herdr')
   } finally { if (old === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = old; rmSync(root, { recursive: true, force: true }) }
 })

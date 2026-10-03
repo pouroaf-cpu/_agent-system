@@ -31,6 +31,7 @@ export function agentSessionId(agentOrSession) {
   if (!agentOrSession) return null
   if (typeof agentOrSession === 'string') return agentOrSession
   const s = agentOrSession.agent_session || agentOrSession.session || agentOrSession
+  if (typeof agentOrSession.agent_session === 'string') return agentOrSession.agent_session
   return ['codex', 'claude'].includes(s?.agent) || ['herdr:codex', 'herdr:claude'].includes(s?.source) ? s.value || null : null
 }
 
@@ -216,7 +217,10 @@ export function recordUsageStart({ tasksDir, project, requestId, cardIds, role, 
   const resolvedRequestId = parentResolution.complete && parents.length === 1 ? parents[0] : requestId
   // Boot reports the same assignment twice: provisional pane, then session identity.
   const existing = Object.values(all.runs).find(r => !r.finish && r.paneId === paneId && paneId && r.role === role && r.requestId === resolvedRequestId)
-  if (existing) return existing
+  if (existing) {
+    if (sessionId && !existing.sessionId) { existing.sessionId = sessionId; existing.status = 'running'; write(tasksDir, all) }
+    return existing
+  }
   const unresolvedBatch = !parentResolution.complete && (cardIds || []).length > 1
   const crossRequestBatch = unresolvedBatch || parents.length > 1
   const overlapping = !!sessionId && Object.values(all.runs).some((r) => !r.finish && r.sessionId === sessionId)

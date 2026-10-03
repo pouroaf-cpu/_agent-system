@@ -109,11 +109,12 @@ export function createHeadless({ root = fileURLToPath(new URL('../.agents', impo
       try {
         child = spawn(process.execPath, [supervisor, spec], { cwd: row.cwd, detached: true, stdio: ['ignore', fd, fd, 'ipc'], windowsHide: true, env: { ...herdr.cleanEnv(), PATH: herdr.boardAgentPath(), BOARD_AGENT_ID: id, HERDR_PANE_ID: id } })
         // Record the detached supervisor before waiting for its launch acknowledgement.
-        patch(id, { pid: child.pid || null, startedAt: new Date().toISOString(), exitCode: null, exitFile: turnExit, sessionId: row.sessionId, closedAt: null })
+        patch(id, { pid: child.pid || null, childPid: null, error: null, startedAt: new Date().toISOString(), exitCode: null, exitFile: turnExit, sessionId: row.sessionId, closedAt: null })
         const launched = await new Promise((resolve, reject) => { child.once('error', reject); child.once('message', msg => msg.error ? reject(new Error(msg.error)) : resolve(msg)); child.once('exit', code => reject(new Error(`Agent launch exited ${code}`))) })
         patch(id, { pid: child.pid, childPid: launched.pid, startedAt: new Date().toISOString(), exitCode: null, exitFile: turnExit, sessionId: row.sessionId })
         child.disconnect(); child.unref()
-        if (!alive(launched.pid)) throw new Error('Agent exited before delivery confirmation')
+        // The supervisor acknowledged spawn with the full prompt; a fast exit is
+        // a completed turn, not an uncertain delivery.
         return { delivered: true, pid: child.pid }
       } finally { if (child?.connected) child.disconnect(); child?.unref(); closeSync(fd) }
     },

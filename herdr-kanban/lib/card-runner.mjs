@@ -9,6 +9,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { autoSpawn, spawnReviewer, needsPlanCheck, unmetBlockers, startHoldReason, routeReviewVerdicts } from './autospawn.mjs'
 import { activeCardRun, pausedRunEnvironment, stopCardRun, withCardRunAssignment, interruptedCardRun } from './card-run.mjs'
 import { sessionOf } from './herdr.mjs'
+import { isHeadless } from './headless.mjs'
 import { reviewClaimFor } from './review-claims.mjs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -80,6 +81,7 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
       const agent = agents.find(a => a.pane_id === stage.paneId)
       if (!agent || agent.agent_status === 'blocked' || agent.agent_status === 'unknown') return stop('Assigned session missing or blocked; preserved for diagnosis')
       if (['done', 'idle'].includes(agent.agent_status)) {
+        if (role === 'builder' && isHeadless(stage.paneId) && agent.agent_status === 'done') return stop('Agent ended without the required handoff; no retry')
         const since = idleSince.get(stage.assignmentId) ?? Date.now()
         idleSince.set(stage.assignmentId, since)
         if (Date.now() - since >= 120000) return stop('Agent ended without the required handoff; no retry')

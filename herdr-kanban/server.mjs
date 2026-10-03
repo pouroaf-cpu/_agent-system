@@ -49,7 +49,7 @@ const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mj
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -221,6 +221,7 @@ function tripBreakerIfNeeded(project) {
 // project: a slow herdr otherwise got one call per request and slowed further.
 const agentPolls = new Map()
 const usagePolls = new Map()
+const exitHolds = new Map() // project/card -> last logged headless exit hold
 const emptyPolls = new Map()
 function pollAgents(project) {
   if (!agentPolls.has(project)) agentPolls.set(project, pollAgentsNow(project).finally(() => agentPolls.delete(project)))
@@ -548,6 +549,9 @@ async function pollProject(project) {
       try {
     // Only herdr knows a pane died; drop bindings it no longer lists, then
     // deterministically recover its worktree instead of leaving Working stuck.
+    const exits = await reconcileBuilderExits({ tasksDir, project, agents, boardRoot: HERE })
+    // Log a held exit once per reason, not every poll.
+    for (const result of exits) if (result.status === 'held' && exitHolds.get(`${project}/${result.id}`) !== result.reason) { exitHolds.set(`${project}/${result.id}`, result.reason); activity(project, result.id, 'block', `recovery needs attention: ${result.reason}`, 'error') }
     const beforeReap = readBindings(tasksDir)
     const starting = binding => isSpawning(binding.pane_id) || (binding.spawning && Date.now() - Date.parse(binding.started) < 300000)
     const reaped = Object.entries(beforeReap).filter(([, binding]) => !agents.some(agent => agent.pane_id === binding.pane_id) && !starting(binding)).map(([id]) => id)
@@ -582,7 +586,7 @@ async function pollProject(project) {
       }
     }
     const recoverIds = [...new Set([...reaped, ...staleFinished, ...orphaned])]
-    dirty = recoverIds.length > 0
+    dirty = exits.length > 0 || recoverIds.length > 0
     for (const id of recoverIds) {
       recordUsageFinish({ tasksDir, paneId: beforeReap[id]?.pane_id, binding: beforeReap[id], status: 'ambiguous' }).catch(() => {})
       try {

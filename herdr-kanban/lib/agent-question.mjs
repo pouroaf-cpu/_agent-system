@@ -12,6 +12,11 @@ export const looksLikeAQuestion = (text) => ASKS.test(String(text ?? ''))
 // "Worked for" line and the input footer. Plain text without bullets is returned as is.
 // ponytail: TUI-layout parse; update if Codex or Claude change their pane format.
 export function lastAgentMessage(pane) {
+  const events = String(pane ?? '').split('\n').flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+  if (events.some(e => e.type)) {
+    const messages = events.flatMap(e => e.type === 'assistant' ? (e.message?.content || []).filter(c => c.type === 'text').map(c => c.text) : e.type === 'item.completed' && e.item?.type === 'agent_message' ? [e.item.text] : [])
+    return messages.at(-1) || ''
+  }
   const text = String(pane ?? '').split(/\n\s*(?:─ )?Worked for |\n\s*[›>] /)[0]
   const blocks = text.split(/\n(?=[•●] )/)
   if (blocks.length < 2 && !/^[•●] /.test(text.trim())) return text.trim()
