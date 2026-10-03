@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recordBuilderReturn } from './lib/workflow-state.mjs'
 import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 // hkb — the one command a working agent runs to report back.
 //
@@ -290,6 +291,7 @@ try {
     const prior = readWorkflow(tasksDir)[current.id]?.correction
     const repeat = current.column === 'working' && category === 'implementation' && prior?.category === 'implementation' && prior.plan === plan
     if (repeat) target = 'planning'
+    if (current.column === 'working') recordBuilderReturn(tasksDir, current, note)
     appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note, ...(repeat ? { routed: 'planning: second Builder implementation failure on the same plan' } : {}) })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note, plan } })

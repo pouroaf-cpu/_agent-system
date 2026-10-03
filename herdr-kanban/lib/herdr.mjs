@@ -476,7 +476,7 @@ const BOARD_MODELS = {
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   i: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-opus-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
   p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  b: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+  b: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5', 'qwen3-coder', 'claude-opus-5-5'],
 }
 
 export function approvedManagedModel(name) {
@@ -526,6 +526,10 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     // Browser MCPs start ~4 node processes per Codex agent; 27 idle agents' worth
     // overloaded herdr (2026-09-24). Agents whose cards don't browse start without them.
     if (!browser) for (const server of ['chrome-devtools', 'playwright', 'node_repl']) args.push('-c', `mcp_servers.${server}.enabled=false`)
+    if (model === 'qwen3-coder') {
+      if (cfg.localProvider !== 'ollama') throw new Error('qwen3-coder requires the enabled local Ollama assignment')
+      args.push('--oss', '--local-provider', 'ollama')
+    }
     if (model) args.push('--model', model)
     if (Array.isArray(cfg.reasoningArgs)) args.push(...cfg.reasoningArgs.map(String))
     args.push(...guardArgs)

@@ -10,6 +10,7 @@ import { join } from 'node:path'
 // Reviewer spawns talk to HERDR and the global claim ledger; fake both.
 const herdr = { closed: [], startError: null }
 mock.module('./lib/herdr.mjs', { namedExports: {
+  approvedManagedModel: () => null,
   sessionOf: p => String(p).toLowerCase(), herdrLog: () => {}, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => true,
   tabCreate: async () => ({ root_pane: { pane_id: 'r1' }, tab: { tab_id: 't1' } }),
   agentStart: async () => { if (herdr.startError) throw new Error(herdr.startError) },

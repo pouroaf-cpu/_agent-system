@@ -52,7 +52,7 @@ test('UTC metrics count fixture logs once, refresh appended/replaced files, and 
   t.mock.method(Date, 'now', () => clock)
   const rows = await dailyMetrics(tasks, 7, now)
   assert.equal(rows.length, 7)
-  assert.deepEqual(rows[0], { day: '2026-10-03', integrated: 1, archived: 2, finished: 2,
+  assert.deepEqual(rows[0], { builderDifficulty: Object.fromEntries(['tiny', 'easy', 'medium', 'hard'].map(d => [d, { attempts: 0, kickBacks: 0 }])), day: '2026-10-03', integrated: 1, archived: 2, finished: 2,
     kickBacks: { planning: 1, implementation: 1, evidence: 1, operational: 1, untagged: 1, total: 5 },
     builderDeliveryFailed: 1, builderNoHandoff: 1, plannerFailures: 5, stalls: 2, ownerEscalations: 1, kickBacksPerFinishedCard: 2.5 })
   assert.equal(rows[1].day, '2026-10-02')

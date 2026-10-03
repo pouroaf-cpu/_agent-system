@@ -488,6 +488,9 @@ function cardNode(card) {
   const holdsUp = allCards().filter(c => (c.blockedBy || []).includes(card.id)).length;
   if (holdsUp) bit('holds ' + holdsUp, holdsUp + ' card' + (holdsUp === 1 ? '' : 's') + ' cannot start until this one lands');
   // A card that failed to start is still queued, but it is on its second go.
+  const levels = ['tiny', 'easy', 'medium', 'hard'];
+  const difficulty = levels[Math.max(levels.indexOf(card.difficulty || 'medium'), levels.indexOf(state.workflow?.[card.id]?.builderDifficulty))];
+  bit('difficulty ' + difficulty, card.difficulty && card.difficulty !== difficulty ? 'Planned ' + card.difficulty + '; Builder stepped up to ' + difficulty : 'Builder difficulty');
   const retry = state.retries?.[card.id]?.attempts || 0;
   if (retry) bit('retry ' + retry + '/3', 'Failed to start ' + retry + ' time' + (retry === 1 ? '' : 's'));
   const usage = state?.cardUsage?.[card.id];
@@ -1252,11 +1255,15 @@ function renderManagerTasksScreen() {
   ah.textContent = 'Agent execution';
   const ap = document.createElement('p');
   ap.className = 'settings-help';
-  ap.textContent = 'Manual choices apply to new assignments only. Running agents keep their saved launch settings; the board never fails over automatically.';
+  ap.textContent = 'Choices apply to new assignments. Builders step up after failed returns; fallback models handle usage limits.';
   wrap.append(ah, ap);
+  const tiny = document.createElement('label');
+  const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = state.config?.tinyEnabled === true;
+  enabled.addEventListener('change', () => saveConfig({ agentSettings: { tinyEnabled: enabled.checked } }));
+  tiny.append(enabled, ' Enable local tiny Builders (Ollama)'); wrap.append(tiny);
   const stages = state.config?.agentSettings || {};
   const catalog = state.config?.supportedAgentSettings || {};
-  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) {
+  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) {
     const current = stages[stage] || {};
     const line = document.createElement('div'); line.className = 'settings-agent-row';
     const title = document.createElement('strong'); title.textContent = label;
@@ -2807,7 +2814,7 @@ function renderDrawer() {
   const grid = document.createElement('div');
   grid.className = 'override-grid';
   const stagePick = document.createElement('select');
-  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
+  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
   const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
   stagePick.setAttribute('aria-label', 'Stage'); oe.setAttribute('aria-label', 'Engine'); om.setAttribute('aria-label', 'Model'); or.setAttribute('aria-label', 'Reasoning');
   os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';

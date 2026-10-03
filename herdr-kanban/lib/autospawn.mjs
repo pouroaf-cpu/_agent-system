@@ -1,3 +1,6 @@
+import { builderDifficulty } from './difficulty.mjs'
+import { engineForAssignment } from './agent-settings.mjs'
+import { recordBuilderAttempt, recordBuilderReturn } from './workflow-state.mjs'
 import { formatNZTime } from './nz-time.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
@@ -88,6 +91,7 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   if (issue) { reason = `Builder reported: ${issue.note}`; evidence = '' }
   const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
   unbind(tasksDir, card.id)
+  recordBuilderReturn(tasksDir, card, detail)
   const moved = moveCard(tasksDir, card.id, 'planning')
   // Nobody reads a stopped Builder's pane, so a question or blocker left there as plain
   // text otherwise just gets requeued/replanned into the same silence (38 of the last 100
@@ -282,7 +286,7 @@ export function routeMutualHolds(tasksDir, held, log) {
 const holderOf = (board) => [...board.working, ...board.review].map((c) => c.id)
 
 // Returns the ids it started. Safe to call on every board change and agent poll.
-export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, trivialModel = model, trivialEngine = engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, stallSeconds = 300, now = Date.now(), spawn = spawnForCard }) {
+export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, stallSeconds = 300, now = Date.now(), spawn = spawnForCard }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'builder')
   if (spawn === spawnForCard && controlState(project).paused && !cardRunContext()) return []
   // Zero capacity (breaker tripped, builders switched off) is an operator pause, not a card hold.
@@ -306,11 +310,11 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       fresh ??= readBoard(tasksDir)
       const freshCard = fresh.queue.find((c) => c.path === card.path)
       if (!freshCard) continue
-      const primary = assignmentForCard?.(freshCard, freshCard.trivial ? 'trivial' : 'working')
-      const choice = selectQuotaAssignment(boardRoot, primary ?? { engine: engineKind(freshCard.trivial ? trivialEngine : engine), model: freshCard.trivial ? trivialModel : model }, now)
+      const primary = assignmentForCard?.(freshCard, 'working')
+      const choice = selectQuotaAssignment(boardRoot, primary ?? { engine: engineKind(engine), model }, now)
       const selected = primary ? choice.assignment : null
-      const selectedModel = selected?.model ?? (freshCard.trivial ? trivialModel : model)
-      const selectedEngine = selected?.engine ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : (freshCard.trivial ? trivialEngine : engine)
+      const selectedModel = selected?.model ?? model
+      const selectedEngine = selected?.engine ? engineForAssignment(selected) : engine
       const limit = checkWorkflowLimits(tasksDir, freshCard.id, 'builder')
       let operational = operationalHold(tasksDir, freshCard, projectPath, gitSettings)
       // A Builder prompt lost on a slow start (pane never went working, card back in Queue) is a
@@ -393,6 +397,9 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
       // Move first so the card is visibly in Working for the ~55s the spawn takes.
       appendBuildAttempt(freshCard)
       const moved = moveCard(tasksDir, freshCard.id, 'working')
+      const plannedDifficulty = builderDifficulty(freshCard, readWorkflow(tasksDir)[freshCard.id])
+      const difficulty = primary?.difficulty || plannedDifficulty
+      recordBuilderAttempt(tasksDir, moved, difficulty)
       fresh = null
       try {
         const result = await spawn({
@@ -402,7 +409,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
             try {
               recordUsageStart({
                 tasksDir, project, requestId: moved.id, cardIds: [moved.id], role: 'builder',
-                paneId: provisional.pane_id, tabId: provisional.tab_id, model: selectedModel, name: provisional.name,
+                paneId: provisional.pane_id, tabId: provisional.tab_id, model: selectedModel, name: provisional.name, difficulty,
                 agentSession: provisional.agent_session,
               })
             } catch {}

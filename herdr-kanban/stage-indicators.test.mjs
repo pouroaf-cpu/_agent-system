@@ -7,7 +7,8 @@ import { stageIndicators } from './lib/stage-indicators.mjs'
 const dir = mkdtempSync(join(tmpdir(), 'kanban-indicators-'))
 try {
   const path = join(dir, 'T-1.md')
-  const plan = `**Plan readiness:** investigation\n**Investigation approved:** yes\n## Approved brief\nMeasure the issue.\n## Files\n- \`evidence/\`\n## Implementation plan\nMeasurement command: node measure.mjs\nExpected result: record timing\nStop rules: stop if unavailable\n## Acceptance criteria\n- Measurement saved.\n`
+  const plan = `**Difficulty:** medium
+**Plan readiness:** investigation\n**Investigation approved:** yes\n## Approved brief\nMeasure the issue.\n## Files\n- \`evidence/\`\n## Implementation plan\nMeasurement command: node measure.mjs\nExpected result: record timing\nStop rules: stop if unavailable\n## Acceptance criteria\n- Measurement saved.\n`
   writeFileSync(path, plan)
   const card = (id, column, file = path) => ({ id, column, path: file })
   const board = { planning: [card('T-1', 'planning')], review: [], issues: [], owner: [] }

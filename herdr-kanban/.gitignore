@@ -1,6 +1,7 @@
 node_modules/
 .agents/
 !PLAN-CHECKER.md
+!PLANNER-DIFFICULTY.md
 *.log
 .board.json
 .board-retries.json

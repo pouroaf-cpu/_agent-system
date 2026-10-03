@@ -1,4 +1,6 @@
 const headings = ['NZ reporting period', 'Integrated', 'Archived', 'Finished', 'Kick-backs', '[planning]', '[implementation]', '[evidence]', '[operational]', 'Untagged', 'Delivery failed', 'No handoff', 'Planner failures', 'Stalls', 'Owner escalations', 'Kick-backs / finished']
+const difficulties = ['tiny', 'easy', 'medium', 'hard']
+headings.push(...difficulties.flatMap(d => [`${d} attempts`, `${d} kick-backs`]))
 async function get(url) {
   const response = await fetch(url)
   const data = await response.json()
@@ -31,7 +33,8 @@ async function refresh() {
           const cells = [formatNZTime(row.day + 'T00:00:00Z') + ' – ' + formatNZTime(Date.parse(row.day + 'T00:00:00Z') + 86400000), row.integrated, row.archived, row.finished, row.kickBacks.total,
             ...['planning', 'implementation', 'evidence', 'operational', 'untagged'].map(tag => row.kickBacks[tag]),
             row.builderDeliveryFailed, row.builderNoHandoff, row.plannerFailures, row.stalls, row.ownerEscalations,
-            row.kickBacksPerFinishedCard == null ? '—' : row.kickBacksPerFinishedCard.toFixed(2)]
+            row.kickBacksPerFinishedCard == null ? '—' : row.kickBacksPerFinishedCard.toFixed(2),
+            ...difficulties.flatMap(d => [row.builderDifficulty?.[d]?.attempts || 0, row.builderDifficulty?.[d]?.kickBacks || 0])]
           const tr = body.insertRow()
           for (const value of cells) tr.insertCell().textContent = value
         }

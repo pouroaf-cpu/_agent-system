@@ -1,3 +1,4 @@
+import { DIFFICULTIES } from './difficulty.mjs'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
@@ -206,7 +207,7 @@ function parentRequestResolution(tasksDir, cardIds = []) {
   return { parents, complete: true }
 }
 
-export function recordUsageStart({ tasksDir, project, requestId, cardIds, role, paneId, tabId, model, name, agentSession, now = new Date(), root }) {
+export function recordUsageStart({ tasksDir, project, requestId, cardIds, role, paneId, tabId, model, name, difficulty, agentSession, now = new Date(), root }) {
   const sessionId = agentSessionId(agentSession)
   const at = now.toISOString()
   const all = readUsage(tasksDir)
@@ -232,7 +233,7 @@ export function recordUsageStart({ tasksDir, project, requestId, cardIds, role, 
     all.runs[runId] = {
       runId, sessionId, project, requestId: resolvedRequestId, sourceRequestId: requestId, parentRequestIds: parents,
       cardIds: cardIds || (requestId ? [requestId] : []), role,
-      paneId, tabId, model, name, status: sessionId ? 'running' : 'unknown_session',
+      paneId, tabId, model, name, difficulty, status: sessionId ? 'running' : 'unknown_session',
       shared: overlapping || crossRequestBatch,
       sharedReason: crossRequestBatch ? (parents.length > 1 ? 'cross_request_batch' : 'unknown_parent_batch') : (overlapping ? 'overlapping_session' : null),
       start: { at, cursorOrdinal: sessionId ? latestEventOrdinal(sessionId, { root }) : null, ...(sessionId ? latestTokenSnapshot(sessionId, { root }) : { counters: null, missing: true }) },
@@ -240,6 +241,16 @@ export function recordUsageStart({ tasksDir, project, requestId, cardIds, role, 
   }
   write(tasksDir, all)
   return all.runs[runId]
+}
+
+// Keep the attempted level even when replanning or escalation changes the card.
+export function recordUsageBuilderReturn(tasksDir, cardId, difficulty) {
+  const all = readUsage(tasksDir)
+  const run = Object.values(all.runs).filter(r => r.role === 'builder' && r.cardIds?.includes(cardId) && !r.duplicateOf).at(-1)
+  if (!run) return
+  run.difficulty ||= difficulty
+  run.kickBack = true
+  write(tasksDir, all)
 }
 
 function activeMatches(all, { runId, paneId, sessionId }) {
@@ -329,9 +340,13 @@ export function usageSummary(tasksDir, { root } = {}) {
     if (run.duplicateOf) continue
     const keys = run.parentRequestIds?.length > 1 ? run.parentRequestIds : [run.requestId || run.role || 'unknown']
     for (const key of keys) {
-      const row = out[key] ?? { requestId: key, runs: 0, active: 0, ambiguous: 0, interrupted: 0, pending: 0, shared: 0, unknown: 0, tokens: null, sharedTokens: null, agents: [] }
+      const row = out[key] ?? { requestId: key, runs: 0, active: 0, ambiguous: 0, interrupted: 0, pending: 0, shared: 0, unknown: 0, tokens: null, sharedTokens: null, agents: [], builderDifficulty: Object.fromEntries(DIFFICULTIES.map(d => [d, { attempts: 0, kickBacks: 0 }])) }
       const shared = !!run.shared || keys.length > 1
       row.runs++
+      if (run.role === 'builder' && DIFFICULTIES.includes(run.difficulty)) {
+        row.builderDifficulty[run.difficulty].attempts++
+        if (run.kickBack) row.builderDifficulty[run.difficulty].kickBacks++
+      }
       if (!run.finish) row.active++
       if (run.status === 'pending_final') row.pending++
       if (run.status === 'ambiguous') row.ambiguous++
@@ -341,7 +356,7 @@ export function usageSummary(tasksDir, { root } = {}) {
       else if (run.delta) row.tokens = addCounters(row.tokens, run.delta)
       else row.unknown++
       row.agents.push({
-        runId: run.runId, sessionId: run.sessionId, role: run.role, model: run.model, name: run.name,
+        runId: run.runId, sessionId: run.sessionId, role: run.role, model: run.model, name: run.name, difficulty: run.difficulty, kickBack: !!run.kickBack,
         status: run.status, shared, sharedReason: run.sharedReason || (keys.length > 1 ? 'cross_request_batch' : null),
         tokens: shared ? null : (run.delta || null), sharedTokens: shared ? (run.delta || null) : null,
         sourceRequestId: run.sourceRequestId || null, parentRequestIds: run.parentRequestIds || [],

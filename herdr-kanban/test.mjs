@@ -1,3 +1,4 @@
+import { assignmentFor } from './lib/agent-settings.mjs'
 // node --test test.mjs
 import { readWorkflow } from './lib/workflow-state.mjs'
 import { test } from 'node:test'
@@ -831,12 +832,12 @@ test('trivial cards use the lightweight builder model and engine', async () => {
   await autoSpawn({
     project: 'test', projectPath: root, tasksDir: tasks, boardRoot: root,
     model: 'gpt-5.5', engine: { kind: 'codex', reasoningArgs: ['high'] },
-    trivialModel: 'gpt-5.6-luna', trivialEngine: { kind: 'codex', reasoningArgs: ['low'] },
+    assignmentForCard: (card, stage) => assignmentFor({}, card, stage),
     agents: [], max: 1,
     spawn: async (args) => { seen = args; return { pane_id: 'w1:p1', name: 'kb-t-04' } },
   })
-  assert.equal(seen.model, 'gpt-5.6-luna')
-  assert.deepEqual(seen.engine.reasoningArgs, ['low'])
+  assert.equal(seen.model, 'gpt-6-luna')
+  assert.deepEqual(seen.engine.reasoningArgs, ['-c', 'model_reasoning_effort="low"'])
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -1770,7 +1771,7 @@ test('running manager poll with cap zero leaves disposable Planned and Completed
     maxConcurrentAgents: 0,
     cardColumn: 'completed',
     cards: { 'T-40-done.md': '# T-40 — Done\n\n## Evidence\n\nBuilder notes.\n' },
-    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Priority** 9/10\n' } },
+    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Difficulty:** easy\n**Priority** 9/10\n' } },
   })
   try {
     await delay(250)
@@ -1790,7 +1791,7 @@ test('running manager poll promotes Planned to Builder and Completed to independ
     maxConcurrentAgents: 1,
     cardColumn: 'completed',
     cards: { 'T-40-done.md': '# T-40 — Done\n\n**Workflow:** card-owned\n**Auto-review:** yes\n\n## Evidence\n\nBuilder notes.\n' },
-    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Priority** 9/10\n' } },
+    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Difficulty:** easy\n**Priority** 9/10\n' } },
   })
   try {
     await waitUntil(() => {
@@ -1820,7 +1821,7 @@ test('autoQueuePlanned promotes Planned in auto mode without auto-reviewing Comp
     maxConcurrentAgents: 1,
     cardColumn: 'completed',
     cards: { 'T-40-done.md': '# T-40 — Done\n\n## Evidence\n\nBuilder notes.\n' },
-    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Priority** 9/10\n' } },
+    extra: { backlog: { 'T-41-planned.md': '# T-41 — Planned\n\n**Difficulty:** easy\n**Priority** 9/10\n' } },
   })
   try {
     await waitUntil(() => readBoard(run.tasks).working.some((c) => c.id === 'T-41'), 'autoQueuePlanned promotion')

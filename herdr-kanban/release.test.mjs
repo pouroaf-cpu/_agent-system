@@ -106,7 +106,7 @@ test('readiness waits on a working Builder, an unintegrated Completed card and a
   assert.deepEqual(releaseWaiting({ tasksDir, agents: [{ pane_id: 'p1', agent_status: 'idle' }], herdrUp: true }), [])
 
   const done = createCard(tasksDir, { title: 'done', brief: 'd' })
-  writeFileSync(done.path, readFileSync(done.path, 'utf8').replace('**Trivial:** no', '**Trivial:** yes'))
+  writeFileSync(done.path, readFileSync(done.path, 'utf8') + '\n**Trivial:** yes\n')
   moveCard(tasksDir, done.id, 'completed')
   updateWorktree(tasksDir, done.id, { cardId: done.id, state: 'ready' })
   assert.match(releaseWaiting({ tasksDir, agents: [], herdrUp: true }).join(), new RegExp(`${done.id}.*not integrated`))

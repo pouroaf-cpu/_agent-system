@@ -1,10 +1,11 @@
+import { DIFFICULTIES } from './difficulty.mjs'
 import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 const projects = new Map()
 const tags = ['planning', 'implementation', 'evidence', 'operational', 'untagged']
-const empty = () => ({ integrated: new Set(), archived: new Set(), kickBacks: Object.fromEntries(tags.map(tag => [tag, 0])), builderDeliveryFailed: 0, builderNoHandoff: 0, plannerFailures: 0, stalls: 0, ownerEscalations: 0 })
+const empty = () => ({ builderDifficulty: Object.fromEntries(DIFFICULTIES.map(d => [d, { attempts: 0, kickBacks: 0 }])), integrated: new Set(), archived: new Set(), kickBacks: Object.fromEntries(tags.map(tag => [tag, 0])), builderDeliveryFailed: 0, builderNoHandoff: 0, plannerFailures: 0, stalls: 0, ownerEscalations: 0 })
 
 function count(state, line, kind, card) {
   let e
@@ -37,6 +38,10 @@ function count(state, line, kind, card) {
     // Start errors that happen before a history record can be written live here only.
     if (e.event === 'failure' && /^planner: /i.test(e.message)) state.plannerErrors.push({ day, card: e.card.toUpperCase(), time, reason: e.message.slice(9) })
     return
+  }
+  if (DIFFICULTIES.includes(e.difficulty)) {
+    if (e.event === 'builder-attempt') row.builderDifficulty[e.difficulty].attempts++
+    if (e.event === 'builder-return') row.builderDifficulty[e.difficulty].kickBacks++
   }
   if (e.event === 'transition') {
     if (e.to === 'archive' && e.from !== 'archive') row.archived.add(card)
@@ -95,6 +100,7 @@ async function refresh(tasksDir, cache) {
       const row = rows.get(day) || empty()
       rows.set(day, row)
       for (const key of ['integrated', 'archived']) for (const id of source[key]) row[key].add(id)
+      for (const d of DIFFICULTIES) for (const key of ['attempts', 'kickBacks']) row.builderDifficulty[d][key] += source.builderDifficulty[d][key]
       for (const tag of tags) row.kickBacks[tag] += source.kickBacks[tag]
       for (const key of ['builderDeliveryFailed', 'builderNoHandoff', 'plannerFailures', 'stalls', 'ownerEscalations']) row[key] += source[key]
     }

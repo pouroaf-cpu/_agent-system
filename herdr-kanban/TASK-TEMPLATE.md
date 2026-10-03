@@ -6,7 +6,7 @@
 **Category:** {{CATEGORY}}
 **Workspace:** {{WORKSPACE}}
 **Auto-review:** no
-**Trivial:** no
+**Difficulty:** <!-- Planner: tiny | easy | medium | hard -->
 **Priority** 5/10
 {{MISSION}}
 <!-- Keep the headings. Replace your section's comment instead of appending duplicate sections. -->

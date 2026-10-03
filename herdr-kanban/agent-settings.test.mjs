@@ -14,7 +14,7 @@ const config = {
 
 test('settings validate supported combinations and preserve legacy defaults', () => {
   assert.equal(globalSettings(config).working.model, 'gpt-5.6-luna')
-  assert.equal(globalSettings(config).trivial.reasoning, 'low')
+  assert.equal(globalSettings(config)['builder-easy'].reasoning, 'low')
   assert.equal(validateSettingsPatch(config, { working: { engine: 'claude', model: 'claude-haiku-4-5', reasoning: 'high' } }).working.engine, 'claude')
   assert.throws(() => validateSettingsPatch(config, { review: { engine: 'claude', model: 'gpt-5.6-luna', reasoning: 'high' } }), /not supported/i)
   assert.throws(() => validateSettingsPatch(config, { review: { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'bogus' } }), /reasoning/i)

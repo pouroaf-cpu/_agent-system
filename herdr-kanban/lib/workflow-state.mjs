@@ -6,16 +6,43 @@ import { appendHistory, focusedText } from './card-history.mjs'
 import { withBoardLock } from './bindings.mjs'
 import { stopCardRun } from './card-run.mjs'
 import { basename } from 'node:path'
+import { builderDifficulty, DIFFICULTIES } from './difficulty.mjs'
+import { recoveryState } from './recovery.mjs'
+import { recordUsageBuilderReturn } from './request-usage.mjs'
 
 const file = dir => join(dir, '.workflow-state.json')
 export const readWorkflow = dir => existsSync(file(dir)) ? JSON.parse(readFileSync(file(dir), 'utf8')) : {}
+function writeWorkflow(dir, state) {
+  writeFileSync(file(dir) + '.tmp', JSON.stringify(state, null, 2) + '\n')
+  renameSync(file(dir) + '.tmp', file(dir))
+}
 export function updateWorkflow(dir, id, patch) {
   return withBoardLock(dir, () => {
   const state = readWorkflow(dir)
   state[id] = { ...state[id], ...patch }
-  writeFileSync(file(dir) + '.tmp', JSON.stringify(state, null, 2) + '\n')
-  renameSync(file(dir) + '.tmp', file(dir))
+  writeWorkflow(dir, state)
   return state[id]
+  })
+}
+export function recordBuilderAttempt(dir, card, difficulty) {
+  const attempt = recoveryState(readFileSync(card.path, 'utf8')).attempt
+  difficulty = builderDifficulty({ difficulty }, readWorkflow(dir)[card.id])
+  updateWorkflow(dir, card.id, { builderDifficulty: difficulty, builderAttempt: { attempt, difficulty } })
+  appendHistory(dir, card.id, { event: 'builder-attempt', difficulty, attempt })
+}
+export function recordBuilderReturn(dir, card, reason) {
+  return withBoardLock(dir, () => {
+    const all = readWorkflow(dir)
+    const state = all[card.id] || {}
+    const attempt = recoveryState(readFileSync(card.path, 'utf8')).attempt
+    if (state.builderFailureAttempt === attempt) return false
+    const difficulty = state.builderAttempt?.attempt === attempt ? state.builderAttempt.difficulty : builderDifficulty(card, state)
+    const next = DIFFICULTIES[Math.min(3, DIFFICULTIES.indexOf(builderDifficulty(card, state)) + 1)]
+    all[card.id] = { ...state, builderDifficulty: next, builderFailureAttempt: attempt }
+    writeWorkflow(dir, all)
+    appendHistory(dir, card.id, { event: 'builder-return', difficulty, nextDifficulty: next, attempt, reason })
+    recordUsageBuilderReturn(dir, card.id, difficulty)
+    return true
   })
 }
 export function prerequisiteFingerprint(card, workspace, gitSettings) {

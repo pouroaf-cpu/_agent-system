@@ -89,7 +89,7 @@ test('stuck lists a card over the threshold with its reason and omits a fresh on
   assert.deepEqual(r.body.cards.map(c => c.id).sort(), [old.id, fresh.id].sort())
   // A card waiting on an unfinished blocker is queued, not stuck (I310 waited on I307).
   const waiting = createCard(tasks, { title: 'Waiting', brief: 'x', prefix: 'P' })
-  writeFileSync(waiting.path, readFileSync(waiting.path, 'utf8').replace(/^(\*\*Trivial:\*\*.*)$/m, `$1\n**Blocked by:** ${fresh.id}`))
+  writeFileSync(waiting.path, readFileSync(waiting.path, 'utf8').replace(/^(\*\*Difficulty:\*\*.*)$/m, `$1\n**Blocked by:** ${fresh.id}`))
   r = await get('/api/stuck?minutes=0')
   assert.ok(!r.body.cards.some(c => c.id === waiting.id), 'blocked card listed as stuck')
   assert.equal((await get('/api/stuck?project=Nope')).status, 400)
@@ -118,7 +118,7 @@ test('a card whose blocker landed a minute ago is not stuck, however long it wai
   const blocker = createCard(tasks, { title: 'Blocker', brief: 'x', prefix: 'P' })
   moveCard(tasks, blocker.id, 'archive', { operatorArchive: true })
   const card = createCard(tasks, { title: 'Was blocked', brief: 'x', prefix: 'P' })
-  writeFileSync(card.path, readFileSync(card.path, 'utf8').replace(/^(\*\*Trivial:\*\*.*)$/m, `$1\n**Blocked by:** ${blocker.id}`))
+  writeFileSync(card.path, readFileSync(card.path, 'utf8').replace(/^(\*\*Difficulty:\*\*.*)$/m, `$1\n**Blocked by:** ${blocker.id}`))
   moveCard(tasks, card.id, 'owner')
   moveCard(tasks, card.id, 'planning')
   // Three hours in Planning; the blocker's archive move one minute ago.

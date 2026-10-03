@@ -6,7 +6,9 @@ import { renameSync } from './fs-retry.mjs'
 import { join, basename, resolve, dirname, extname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { recoveryTransition } from './recovery.mjs'
+import { difficultyFromText } from './difficulty.mjs'
+import { recordBuilderReturn } from './workflow-state.mjs'
+import { recoveryTransition, recoveryState } from './recovery.mjs'
 import { auditArchiveError } from './audit-routing.mjs'
 import { appendHistory, writeCurrentFeedback, historyPath, projectConstraints, lastTransition } from './card-history.mjs'
 import { CARD_ID, nextCardId } from './ids.mjs'
@@ -28,6 +30,9 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   const readinessLine = text.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)?.[0]
   const readiness = text.match(/^\*\*Plan readiness:\*\*\s*(build-ready|investigation)\s*$/im)?.[1]?.toLowerCase()
   if (requireReadiness && !readinessLine) throw new Error('Plan incomplete: authenticated Planner handoff requires **Plan readiness:** build-ready or investigation')
+  if (requireReadiness && !difficultyFromText(text)) throw new Error('Plan incomplete: authenticated Planner handoff requires **Difficulty:** tiny, easy, medium or hard')
+  const difficultyValue = text.replace(/<!--[\s\S]*?-->/g, '').match(/^\*\*Difficulty:\*\*([^\r\n]*)/im)?.[1]?.trim()
+  if (difficultyValue && !/^(tiny|easy|medium|hard)$/i.test(difficultyValue)) throw new Error('Plan incomplete: Difficulty must be tiny, easy, medium or hard')
   if (readinessLine && !readiness) throw new Error('Plan incomplete: Plan readiness must be build-ready or investigation')
   if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace.replace(/\\/g, '/'))) {
     throw new Error('Plan incomplete: Workspace must be a project-relative path')
@@ -240,7 +245,7 @@ export const CATEGORIES = ['ui', 'code', 'auth-security', 'data']
 // when it writes the card and a human can see it in the diff.
 const AUTOREVIEW = /^\*\*Auto-review:\*\*\s*(yes|no)\s*$/im
 const TRIVIAL = /^\*\*Trivial:\*\*\s*(yes|no)\s*$/im
-const AGENT_SETTING = /\*\*(Planner|Plancheck|Builder|Reviewer|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
+const AGENT_SETTING = /\*\*(Planner|Plancheck|Builder(?:-tiny|-easy|-medium|-hard)?|Reviewer|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
 const AGENT_STAGE = { Planner: 'planning', Plancheck: 'plancheck', Builder: 'working', Reviewer: 'review', Trivial: 'trivial' }
 // Planner-authored time estimates, same metadata line as Priority/Status/Surface.
 const EST_BUILD = /\*\*Est build:\*\*\s*(\d+)\s*m/i
@@ -404,7 +409,7 @@ function parseCardFile(path, columnKey, stat) {
 
   const agentSettings = {}
   for (const match of text.matchAll(AGENT_SETTING)) {
-    const stage = AGENT_STAGE[match[1]], field = match[2].toLowerCase()
+    const stage = AGENT_STAGE[match[1]] || match[1].toLowerCase(), field = match[2].toLowerCase()
     agentSettings[stage] ||= {}
     agentSettings[stage][field] = match[3].trim().toLowerCase()
   }
@@ -428,6 +433,7 @@ function parseCardFile(path, columnKey, stat) {
       ? plain(head.match(AUDIT)?.[1]).toLowerCase()
       : '',
     autoReview: head.match(AUTOREVIEW)?.[1]?.toLowerCase() === 'yes',
+    difficulty: difficultyFromText(head),
     trivial: head.match(TRIVIAL)?.[1]?.toLowerCase() === 'yes',
     agentSettings,
     estBuild: head.match(EST_BUILD)?.[1] ? Number(head.match(EST_BUILD)[1]) : null,
@@ -816,6 +822,7 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
   }
   if (existsSync(target)) throw new Error(`already exists in ${toKey}: ${card.file}`)
 
+  if (['working', 'completed', 'review'].includes(card.column) && transition.state.returns > recoveryState(text).returns) recordBuilderReturn(tasksDir, card, 'failed return')
   appendHistory(tasksDir, card.id, { event: 'transition', from: card.column, to: toKey, text, ...(options.operatorArchive && toKey === 'archive' ? { note: 'Archived by operator from board without independent review' } : {}) })
   if (transition.text !== text) writeFileSync(card.path, transition.text)
   renameSync(card.path, target)

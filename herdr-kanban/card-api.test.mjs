@@ -51,7 +51,7 @@ test('create writes priority and blockers in the card header', async () => {
   const blocker = createCard(tasks, { title: 'Blocker', brief: 'x', prefix: 'P' })
   const r = await post('/api/cards', { title: 'With deps', brief, priority: 3, blockedBy: [blocker.id.toLowerCase()] })
   assert.equal(r.status, 201, r.body.error)
-  assert.match(text(r.body.card.id), new RegExp(`\\*\\*Trivial:\\*\\* no\\r?\n\\*\\*Priority\\*\\* 3/10\\r?\n\\*\\*Blocked by:\\*\\* ${blocker.id}\\r?\n`))
+  assert.match(text(r.body.card.id), new RegExp(`\\*\\*Difficulty:\\*\\* [^\\n]*\\r?\n\\*\\*Priority\\*\\* 3/10\\r?\n\\*\\*Blocked by:\\*\\* ${blocker.id}\\r?\n`))
   assert.deepEqual(r.body.card.blockedBy, [blocker.id])
   assert.equal(r.body.card.priority, 3)
 })

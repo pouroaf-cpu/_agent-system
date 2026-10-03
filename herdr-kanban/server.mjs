@@ -73,7 +73,7 @@ const projectSettingsOf = (project) => {
 }
 const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
-const assignmentForCard = (project, card, stage) => assignmentFor(config, card, stage)
+const assignmentForCard = (project, card, stage) => assignmentFor(config, { ...card, workflowState: readWorkflow(tasksDirOf(project))[card.id] }, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
 const quotaHoldsOf = (project, board = readBoard(tasksDirOf(project))) => quotaHolds(HERE, board, (card, stage) => { const { assignment: a } = selectQuotaAssignment(HERE, assignmentForCard(project, card, stage)); return quotaKey(a.engine, a.model) })
 const missionAllowsProject = (project) => !config.mission?.project || config.mission.project.toLowerCase() === project.toLowerCase()
@@ -337,10 +337,10 @@ function boardPayload(project) {
       maxConcurrentAgents: config.maxConcurrentAgents,
       leadPlanner: config.leadPlanner ?? { autoIssues: false },
       model: config.models.working,
-      trivialModel: config.models.trivial ?? config.models.working,
       reviewModel: config.models.review,
       engine: engineFor('working').kind ?? engineFor('working'),
       agentSettings: globalSettings(config),
+      tinyEnabled: config.agentSettings?.tinyEnabled === true,
       supportedAgentSettings: catalog(),
       mission: config.mission ?? null,
     },
@@ -441,9 +441,7 @@ async function tick(project, agents) {
     tasksDir,
     boardRoot: HERE,
       model: config.models.working,
-      trivialModel: config.models.trivial ?? config.models.working,
       engine: engineFor('working'),
-      trivialEngine: engineFor('trivial'),
     max,
     agents,
     onChange: () => broadcastBoard(project),
@@ -594,7 +592,7 @@ async function pollProject(project) {
         const card = findCard(tasksDir, id)
         const agent = liveByPane.get(beforeReap[id]?.pane_id)
         const evidence = agent ? await paneRead(agent.pane_id, sessionOf(project)).catch(() => '') : ''
-        const assigned = assignmentForCard(project, card, card.trivial ? 'trivial' : 'working')
+        const assigned = assignmentForCard(project, card, 'working')
         const routed = routeBuilderNoHandoff({
           tasksDir,
           cardId: id,
@@ -1284,9 +1282,7 @@ const handleRequest = async (req, res) => {
         tasksDir,
         boardRoot: HERE,
         model: config.models.working,
-        trivialModel: config.models.trivial ?? config.models.working,
         engine: engineFor('working'),
-        trivialEngine: engineFor('trivial'),
         max: config.maxConcurrentAgents,
         agents: polled.agents,
         onChange: () => broadcastBoard(p),
@@ -1388,7 +1384,10 @@ const handleRequest = async (req, res) => {
       }
       if ('agentSettings' in patch) {
         config.agentSettings ||= {}
-        config.agentSettings.global = validateSettingsPatch(config, patch.agentSettings)
+        const settings = patch.agentSettings
+        if ('tinyEnabled' in settings && typeof settings.tinyEnabled !== 'boolean') throw new Error('tinyEnabled must be boolean')
+        config.agentSettings.global = validateSettingsPatch(config, settings)
+        if ('tinyEnabled' in settings) config.agentSettings.tinyEnabled = settings.tinyEnabled
       }
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
       json(res, 200, { ok: true, config })

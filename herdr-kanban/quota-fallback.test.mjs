@@ -36,7 +36,7 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   t.after(() => { if (previous === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = previous; rmSync(root, { recursive: true, force: true }) })
   const primary = { engine: 'codex', model: 'gpt-6-luna', reasoning: 'high' }
   const fallback = { engine: 'claude', model: 'claude-haiku-4-5', reasoning: 'medium' }
-  const patch = Object.fromEntries(['planning', 'working', 'trivial', 'review'].map(role => [role, { ...primary, fallback }]))
+  const patch = Object.fromEntries(['planning', 'working', 'builder-easy', 'builder-medium', 'review'].map(role => [role, { ...primary, fallback }]))
   const config = { projectsRoot: root, projects: [], maxConcurrentAgents: 1, agentPollMs: 3600000, engine: 'codex', models: { working: primary.model } }
   config.agentSettings = { global: validateSettingsPatch(config, patch) }
   writeFileSync(configPath, JSON.stringify(config))

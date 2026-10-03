@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { validatePlan } from './lib/cards.mjs'
 
-const realistic = `**Workflow version:** 2
+const realistic = `**Difficulty:** medium
+**Workflow version:** 2
 **Plan readiness:** build-ready
 **Workspace:** .
 ## Approved brief

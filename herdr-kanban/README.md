@@ -73,3 +73,5 @@ set both markers so those existing hooks already skip board agents.
 For browser checks, prefer headless Chrome DevTools MCP when available; use headless Playwright if needed. Load browser instructions only for a browser task. Use Windows Computer Use only when browser tools cannot cover the task.
 
 MIT licence.
+
+Planners set `**Difficulty:** tiny | easy | medium | hard` using [PLANNER-DIFFICULTY.md](PLANNER-DIFFICULTY.md). Builder assignments and fallbacks use `agentSettings.global.builder-<difficulty>`; `agentSettings.tinyEnabled` defaults to false (tiny uses easy). Failed Builder returns step up permanently in workflow state. Board cards show the current level; daily metrics and request usage count attempts and kick-backs by attempted level.

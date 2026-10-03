@@ -98,7 +98,7 @@ export function quotaHolds(boardRoot, board, engineOf, now = Date.now()) {
   if (!Object.values(quota).some(q => q.until > now)) return holds
   for (const [lane, stage] of Object.entries(STAGES)) for (const card of board[lane] || []) {
     let kind
-    try { kind = engineOf(card, stage === 'working' && card.trivial ? 'trivial' : stage) } catch { continue }
+    try { kind = engineOf(card, stage) } catch { continue }
     const hold = quotaHold(boardRoot, kind, now, quota)
     if (hold) holds[card.id] = hold
   }

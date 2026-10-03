@@ -230,7 +230,7 @@ test('board operator can archive each lane while agent archive remains gated', a
   const postArchive = id => fetch(`${base}/api/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'Proof', id, to: 'archive' }) })
   for (const lane of ['review', 'completed', 'issues', 'owner']) {
     const card = createCard(f.tasks, { title: `operator archive from ${lane}`, brief: 'board archive' })
-    if (lane === 'completed') writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Trivial:** no', '**Trivial:** yes'))
+    if (lane === 'completed') writeFileSync(card.path, readFileSync(card.path, 'utf8') + '\n**Trivial:** yes\n')
     moveCard(f.tasks, card.id, lane)
     const response = await postArchive(card.id)
     assert.equal(response.status, 200, `${lane} archive response`)
