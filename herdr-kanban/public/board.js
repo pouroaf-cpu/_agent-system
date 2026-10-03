@@ -373,9 +373,9 @@ function stopPicking() {
 
 // Lane timer: how long a card has sat in its lane, and whether an agent is on it
 // right now. Comes from /api/board `laneTimes`; without it no timer is shown.
-const TIMED_LANES = { planning: 'Planning', queue: 'Queue', working: 'Working', review: 'Review', completed: 'Completed' };
+const TIMED_LANES = { planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', review: 'Review', completed: 'Completed' };
 const ACTIVE_VERB = { planning: 'Planning', working: 'Building', review: 'Reviewing' };
-const ROLE_VERB = { planner: 'Planning', builder: 'Building', reviewer: 'Reviewing' };
+const ROLE_VERB = { planner: 'Planning', builder: 'Building', reviewer: 'Reviewing', 'plan check': 'Checking plan' };
 const AGENT_EXPECTED = new Set(['planning', 'working']);
 const IDLE_WARN_MS = 20 * 60000;
 

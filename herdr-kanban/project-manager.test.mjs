@@ -75,6 +75,32 @@ test('/api/stuck omits Planned file waits even before a scheduler dispatch pass'
   }
 })
 
+test('/api/stuck and board agree that an open Planned plan check is active', async () => {
+  const card = createCard(tasks, { title: 'Checking plan', brief: 'x', prefix: 'P' })
+  mkdirSync(join(tasks, 'backlog'), { recursive: true })
+  const path = join(tasks, 'backlog', `${card.id}.md`)
+  renameSync(card.path, path)
+  const then = Date.now() - 90 * 60000
+  utimesSync(path, new Date(then), new Date(then))
+  const file = join(root, '.review-claims.json')
+  const claim = { id: 'plan-check', project: 'Proj', tasksDir: tasks, cards: [card.id], role: 'plancheck', phase: 'running', paneId: 'r1', createdAt: then }
+  const save = c => writeFileSync(file, JSON.stringify({ version: 1, claims: [c] }))
+  try {
+    save(claim)
+    const board = (await get('/api/board?project=Proj')).body
+    assert.equal(board.laneTimes[card.id].agentActive, true)
+    assert.equal(board.laneTimes[card.id].agentRole, 'plan check')
+    assert.ok(board.laneTimes[card.id].agentName)
+    assert.equal(board.cardWaits[card.id].stuck, false)
+    assert.ok(!(await get('/api/stuck?project=Proj&minutes=20')).body.cards.some(c => c.id === card.id))
+    save({ ...claim, closedAt: then + 60000 })
+    assert.equal((await get('/api/board?project=Proj')).body.cardWaits[card.id].stuck, true)
+    assert.ok((await get('/api/stuck?project=Proj&minutes=20')).body.cards.some(c => c.id === card.id))
+  } finally {
+    rmSync(path, { force: true }); rmSync(file, { force: true })
+  }
+})
+
 test('project-manager registers, persists, reads back, unregisters and rejects bad input', async () => {
   const inbox = join(root, 'inbox', 'Proj-INBOX.md').replace(/\\/g, '/')
   let r = await post('/api/project-manager', { project: 'Proj', chat: 'Proj work', inbox })

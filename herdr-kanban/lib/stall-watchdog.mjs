@@ -19,7 +19,7 @@ import { isHeadless } from './headless.mjs'
 import { readWorktrees, overlapHoldReason, filesBusyHolder } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
-import { CARD_ID } from './ids.mjs'
+import { CARD_ID, agentCard, isReviewerAgent } from './ids.mjs'
 import { isRetryHold, inBackoff } from './transient.mjs'
 
 const oneLine = (s, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max)
@@ -35,13 +35,23 @@ function boundAgents(id, { agents, bindings, planners, workflow, claims }) {
 }
 const openClaims = (claims, tasksDir) => claims.filter(c => !c.closedAt && resolve(c.tasksDir) === resolve(tasksDir))
 
+function cardAgent(card, ctx) {
+  if (card.column === 'planned') {
+    const claim = ctx.claims.find(c => c.role === 'plancheck' && c.cards.includes(card.id))
+    const agent = ctx.agents.find(a => a.agent_status === 'working' &&
+      ((claim?.paneId && a.pane_id === claim.paneId) || (isReviewerAgent(a) && agentCard(a.name) === card.id)))
+    if (claim || agent) return { role: 'plan check', agent: agent ?? { name: 'plan check', agent_status: 'working' } }
+  }
+  return boundAgents(card.id, ctx)[0]
+}
+
 // Lane timer data for the board: when each card entered its lane (history, else file
 // mtime) and whether a live agent bound to it is working right now.
 export function laneTimes({ tasksDir, board, agents = [], claims = [], planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), bindings = readBindings(tasksDir) }) {
   const ctx = { agents, bindings, planners, workflow, claims: openClaims(claims, tasksDir) }
   const result = {}
-  for (const card of ['planning', 'queue', 'working', 'review', 'completed'].flatMap(column => board[column] || [])) {
-    const [bound] = boundAgents(card.id, ctx)
+  for (const card of ['planning', 'planned', 'queue', 'working', 'review', 'completed'].flatMap(column => board[column] || [])) {
+    const bound = cardAgent(card, ctx)
     result[card.id] = {
       since: new Date(laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime).toISOString(),
       agentActive: bound?.agent.agent_status === 'working',
@@ -77,8 +87,8 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
   const mine = openClaims(claims, tasksDir)
   const runs = Object.values(readUsage(tasksDir).runs || {})
   const ctx = { agents, bindings, planners, workflow, claims: mine }
-  const busy = id => !!bindings[id]?.spawning || mine.some(c => c.cards.includes(id) && c.phase === 'starting') ||
-    boundAgents(id, ctx).some(b => b.agent.agent_status === 'working')
+  const busy = card => !!bindings[card.id]?.spawning || mine.some(c => c.cards.includes(card.id) && c.phase === 'starting') ||
+    cardAgent(card, ctx)?.agent.agent_status === 'working'
   const reset = id => { if (now - ms(workflow[id]?.stallResetAt) >= 60000) workflow[id] = updateWorkflow(tasksDir, id, { stallResetAt: new Date(now).toISOString() }) }
   const sinceOf = card => Math.max(card.mtime, ms(resumedAt), ms(gapEndedAt), laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
     ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
@@ -88,7 +98,7 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
   const idle = new Map()
   for (const card of byId.values()) {
     if (['pou', 'owner'].includes(card.column)) continue
-    if (busy(card.id)) { reset(card.id); continue }
+    if (busy(card)) { reset(card.id); continue }
     const since = Math.max(sinceOf(card), lastBlockerLanded(tasksDir, card, board, registry))
     if (now - since >= minutes * 60000) idle.set(card.id, { card, since })
   }

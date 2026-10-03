@@ -312,7 +312,7 @@ function boardPayload(project) {
     planners,
     workflow,
     stageIndicators: indicators,
-    // Per card in Planning/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
+    // Per card in Planning/Planned/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
     laneTimes: times,
     cardWaits: Object.fromEntries(cardWaits(project, Date.now(), { board, planners, workflow, indicators, times }).cards.map(c => [c.id, { on: c.on ?? null, stuck: isStuck(c, 60), minutes: c.minutes }])),
     bindings: readBindings(tasksDirOf(project)),

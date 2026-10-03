@@ -245,6 +245,24 @@ test('lane times: since from the lane entry (else file mtime); agentActive only 
   }, 'Owner cards are not timed; a Planner pane that is gone is no agent')
 })
 
+test('a Planned plan check is active until its claim and working reviewer are gone (Injectbuddy I691)', t => {
+  const { tasks, put } = board(t)
+  put('backlog', 'I691')
+  const claim = { tasksDir: tasks, cards: ['I691'], role: 'plancheck', phase: 'running', paneId: 'r1', createdAt: T }
+  const agent = { pane_id: 'r1', name: 'r-i691', agent_status: 'working', started: new Date(T).toISOString() }
+  for (const [claims, agents] of [[[claim], [agent]], [[claim], []], [[], [agent]]]) {
+    const times = laneTimes({ tasksDir: tasks, board: readBoard(tasks), claims, agents })
+    assert.equal(times.I691.agentActive, true)
+    assert.equal(times.I691.agentRole, 'plan check')
+    assert.ok(times.I691.agentName)
+    assert.deepEqual(checkStalls({ tasksDir: tasks, claims, agents, now: T + 60 * MIN }), [])
+  }
+  const claims = [{ ...claim, closedAt: T + 60 * MIN }]
+  assert.equal(laneTimes({ tasksDir: tasks, board: readBoard(tasks), claims }).I691.agentActive, false)
+  assert.deepEqual(checkStalls({ tasksDir: tasks, claims, now: T + 79 * MIN }), [])
+  assert.deepEqual(checkStalls({ tasksDir: tasks, claims, now: T + 80 * MIN }).map(s => s.id), ['I691'])
+})
+
 test('time spent paused is not a stall: Start restarts the clock (Tradeflow, 15 cards to Owner on unpause)', t => {
   const { tasks, put } = board(t)
   put('queue', 'T-1')
