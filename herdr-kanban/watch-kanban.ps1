@@ -90,6 +90,11 @@ try {
         "$(Get-Date -Format o) HERDR - started session $session" | Out-File -Append -Encoding utf8 $log
     }
     Update-BoardOutage -Healthy $true -StatePath $herdrState -Send { }
+    # Orphaned Playwright browsers (dead test runners) hold memory; never fail the watchdog over it.
+    try {
+        $swept = @(& (Join-Path $root 'sweep-browser-orphans.ps1'))
+        if ($swept.Count) { "$(Get-Date -Format o) SWEEP - killed $($swept.Count) orphaned Playwright browser processes" | Out-File -Append -Encoding utf8 $log }
+    } catch { "$(Get-Date -Format o) SWEEP FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log }
     "$(Get-Date -Format o) UP - board and Herdr check passed" | Out-File -Append -Encoding utf8 $log
     exit 0
 } catch {
