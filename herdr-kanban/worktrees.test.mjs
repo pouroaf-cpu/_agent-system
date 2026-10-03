@@ -154,16 +154,81 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('generated files never hold another card', () => {
+for (const key of ['app.js', '*.js']) test(`generated files (${key}) never hold another card`, () => {
   const f = fixture()
   try {
-    const generatedFiles = { 'app.js': `node -e "require('fs').writeFileSync('app.js', 'generated')"` }
+    const generatedFiles = { [key]: `node -e "require('fs').writeFileSync('app.js', 'generated')"` }
     prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1'), gitSettings: { ...f.settings, generatedFiles } })
     moveCard(f.tasks, 'T-1', 'working')
     const card = f.addCard('T-2')
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card, projectPath: f.integration, generatedFiles }), null)
     assert.deepEqual(recordedOverlapBlockers(card, f.integration, readWorktrees(f.tasks), [], generatedFiles), [])
     assert.equal(startHoldReason({ tasksDir: f.tasks, card, projectPath: f.integration, board: readBoard(f.tasks), gitSettings: { ...f.settings, generatedFiles } }), null)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+for (const mixed of [false, true]) test(mixed ? 'a non-generated conflict alongside generated globs aborts without running commands' : 'generated globs integrate with distinct commands in config order and all generated changes staged', async () => {
+  const f = fixture()
+  try {
+    const html = ['a', 'b', 'c', 'd'].map(name => `public/legacy/${name}/index.html`)
+    const css = 'public/aa.css' // Git reports this conflict before the HTML files.
+    const log = join(f.root, 'commands.log')
+    for (const file of html.slice(0, 3)) {
+      mkdirSync(join(f.integration, file, '..'), { recursive: true })
+      writeFileSync(join(f.integration, file), 'base')
+    }
+    writeFileSync(join(f.integration, css), 'base')
+    writeFileSync(join(f.integration, 'stamp.mjs'), `import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs'
+      for (const file of ${JSON.stringify(html.slice(0, 2))}) {
+        if (readFileSync(file, 'utf8').includes('<<<<<<<')) throw new Error('checkout must finish before regeneration')
+      }
+      for (const file of ${JSON.stringify(html)}) {
+        mkdirSync(file + '/..', { recursive: true })
+        writeFileSync(file, 'generated html')
+      }
+      appendFileSync(${JSON.stringify(log)}, 'html\\n')
+    `)
+    writeFileSync(join(f.integration, 'build.mjs'), `import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+      if (readFileSync(${JSON.stringify(html[0])}, 'utf8') !== 'generated html') throw new Error('stamp must run first')
+      writeFileSync(${JSON.stringify(css)}, 'generated css')
+      appendFileSync(${JSON.stringify(log)}, 'css\\n')
+    `)
+    git(f.integration, 'add', '.')
+    git(f.integration, 'commit', '-m', 'generated fixtures')
+    f.settings.generatedFiles = {
+      'public/legacy/*/index.html': 'node stamp.mjs',
+      [html[1]]: 'node stamp.mjs',
+      [css]: 'node build.mjs',
+      'public/extra.css': `node -e "require('fs').writeFileSync('public/extra.css', 'generated extra')"`,
+    }
+    const scope = [...html, css, 'public/extra.css', ...(mixed ? ['app.js'] : [])]
+    const cards = ['T-1', 'T-2'].map(id => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard(id, scope), gitSettings: f.settings }))
+    for (const [i, card] of cards.entries()) {
+      for (const file of [...html.slice(0, 2), css, ...(mixed ? ['app.js'] : [])]) writeFileSync(join(card.workspacePath, file), `card ${i}`)
+      git(card.workspacePath, 'commit', '-am', `T-${i + 1} change`)
+      f.complete(`T-${i + 1}`)
+    }
+    const commit = git(cards[1].workspacePath, 'rev-parse', 'HEAD')
+    const results = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.deepEqual(results.map(r => r.status), ['integrated', mixed ? 'conflict' : 'rebased'])
+    if (mixed) {
+      assert.equal(existsSync(log), false)
+      assert.equal(git(cards[1].workspacePath, 'rev-parse', 'HEAD'), commit)
+      assert.equal(git(cards[1].workspacePath, 'status', '--porcelain'), '')
+    } else {
+      assert.equal(readFileSync(log, 'utf8'), 'html\ncss\n', 'each distinct command runs once, in config order')
+      assert.deepEqual([...results[1].regenerated].sort(), [...html, css, 'public/extra.css'].sort())
+      assert.equal(git(cards[1].workspacePath, 'status', '--porcelain'), '')
+      const integrated = await reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test', onlyIds: ['T-2'], io: {
+        agentList: async () => [], reconcile: reconcileCompletedWorktrees,
+        runCheck: async () => ({ ok: true, output: 'PASS' }),
+      } })
+      assert.equal(integrated[0].status, 'integrated')
+      for (const file of html) assert.equal(readFileSync(join(f.integration, file), 'utf8'), 'generated html')
+      assert.equal(readFileSync(join(f.integration, css), 'utf8'), 'generated css')
+      assert.equal(readFileSync(join(f.integration, 'public/extra.css'), 'utf8'), 'generated extra')
+      assert.equal(git(f.integration, 'status', '--porcelain'), '')
+    }
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

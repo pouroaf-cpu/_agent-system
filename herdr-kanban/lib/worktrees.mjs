@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync
 import { renameSync } from './fs-retry.mjs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { cardFiles, findCard, readBoard, filesOverlap } from './cards.mjs'
+import { cardFiles, findCard, readBoard, filesOverlap, isGlob, globMatches } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
@@ -510,8 +510,8 @@ function cardIn(cards, id) {
 // whose cards edit separate parts. Builders may run on them at once; integration still lands
 // one commit at a time, and a real conflict is rebased and goes back to a Builder once.
 const notParallel = (projectPath, parallelFiles = [], generatedFiles = {}) => {
-  const listed = new Set([...parallelFiles, ...Object.keys(generatedFiles)].map(f => norm(resolve(projectPath, f))))
-  return (file) => !listed.has(file)
+  const listed = [...parallelFiles, ...Object.keys(generatedFiles)].map(f => norm(resolve(projectPath, f)))
+  return (file) => !listed.some(f => f === file || (isGlob(f) && globMatches(f, file)))
 }
 
 export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), parallelFiles, generatedFiles }) {
@@ -754,18 +754,25 @@ function rebaseCardOnto(entry, head) {
   git(entry.repoRoot, ['branch', `recovery/${entry.branch}-${Date.now().toString(36)}`, entry.commit], { allowFailure: true })
   let rebase = git(entry.worktreePath, ['rebase', '--onto', head, entry.baseCommit], { allowFailure: true })
   const regenerated = new Set()
+  const generators = Object.entries(entry.generatedFiles || {})
+  const matches = (key, file) => key === file || (isGlob(key) && globMatches(key, file))
   while (rebase.status !== 0) {
     const files = git(entry.worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z'], { allowFailure: true }).stdout.split('\0').filter(Boolean)
     let hunks = (git(entry.worktreePath, ['diff'], { allowFailure: true }).stdout || rebase.stderr || '').slice(0, 6000)
     try {
-      if (!files.length || files.some(file => !Object.hasOwn(entry.generatedFiles || {}, file))) throw new Error('unresolved integration conflict')
-      for (const file of files) {
-        git(entry.worktreePath, ['checkout', '--theirs', '--', file])
-        const result = spawnSync(entry.generatedFiles[file], { cwd: entry.worktreePath, shell: true, windowsHide: true, timeout: 300_000, encoding: 'utf8' })
-        if (result.error || result.status !== 0) throw new Error(`regenerating ${file} failed: ${result.error?.message || result.stderr || result.stdout || `exit ${result.status}`}`)
-        git(entry.worktreePath, ['add', '--', file])
-        regenerated.add(file)
+      if (!files.length || files.some(file => !generators.some(([key]) => matches(key, file)))) throw new Error('unresolved integration conflict')
+      git(entry.worktreePath, ['checkout', '--theirs', '--', ...files])
+      const commands = new Set()
+      for (const [key, command] of generators) {
+        if (commands.has(command)) continue
+        commands.add(command)
+        const result = spawnSync(command, { cwd: entry.worktreePath, shell: true, windowsHide: true, timeout: 300_000, encoding: 'utf8' })
+        if (result.error || result.status !== 0) throw new Error(`regenerating ${key} failed: ${result.error?.message || result.stderr || result.stdout || `exit ${result.status}`}`)
       }
+      const changed = git(entry.worktreePath, ['ls-files', '--modified', '--others', '--exclude-standard', '-z']).stdout.split('\0').filter(file => file && generators.some(([key]) => matches(key, file)))
+      const resolved = [...new Set([...files, ...changed])]
+      git(entry.worktreePath, ['add', '--', ...resolved])
+      for (const file of resolved) regenerated.add(file)
       rebase = git(entry.worktreePath, ['rebase', '--continue'], { allowFailure: true, env: { GIT_EDITOR: 'true' } })
     } catch (err) {
       hunks = `${hunks}\n${err.message}`.slice(0, 6000)
