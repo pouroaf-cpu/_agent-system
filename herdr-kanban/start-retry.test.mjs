@@ -262,6 +262,8 @@ test('an engine usage-limit screen is recognised with its reset time; other outp
   const five = new Date(now); five.setHours(17, 0, 0, 0); if (five <= now) five.setDate(five.getDate() + 1)
   assert.deepEqual(usageLimit('5-hour limit reached ∙ resets 5pm', now), { until: five.getTime() })
   assert.deepEqual(usageLimit('Claude AI usage limit reached|1790400000', now), { until: 1790400000000 })
+  // I695-I706 2026-10-03: headless Claude printed "session limit" and six Planners went to Owner.
+  assert.deepEqual(usageLimit(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790400000}}\n{"type":"result","result":"You've hit your session limit · resets 2am (Pacific/Auckland)"}`, now), { until: 1790400000000 })
   assert.deepEqual(usageLimit('■ Selected model is at capacity. Please try a\ndifferent model.\n › Ask Codex to do anything', now), { until: now + 15 * 60000, modelCap: true }, 'I534: a busy model waits 15 min on that model only')
 })
 

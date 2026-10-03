@@ -8,7 +8,7 @@ import { renameSync } from './fs-retry.mjs'
 import { retryHold } from './transient.mjs'
 
 const HOUR = 3600000
-const LIMIT = /hit your (?:usage )?limit|usage limit reached|limit will reset|limit reached\W+resets/i
+const LIMIT = /hit your (?:usage |session )?limit|usage limit reached|limit will reset|limit reached\W+resets/i
 // A model's own cap ("Opus weekly limit reached"), unlike the shared 5-hour session limit.
 const MODEL_CAP = /\b(?:opus|sonnet|haiku|weekly|7-day)\b[^.|]{0,20}\blimit\b/i
 const CAPACITY = /model is at capacity/i
@@ -18,7 +18,8 @@ const h24 = (h, ap) => (Number(h) % 12) + (/p/i.test(ap) ? 12 : 0)
 
 // The reset time an engine printed, read as local time, or null.
 function resetAt(text, now) {
-  const epoch = text.match(/limit reached\|(\d{10})\b/i) // Claude: "Claude AI usage limit reached|1759302000"
+  // Claude: "Claude AI usage limit reached|1759302000"; headless: {"status":"rejected","resetsAt":1791032400}
+  const epoch = text.match(/limit reached\|(\d{10})\b/i) || text.match(/"status":"rejected","resetsAt":(\d{10})\b/)
   if (epoch) return epoch[1] * 1000
   // Codex: "try again at Oct 1st, 2026 10:36 AM"; Claude: "resets Oct 3, 10am"
   const date = text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?,?(?: (\d{4}),?)?(?: at)? (\d{1,2})(?::(\d\d))? ?([ap])\.?m\b/i)
