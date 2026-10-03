@@ -92,6 +92,18 @@ test('Queue cards waiting on a prerequisite in Owner or still moving are allowed
   assert.equal(findCard(tasks, 'T-7').column, 'queue')
 })
 
+test('a Planned card whose plan check waits on a live card\'s files is a wait (Tradeflow TF136)', t => {
+  const { tasks, put } = board(t)
+  put('queue', 'T-1')
+  put('backlog', 'T-2') // Planned lives in backlog/
+  put('backlog', 'T-3')
+  const holds = { 'T-2': 'files busy, held by T-1 — app/page.tsx', 'T-3': 'files busy, held by T-99 — app/page.tsx' }
+  checkStalls({ tasksDir: tasks, holds, now: T })
+  const stalls = checkStalls({ tasksDir: tasks, holds, now: T + 25 * MIN })
+  assert.deepEqual(stalls.map(s => s.id).filter(id => id !== 'T-1'), ['T-3'], 'a holder that no longer exists is still a stall')
+  assert.equal(findCard(tasks, 'T-2').column, 'planned')
+})
+
 test('the low-disk pause is a wait and restarts every stall window', t => {
   const { tasks, put } = board(t)
   put('planning', 'T-1')

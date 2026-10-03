@@ -136,6 +136,7 @@ test('release endpoints: start pauses with a marker, finish fast-forwards and un
   assert.equal(noMarker.status, 400); assert.match(noMarker.error, /no release in progress/i)
   assert.equal((await post('abort', { project: 'Proof' })).status, 400)
 
+  await new Promise(r => setTimeout(r, 1100)) // commit times are whole seconds: r.release must predate the start
   const started = await post('start', { project: 'Proof' })
   assert.equal(started.status, 200); assert.equal(started.ok, true); assert.equal(started.ready, false)
   assert.match(started.waiting.join(), /herdr/) // no herdr in this test: readiness cannot be confirmed

@@ -94,6 +94,11 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
 
   // Allowed waits: capacity, an unfinished prerequisite, or files held by another live
   // card. Only the stuck prerequisite is escalated, never the cards queued behind it.
+  // Same rule as autospawn: the holder may sit in any live lane, Owner included.
+  const heldByLiveCard = (card) => {
+    const holder = String(holds[card.id] || '').match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
+    return !!holder && holder !== card.id && byId.has(holder)
+  }
   const allowedWait = (card) => {
     if (paused) return true // paused (low disk, operator or release): nothing may start, so nothing is stuck (I393/I398/I401/I404 went to Owner mid-release, 2026-09-28)
     // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
@@ -107,10 +112,10 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
       if (!holdsKnown) return true
       const blockers = unmetBlockers(card, board, registry)
       if (blockers.length) return blockers.every(id => byId.has(id)) // a missing prerequisite can never finish
-      // Same rule as autospawn: the holder may sit in any live lane, Owner included.
-      const hold = String(holds[card.id] || ''), holder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
-      return (!!holder && holder !== card.id && byId.has(holder)) || hold.startsWith('installing dependencies in ')
+      return heldByLiveCard(card) || String(holds[card.id] || '').startsWith('installing dependencies in ')
     }
+    // A plan check waits on the same file locks as a Builder start (Tradeflow TF136, 2026-10-03).
+    if (card.column === 'planned' && heldByLiveCard(card)) return true
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
     if (card.column === 'planned' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational) return true

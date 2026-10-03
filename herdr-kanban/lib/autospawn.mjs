@@ -219,7 +219,9 @@ export function preflightBlocks({ projectPath, card, gitSettings }) {
 // memory rather than on disk: it is recomputed every tick and is worthless stale.
 const holds = new Map() // project -> { cardId: reason }
 
-export const holdsFor = (project) => holds.get(project) ?? {}
+// Planned cards whose plan check waits on a file lock (TF136 sat 21 min with "no hold recorded", 2026-10-03).
+const planHolds = new Map() // project -> { cardId: reason }
+export const holdsFor = (project) => ({ ...planHolds.get(project), ...holds.get(project) })
 
 const HELD_BY = new RegExp(String.raw`held by (${CARD_ID})`)
 export function routeMutualHolds(tasksDir, held, log) {
@@ -668,15 +670,18 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
 }
 
 export async function autoPlanCheck({ mission, project, tasksDir, reviewRoot, inventory, spawn = spawnReviewer, ...options }) {
+  planHolds.set(project, {})
   if (!readBoard(tasksDir).planned.some(needsPlanCheck)) return null
   const claims = syncReviewClaims(reviewRoot, await inventory())
   const board = readBoard(tasksDir)
+  const held = {}
   const card = board.planned.find(c => needsPlanCheck(c) && !unmetBlockers(c, board, readWorktrees(tasksDir)).length
     && (!mission?.id || (!mission.project || mission.project === project) && c.mission === mission.id)
     && !claims.some(claim => claim.project === project && (!claim.cards.length || claim.cards.includes(c.id)))
     && !operationalHold(tasksDir, c, options.projectPath)
     && !startRetryHold(readWorkflow(tasksDir)[c.id], 'plancheck')
-    && !startHoldReason({ card: { ...c, column: 'queue' }, board, projectPath: options.projectPath, tasksDir, mission, gitSettings: options.gitSettings }))
+    && !(held[c.id] = startHoldReason({ card: { ...c, column: 'queue' }, board, projectPath: options.projectPath, tasksDir, mission, gitSettings: options.gitSettings })))
+  planHolds.set(project, Object.fromEntries(Object.entries(held).filter(([, reason]) => reason)))
   if (!card) return null
   return spawn({ ...options, project, tasksDir, reviewRoot, inventory, cardIds: [card.id], planCheck: true })
 }
