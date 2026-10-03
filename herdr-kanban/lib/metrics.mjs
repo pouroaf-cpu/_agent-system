@@ -22,6 +22,12 @@ function count(state, line, kind, card) {
   const time = Date.parse(e.at)
   if (!Number.isFinite(time)) return
   const day = new Date(time).toISOString().slice(0, 10)
+  if (kind === 'history') {
+    const event = e.event === 'failure' && e.stage === 'working' ? 'builder-kick-back'
+      : e.event === 'plan-check' && e.verdict === 'FAIL' ? 'plan-check-fail'
+      : ['builder-delivery-failed', 'builder-no-handoff'].includes(e.event) ? e.event : null
+    if (event) state.failures.push({ time, card, event })
+  }
   const row = state.rows.get(day) || empty()
   state.rows.set(day, row)
   if (kind === 'stalls') { row.stalls++; return }
@@ -55,7 +61,7 @@ async function updateFile(path, kind, previous) {
   if (previous && previous.size === info.size && previous.mtime === info.mtimeMs) return previous
   // Append-only logs: keep daily aggregates, not card text. Replaced/truncated files rebuild.
   const state = previous && info.size > previous.size && info.ino === previous.ino && info.birthtimeMs === previous.birthtime
-    ? previous : { size: 0, tail: Buffer.alloc(0), rows: new Map(), plannerErrors: [] }
+    ? previous : { size: 0, tail: Buffer.alloc(0), rows: new Map(), plannerErrors: [], failures: [] }
   const card = basename(path, '.jsonl').toUpperCase()
   if (info.size > state.size) {
     for await (const chunk of createReadStream(path, { start: state.size, end: info.size - 1 })) {
@@ -103,12 +109,28 @@ async function refresh(tasksDir, cache) {
   cache.checkedAt = Date.now()
 }
 
-export async function dailyMetrics(tasksDir, days = 7, now = Date.now()) {
-  if (!Number.isInteger(days) || days < 1 || days > 366) throw new Error('days must be an integer from 1 to 366')
+async function projectCache(tasksDir) {
   let cache = projects.get(tasksDir)
   if (!cache) { cache = { files: new Map(), rows: new Map(), checkedAt: 0 }; projects.set(tasksDir, cache) }
   if (!cache.pending && Date.now() - cache.checkedAt >= 5000) cache.pending = refresh(tasksDir, cache).finally(() => { cache.pending = null })
   if (cache.pending) await cache.pending
+  return cache
+}
+
+export async function historyFailures(tasksDir, since, now = Date.now()) {
+  const cache = await projectCache(tasksDir)
+  const failures = []
+  for (const state of cache.files.values()) {
+    // Alert callers use a rolling window; retain compact events, never saved card text.
+    state.failures = state.failures.filter(e => e.time >= since)
+    failures.push(...state.failures.filter(e => e.time <= now))
+  }
+  return failures
+}
+
+export async function dailyMetrics(tasksDir, days = 7, now = Date.now()) {
+  if (!Number.isInteger(days) || days < 1 || days > 366) throw new Error('days must be an integer from 1 to 366')
+  const cache = await projectCache(tasksDir)
   const today = Date.parse(new Date(now).toISOString().slice(0, 10))
   return Array.from({ length: days }, (_, index) => {
     const day = new Date(today - index * 86400000).toISOString().slice(0, 10)

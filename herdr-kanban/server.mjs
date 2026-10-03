@@ -10,6 +10,7 @@ import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyP
 import { plannersStarting } from './lib/planner-state.mjs'
 import { stopRunawayTsservers } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
+import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -464,6 +465,15 @@ async function pollProject(project) {
   projectPolls.add(project)
   try {
     const tasksDir = tasksDirOf(project)
+    if (!controlState(project, CONFIG_PATH).paused) {
+      try { await checkBoardAlerts({ project, tasksDir, inboxPath: process.env.KANBAN_ALERT_INBOX }) }
+      catch (err) {
+        if (lastActivityHold.get(`${project}:board-alert`) !== err.message) {
+          lastActivityHold.set(`${project}:board-alert`, err.message)
+          activity(project, '-', 'board-alert', `Board alert failed: ${err.message}`, 'error')
+        }
+      }
+    }
     if (TEST_RUNNERS[project] && !readTestRuns(tasksDir).running && !busyRequest(tasksDir)) {
       const request = dueRequest(tasksDir)
       if (request) {
