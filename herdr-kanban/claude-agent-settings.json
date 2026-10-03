@@ -3,6 +3,7 @@
     "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
   },
   "autoMemoryEnabled": false,
+  "remoteControlAtStartup": false,
   "promptSuggestionEnabled": false,
   "enabledPlugins": {
     "vercel-plugin@vercel": false,
