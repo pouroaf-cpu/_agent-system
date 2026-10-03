@@ -543,6 +543,9 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
   return null
 }
 
+// The card holding the files in a "files busy" hold (overlapHoldReason), or null.
+export const filesBusyHolder = (reason) => /^files busy, held by ([A-Za-z]+-?\d+) /.exec(reason || '')?.[1] ?? null
+
 // Read-only visualization of persisted exact-file locks, never prose guesses.
 export function recordedOverlapBlockers(card, projectPath, registry, parallelFiles, generatedFiles) {
   const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')).filter(notParallel(projectPath, parallelFiles, generatedFiles)))

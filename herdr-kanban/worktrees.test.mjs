@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -847,4 +847,13 @@ test('hkb done refuses a commit that collapses a file into one line', () => {
     assert.match(run.stderr, /commit rewrites file format \(app\.js: 31 lines became 1\)/)
     assert.equal(findCard(f.tasks, 'T-1').column, 'working')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// Injectbuddy I694 read "stuck" for an hour behind I693's Builder (2026-10-03): /api/stuck
+// reads the holder back out of the hold text, so the two must stay in step.
+test('filesBusyHolder reads the holder from an overlap hold', () => {
+  assert.equal(filesBusyHolder('files busy, held by I693 — lib/calc-classes.mjs'), 'I693')
+  assert.equal(filesBusyHolder('files busy, held by T-1 — app.js'), 'T-1')
+  assert.equal(filesBusyHolder('slots full'), null)
+  assert.equal(filesBusyHolder(undefined), null)
 })
