@@ -410,6 +410,9 @@ function laneTimer(card) {
 // { text, tone, title } or null. Tone names a status colour.
 function cardStatus(card) {
   if (!state) return null;
+  const wait = state.cardWaits?.[card.id];
+  if (wait?.on) return { text: 'Waiting: ' + wait.on, tone: 'muted' };
+  if (wait?.stuck) return { text: 'Stuck ' + wait.minutes + ' min', tone: 'problem' };
   const stalled = stallMs(card);
   if (stalled) return { text: 'Stalled ' + fmtAge(stalled), tone: 'problem', title: 'Agent has been quiet for ' + fmtDur(stalled) };
   const timer = laneTimer(card);

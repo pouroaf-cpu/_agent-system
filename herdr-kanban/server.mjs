@@ -1,4 +1,4 @@
-import { formatNZTime } from './lib/nz-time.mjs'
+import { formatNZTime, formatNZClock } from './lib/nz-time.mjs'
 // Local kanban board over the filesystem. Phase 1+2: read, serve, move.
 
 import { createServer } from 'node:http'
@@ -314,6 +314,7 @@ function boardPayload(project) {
     stageIndicators: indicators,
     // Per card in Planning/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
     laneTimes: times,
+    cardWaits: Object.fromEntries(cardWaits(project, Date.now(), { board, planners, workflow, indicators, times }).cards.map(c => [c.id, { on: c.on ?? null, stuck: isStuck(c, 60), minutes: c.minutes }])),
     bindings: readBindings(tasksDirOf(project)),
     retries: readRetries(tasksDirOf(project)),
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or
@@ -353,12 +354,12 @@ function boardPayload(project) {
 
 // Every non-archived card with its minutes in lane, the live agent working on it and
 // why it waits, from the same lane times, holds and stage indicators the board shows.
-function cardWaits(project, now = Date.now()) {
-  const tasksDir = tasksDirOf(project), board = readBoard(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir)
+function cardWaits(project, now = Date.now(), snapshot) {
+  const tasksDir = tasksDirOf(project), board = snapshot?.board ?? readBoard(tasksDir), planners = snapshot?.planners ?? readCardPlanners(tasksDir), workflow = snapshot?.workflow ?? readWorkflow(tasksDir)
   const agents = agentCache.get(project)?.agents ?? [], claims = readReviewClaims(REVIEW_ROOT)
   let indicators = {}, times = {}
-  try { indicators = stageIndicators({ tasksDir, reviewRoot: REVIEW_ROOT, board, planners, claims, agents, workflow }) } catch { /* as on the board: no indicator */ }
-  try { times = laneTimes({ tasksDir, board, planners, workflow, claims, agents }) } catch { /* fall back to lane entry below */ }
+  try { indicators = snapshot?.indicators ?? stageIndicators({ tasksDir, reviewRoot: REVIEW_ROOT, board, planners, claims, agents, workflow }) } catch { /* as on the board: no indicator */ }
+  try { times = snapshot?.times ?? laneTimes({ tasksDir, board, planners, workflow, claims, agents }) } catch { /* fall back to lane entry below */ }
   const quota = quotaHoldsOf(project, board), holds = { ...holdsFor(project), ...quota }
   let registry = {}
   try { registry = readWorktrees(tasksDir) } catch { /* no registry: blockers count as unmet by archive state alone */ }
@@ -371,13 +372,20 @@ function cardWaits(project, now = Date.now()) {
     const since = Math.max(Date.parse(times[card.id]?.since ?? '') || (laneEnteredAt(tasksDir, card.id, card.column) ?? card.mtime), lastBlockerLanded(tasksDir, card, board, registry))
     // A Planner's `hkb wait`: the files or cards its plan needs that do not exist yet.
     const wait = card.column === 'planning' && workflow[card.id]?.waitFor, needs = wait ? [...wait.cards, ...wait.files] : []
-    const waitingOn = [...new Set([...unmetBlockers(card, board, registry), ...needs])]
+    const waitingCards = [...new Set([...unmetBlockers(card, board, registry), ...(wait?.cards ?? [])])]
+    const waitingOn = [...new Set([...waitingCards, ...needs])]
     const slotWait = (!!full[card.column] || (card.column === 'planning' && plannersStarting(planners, now, card.id))) && !(times[card.id]?.agentActive)
     // Files held by another live card: it waits, only the holder can be stuck (as the stall
     // watchdog does; Injectbuddy I694 read "stuck" behind I693's Builder, 2026-10-03).
-    const fileWait = live.has(filesBusyHolder(holds[card.id]))
+    const holder = filesBusyHolder(holds[card.id])
+    const fileWait = live.has(holder)
+    const decisionWait = !!wait?.decision
+    const on = quota[card.id] ? `usage limit until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
+      : fileWait ? `files held by ${holder}` : decisionWait ? 'decision'
+      : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
+      : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
-    return { ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
+    return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
       reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? indicators[card.id]?.reason ?? null }
   })
@@ -387,7 +395,7 @@ function cardWaits(project, now = Date.now()) {
 // Stuck = waiting past the threshold with nobody working on it and no unfinished blocker.
 // A card an agent is on, or one queued behind another card, is moving (operator saw
 // "stuck 3" for cards waiting on I307 that were planned the minute it merged, 2026-09-26).
-const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait
+const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait && !c.decisionWait
 
 // Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
 function integrationAheadOfMaster(project) {
@@ -410,6 +418,8 @@ function projectSummary(project) {
     owner: board.owner.map(c => c.id),
     pou: board.pou.map(c => c.id),
     stuck: cards.filter(c => isStuck(c, 60)).length,
+    waiting: cards.filter(c => c.on).length,
+    waitingCards: cards.filter(c => c.on).map(c => ({ id: c.id, lane: c.lane, on: c.on })),
     quotaBlocks: activeQuota(HERE),
     integrationAheadOfMaster: integrationAheadOfMaster(project),
   }

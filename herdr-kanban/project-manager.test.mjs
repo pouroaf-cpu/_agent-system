@@ -4,11 +4,13 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, renameSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, renameSync, utimesSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCard, moveCard } from './lib/cards.mjs'
 import { historyPath } from './lib/card-history.mjs'
+import { updateWorkflow } from './lib/workflow-state.mjs'
+import { formatNZClock } from './lib/nz-time.mjs'
 
 let root, tasks, child, base, configPath
 before(async () => {
@@ -45,6 +47,7 @@ const post = async (path, body) => {
 }
 const get = async (path) => { const r = await fetch(base + path); return { status: r.status, body: await r.json() } }
 const savedConfig = () => JSON.parse(readFileSync(configPath, 'utf8'))
+const fillPlan = card => writeFileSync(card.path, `# ${card.id} — ${card.title}\n\n**Workflow:** card-owned\n**Workspace:** .\n\n## Approved brief\n\nDo it.\n\n## Files\n\n- \`app.js\`\n\n## Implementation plan\n\nChange app.js.\n\n## Acceptance criteria\n\n- AC1: done\n`)
 
 test('/api/stuck omits Planned file waits even before a scheduler dispatch pass', async () => {
   const holder = createCard(tasks, { title: 'File holder', brief: 'x', prefix: 'P' })
@@ -134,9 +137,44 @@ test('summary has lane counts, the oldest card, owner ids and the stuck count', 
   assert.deepEqual(s.owner, [old.id])
   assert.deepEqual(s.pou, [])
   assert.equal(s.stuck, 1)
+  assert.equal(s.waiting, 1)
+  assert.deepEqual(s.waitingCards, [{ id: (await get('/api/board?project=Proj')).body.board.planning.find(c => c.title === 'Waiting').id, lane: 'planning', on: `cards ${fresh.id}` }])
   assert.deepEqual(s.quotaBlocks, {})
   assert.equal(s.integrationAheadOfMaster, null) // not a Git project
   assert.ok(!('release' in s))
+})
+
+test('summary and board share card, file, decision and slot waits, separate from stuck', async () => {
+  const make = title => createCard(tasks, { title, brief: 'x', prefix: 'P' })
+  const dependency = make('Needs two cards'), files = make('Needs file'), decision = make('Needs decision'), slot = make('Needs Planner slot'), queueSlot = make('Needs Builder slot')
+  fillPlan(queueSlot)
+  moveCard(tasks, queueSlot.id, 'queue')
+  updateWorkflow(tasks, dependency.id, { waitFor: { cards: [fresh.id, files.id], files: [] } })
+  updateWorkflow(tasks, files.id, { waitFor: { cards: [], files: ['public/new.html'] } })
+  updateWorkflow(tasks, decision.id, { waitFor: { cards: [], files: [], decision: true } })
+  // A starting Planner reserves the slot, and a live Builder fills the Builder slot.
+  writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ [fresh.id]: { paneId: 'starting', createdAt: new Date().toISOString() } }))
+  writeFileSync(join(tasks, '.board.json'), JSON.stringify({ 'P999': { pane_id: 'builder', spawning: true, started: new Date().toISOString() } }))
+  await post('/api/config', { maxConcurrentAgents: 1 })
+  try {
+    const summary = (await get('/api/summary')).body.projects[0]
+    const byId = Object.fromEntries(summary.waitingCards.map(c => [c.id, c]))
+    for (const [card, on] of [[dependency, `cards ${fresh.id}, ${files.id}`], [files, 'files public/new.html'], [decision, 'decision'], [slot, 'free Planner slot'], [queueSlot, 'free Builder slot']]) {
+      assert.deepEqual(byId[card.id], { id: card.id, lane: card.id === queueSlot.id ? 'queue' : 'planning', on })
+      const board = (await get('/api/board?project=Proj')).body
+      assert.equal(board.cardWaits[card.id].on, on)
+      assert.equal(board.cardWaits[card.id].stuck, false)
+    }
+    assert.equal(summary.waiting, summary.waitingCards.length)
+    assert.equal(summary.stuck, 1)
+    assert.equal((await get('/api/board?project=Proj')).body.cardWaits[old.id].stuck, true)
+    assert.ok(!(await get('/api/stuck?minutes=0')).body.cards.some(c => c.id === decision.id))
+  } finally {
+    rmSync(join(tasks, '.card-planners.json'), { force: true })
+    rmSync(join(tasks, '.board.json'), { force: true })
+    await post('/api/config', { maxConcurrentAgents: 0 })
+    for (const c of [dependency, files, decision, slot, queueSlot]) moveCard(tasks, c.id, 'archive', { operatorArchive: true })
+  }
 })
 
 // Injectbuddy I341/I344 read "stuck" the moment their blocker landed (2026-09-27).
@@ -165,11 +203,15 @@ test('a card held by a usage limit is not stuck; it is again once the limit is g
   const path = historyPath(tasks, card.id)
   writeFileSync(path, readFileSync(path, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - 3 * 3600000).toISOString()}"`))
   const quotaFile = join(root, '.engine-quota.json')
-  writeFileSync(quotaFile, JSON.stringify({ codex: { until: Date.now() + 86400000, since: new Date().toISOString() } }))
+  const until = Date.now() + 86400000
+  writeFileSync(quotaFile, JSON.stringify({ codex: { until, since: new Date().toISOString() } }))
   try {
     const r = await get('/api/stuck?project=Proj&minutes=60')
     assert.equal(r.status, 200, r.body.error)
     assert.ok(!r.body.cards.some(c => c.id === card.id), 'quota-held card listed as stuck')
+    const summary = (await get('/api/summary')).body.projects[0]
+    assert.deepEqual(summary.waitingCards.find(c => c.id === card.id), { id: card.id, lane: 'planning', on: `usage limit until ${formatNZClock(until)}` })
+    assert.equal(formatNZClock('2026-10-04T08:00:00Z'), '9:00 pm')
   } finally { rmSync(quotaFile, { force: true }) }
   assert.ok((await get('/api/stuck?project=Proj&minutes=60')).body.cards.some(c => c.id === card.id), 'card not stuck after the limit cleared')
   moveCard(tasks, card.id, 'archive', { operatorArchive: true })

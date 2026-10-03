@@ -11,6 +11,8 @@ test('project controls, session identity and responsive layout in a browser with
     const errors = []; page.on('pageerror', error => errors.push(error.message))
     let paused = true, opened = null
     const board = { project: 'Proof', columns: COLUMNS, archive: { key: 'archive', label: 'Archive' }, board: Object.fromEntries([...COLUMNS.map(c => c.key), 'archive'].map(key => [key, []])), control: { paused }, config: { maxConcurrentAgents: 2, stallSeconds: 300 }, slotsFree: 1, bindings: { 'T-1': { pane_id: 'correct-pane', started: new Date().toISOString() }, 'T-2': { pane_id: 'missing-pane' } }, planners: {}, cardUsage: {}, workflow: {}, holds: {}, retries: {}, herdrUp: true, agents: [{ pane_id: 'correct-pane', tab_id: 'correct-tab', name: 'kb-t-1-proof', agent_status: 'idle' }, { pane_id: 'finished-pane', name: 'kb-t-3-proof', agent_status: 'done' }] }
+    board.board.queue = [{ id: 'T-4', title: 'Waiting card', column: 'queue', priority: 5 }, { id: 'T-5', title: 'Stuck card', column: 'queue', priority: 5 }]
+    board.cardWaits = { 'T-4': { on: 'files held by T-1', stuck: false, minutes: 120 }, 'T-5': { on: null, stuck: true, minutes: 120 } }
     await page.route('**/*', async route => {
       const url = new URL(route.request().url())
       if (url.pathname === '/api/board') return route.fulfill({ json: { ...board, control: { paused } } })
@@ -24,6 +26,12 @@ test('project controls, session identity and responsive layout in a browser with
     })
     await page.goto('http://workflow.test/?project=Proof')
     await page.getByRole('button', { name: 'Start', exact: true }).waitFor()
+    const checkWaitBadges = async () => {
+      assert.equal(await page.locator('.card[data-id="T-4"] .card-status.tone-muted').textContent(), 'Waiting: files held by T-1')
+      assert.equal(await page.locator('.card[data-id="T-5"] .card-status.tone-problem').textContent(), 'Stuck 120 min')
+      assert.notEqual(await page.locator('.card[data-id="T-4"] .card-status').evaluate(n => getComputedStyle(n).color), await page.locator('.card[data-id="T-5"] .card-status').evaluate(n => getComputedStyle(n).color))
+    }
+    await checkWaitBadges()
     assert.equal(await page.locator('#project-status').textContent(), 'Paused')
     await page.getByRole('button', { name: 'Start', exact: true }).click()
     await page.getByRole('button', { name: 'Pause', exact: true }).waitFor()
@@ -41,6 +49,7 @@ test('project controls, session identity and responsive layout in a browser with
     mkdirSync(new URL('./artifacts/workflow-controls/', import.meta.url), { recursive: true })
     await page.screenshot({ path: new URL('./artifacts/workflow-controls/desktop.png', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
     await page.setViewportSize({ width: 390, height: 844 })
+    await checkWaitBadges()
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     assert.equal(await page.getByRole('button', { name: 'Start', exact: true }).isVisible(), true)
     await page.screenshot({ path: new URL('./artifacts/workflow-controls/mobile.png', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
