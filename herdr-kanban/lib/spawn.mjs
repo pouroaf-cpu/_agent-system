@@ -151,12 +151,12 @@ export function typedPrompt(text, file, engine) {
   return { text: `Read ${file} (revision ${createHash('sha256').update(text).digest('hex')})${isCodex(engine) ? ' (use the PowerShell tool with login:false)' : ''} and follow it exactly; it is your complete task.`, file, full: text }
 }
 
-export async function deliver(paneId, fullText, session, builderGuard = null, { engine } = {}) {
+export async function deliver(paneId, fullText, session, builderGuard = null, { engine, force = false } = {}) {
   const runId = cardRunContext()?.runId
   const { text, file, full } = isHeadless(paneId) ? { text: fullText } : typedPrompt(fullText, promptPath(session, paneId), engine)
   const key = deliveryKey(text)
   const prior = readDelivery(session, paneId)
-  if (prior?.key === key && prior.status === 'confirmed') return
+  if (!force && prior?.key === key && prior.status === 'confirmed') return
   if (prior?.status === 'uncertain') throw preservePane('Previous delivery is uncertain; verify the existing session before redispatch')
   if (full) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, full) }
   try {

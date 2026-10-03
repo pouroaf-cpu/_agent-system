@@ -132,7 +132,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // An idle agent whose prompt never went in (e.g. a paste left unsubmitted) is a failed
   // delivery, not an agent that finished without a handoff.
   const session = sessionOf(basename(resolve(tasksDir, '..')))
-  const live = p => agents.some(a => a.pane_id === p)
+  const live = p => agents.some(a => a.pane_id === p && a.agent_status !== 'done')
   const idleAs = (role, p) => ['uncertain', 'failed'].includes(readDelivery(session, p)?.status) ? `its ${role} ${p} is idle and never accepted its prompt (failed delivery)` : `its ${role} ${p} is idle without a handoff`
   const observed = (card) => {
     if (['planning', 'issues'].includes(card.column)) {

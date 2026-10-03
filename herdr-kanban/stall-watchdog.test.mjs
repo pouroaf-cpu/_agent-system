@@ -265,3 +265,15 @@ test('Planning cards wait their turn while the one-per-poll Planner pass keeps s
   // The card's own recent Planner, gone without a pane, is not its turn.
   assert.deepEqual(checkStalls({ tasksDir: tasks, plannerSlotsFree: 3, now: now + 61 * MIN }).map(s => s.id).sort(), ['T-1', 'T-2'], 'no Planner started for an hour: both are stuck')
 })
+
+test('an exited headless Planner is reported as no longer running by the stall watchdog', t => {
+  const { tasks, put } = board(t)
+  put('planning', 'T-1')
+  writeFileSync(join(tasks, '.card-planners.json'), JSON.stringify({ 'T-1': { assignmentId: 'a', lifecycle: 'active', paneId: 'headless-proof', submitted: true } }))
+  const agents = [{ pane_id: 'headless-proof', agent_status: 'done', backend: 'headless' }]
+  checkStalls({ tasksDir: tasks, agents, now: T })
+  const stalls = checkStalls({ tasksDir: tasks, agents, now: T + 20 * MIN })
+  assert.equal(stalls.length, 1)
+  checkStalls({ tasksDir: tasks, agents, now: T + 40 * MIN })
+  assert.match(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), /Planner headless-proof is no longer running and did not hand off/)
+})

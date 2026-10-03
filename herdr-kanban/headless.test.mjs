@@ -109,7 +109,7 @@ test('Claude process tree closes, launch failures surface, pause blocks dispatch
   }
 })
 
-test('backend validation and live role selection keep phase 1 boundaries', () => {
+test('backend validation and live role selection keep phase 2 boundaries', () => {
   const root = mkdtempSync(join(tmpdir(), 'backend-')), config = join(root, 'config.json'), old = process.env.KANBAN_CONFIG
   process.env.KANBAN_CONFIG = config
   try {
@@ -118,7 +118,7 @@ test('backend validation and live role selection keep phase 1 boundaries', () =>
     writeFileSync(config, JSON.stringify({ agentBackend: { reviewer: 'headless', plancheck: 'headless' } }))
     assert.equal(backendFor('reviewer'), 'headless'); assert.equal(backendFor('plancheck'), 'headless'); assert.equal(backendFor('builder'), 'herdr')
     writeFileSync(config, JSON.stringify({ agentBackend: 'headless' }))
-    assert.equal(backendFor('planner'), 'herdr'); assert.equal(backendFor('reviewer'), 'headless')
+    assert.equal(backendFor('planner'), 'headless'); assert.equal(backendFor('builder'), 'herdr'); assert.equal(backendFor('reviewer'), 'headless')
     writeFileSync(config, JSON.stringify({ agentBackend: 'herdr' })); assert.equal(backendFor('reviewer'), 'herdr')
   } finally { if (old === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = old; rmSync(root, { recursive: true, force: true }) }
 })

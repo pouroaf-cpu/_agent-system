@@ -290,7 +290,7 @@ export async function agentList(session, options = {}) {
   }
   try { return [...await interactive(), ...local] } catch (err) {
     // Only an absent server is safe to treat as empty; malformed inventory fails closed.
-    if ((local.length || backendFor('reviewer') === 'headless' || backendFor('plancheck') === 'headless') && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
+    if ((local.length || backendFor('planner') === 'headless' || backendFor('reviewer') === 'headless' || backendFor('plancheck') === 'headless') && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
     throw err
   }
 }

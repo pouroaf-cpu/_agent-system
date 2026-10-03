@@ -11,7 +11,7 @@ export function backendFor(role) {
   try { config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8')) } catch (err) { if (err.code !== 'ENOENT') throw err }
   const value = config.agentBackend ?? 'herdr'
   validateAgentBackend(value)
-  // Phase 1: Planner and Builder transports remain interactive.
-  if (['planner', 'builder'].includes(role)) return 'herdr'
+  // Builders still require the interactive transport.
+  if (role === 'builder') return 'herdr'
   return typeof value === 'string' ? value : value[role] ?? 'herdr'
 }

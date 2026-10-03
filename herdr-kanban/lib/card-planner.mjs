@@ -1,3 +1,5 @@
+import { backendFor } from './agent-backend.mjs'
+import { isHeadless } from './headless.mjs'
 import { formatNZTime } from './nz-time.mjs'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -153,8 +155,9 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     const launch = async (card, previous = null, { fresh = false } = {}) => {
       assertCardRunSelection(project, [card.id], 'planner')
       if (io === defaultIO) assertPromptAllowed(project)
-      const workspace = await agentWorkspaceOr(projectPath, session)
-      const created = await tabCreate({ cwd: projectPath, label: `${card.id} Planner`, focus: false, workspace, session })
+      const backend = backendFor('planner')
+      const workspace = backend === 'headless' ? null : await agentWorkspaceOr(projectPath, session)
+      const created = await tabCreate({ cwd: projectPath, label: `${card.id} Planner`, focus: false, workspace, session, backend })
       const paneId = created?.root_pane?.pane_id
       if (!paneId) throw new Error('Planner launch returned no pane')
       const owner = owners[card.id] = {
@@ -170,7 +173,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         ...(previous ? { previousPaneId: previous.paneId, correctionRequestedAt: previous.correctionRequestedAt, handoffRetried: previous.handoffRetried, correctionRounds: previous.correctionRounds, failureFingerprint: previous.failureFingerprint, sameFailureCount: previous.sameFailureCount, diagnosticUsed: previous.diagnosticUsed, diagnosticFingerprint: previous.diagnosticFingerprint, diagnosticRound: previous.diagnosticRound, noHandoffCount: previous.noHandoffCount >= 2 ? 0 : previous.noHandoffCount, noHandoffReason: previous.noHandoffReason, deliveryFailures: previous.deliveryFailures } : {}),
       }
       save(tasksDir, owners)
-      await waitForPrompt(paneId, { session })
+      if (!isHeadless(paneId)) await waitForPrompt(paneId, { session })
       assertPlannerAssignment(tasksDir, card.id, owner)
       bindCardRunAssignment(project, [card.id], 'planner', paneId)
       const choice = choiceFor(card)
@@ -197,9 +200,9 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board closes this session and sends any correction to a fresh Planner.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
-      if (agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
+      if (!isHeadless(owner.paneId) && agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
       }
       assertPlannerAssignment(tasksDir, card.id, owner)
@@ -207,9 +210,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
       return true
     }
-    // Retirement preserves the ledger and card; only the agent pane is closed. A card
-    // past Planning never goes back to this session (corrections get a fresh one), and
-    // each idle Codex Planner holds its MCP servers: 27 of them overloaded herdr (Tradeflow).
+    // Retire interactive Planners after handoff: idle Codex panes hold MCP servers.
+    // Exited headless sessions use no resources and can resume for corrections.
     for (const card of Object.entries(board).filter(([lane]) => lane !== 'planning').flatMap(([, cards]) => cards)) {
       if (cardRunContext()) continue
       const owner = owners[card.id]
@@ -217,6 +219,12 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       const agent = agents.find(a => a.pane_id === owner.paneId)
       if (agent && !['idle', 'done'].includes(agent.agent_status)) continue
       await recordUsageFinish({ tasksDir, paneId: owner.paneId, agent, status: 'complete' })
+      // An exited headless session stays available for a later correction.
+      if (agent && isHeadless(owner.paneId) && agent.agent_session && card.column !== 'archive') {
+        owner.submitted = false
+        save(tasksDir, owners)
+        continue
+      }
       if (agent) await paneClose(owner.paneId, session)
       owner.closedAt = new Date().toISOString()
       owner.submitted = false
@@ -375,7 +383,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         // The prompt still on the input line was never submitted: finish the delivery,
         // never count a no-handoff (Injectbuddy I149 went to Owner this way).
         const prompt = readDelivery(session, owner.paneId)?.text
-        if (agent && stagedInput(evidence, prompt)) {
+        if (agent && !isHeadless(owner.paneId) && stagedInput(evidence, prompt)) {
           const result = await submitStaged(owner.paneId, prompt, session, { read: readPane, sendKeys, list: agentList, confirmMs: 10000 })
           if (result === 'staged') await failStart(card, owner, startFailed(new Error(`Planner prompt stayed unsubmitted in ${owner.paneId} after 3 Enter presses`)))
           delete owner.inactiveSince
@@ -408,24 +416,26 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         owner.noHandoffReason = reason
         owner.noHandoffCount = (owner.noHandoffCount || 0) + 1
         delete owner.inactiveSince
+        owners[card.id] = owner // the grace-period save can refresh the snapshot object
         save(tasksDir, owners)
         if (owner.noHandoffCount >= 2) { askOwnerAfterNoHandoffs(card, owner); continue }
         appendFileSync(card.path, `\n\n**Planner fallback** ${formatNZTime(now)}\n\n${reason}. A fresh Planner is taking over this card; the previous session's output is saved in the card history.\n`)
         fresh = true
       }
       let spawnedNewAgent = false
-      // Corrections and retries go to a fresh session, never back into an idle
-      // (possibly day-old) one. An uncertain delivery keeps its pane for inspection.
+      // Headless corrections resume the recorded session; no-handoff and failed
+      // delivery retries still use a fresh Planner. Herdr corrections stay fresh.
       const pending = owner && agent && readDelivery(session, owner.paneId)
-      if (owner && agent && (!pending || ['confirmed', 'cancelled', 'failed'].includes(pending.status))) {
+      const resume = owner && agent && isHeadless(owner.paneId) && agent.agent_session && !fresh && (!escalation(card) || (owner.engine === 'claude' && owner.model === escalation(card).model))
+      if (owner && agent && !resume && (!pending || ['confirmed', 'cancelled', 'failed'].includes(pending.status))) {
         await retire(card, owner, agent, deliveryFailed ? 'Planner prompt delivery failed' : fresh ? 'Planner ended without a handoff' : 'Correction goes to a fresh Planner')
         agent = null
         fresh = true
       }
       // Concurrent Planners per project are capped: 28 audit cards started 11 Codex Planners
       // at once and pinned the CPU (Injectbuddy, 2026-09-25). The rest wait for a later poll.
-      if ((!owner || !agent) && !cardRunContext() && busyPlanners(agents) + launched >= maxPlanners) continue
-      if ((!owner || !agent) && choiceFor(card).hold) continue
+      if ((!owner || !agent || resume) && !cardRunContext() && busyPlanners(agents) + launched >= maxPlanners) continue
+      if ((!owner || !agent || resume) && choiceFor(card).hold) continue
       if (!owner || !agent) {
         const previous = owner
         // A Planner the board closed after its handoff is not a missing replacement.
