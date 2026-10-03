@@ -90,7 +90,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
         // Match herdr: reviewers/checkers do not install hooks into their unchanged snapshot.
         if (options.workspacePath) herdr.writeCodexWorkspaceHooks(options.workspacePath)
       }
-      launchArgs(options, '') // validate before reserving the launch
+      launchArgs({ ...options, workspacePath: options.workspacePath || row.cwd }, '') // validate before reserving the launch
       const taken = new Set(load().filter(a => a.id !== row.id && !a.closedAt && a.name).map(a => a.name))
       let name = options.name
       for (let n = 2; taken.has(name); n++) name = `${options.name}-${n}`
