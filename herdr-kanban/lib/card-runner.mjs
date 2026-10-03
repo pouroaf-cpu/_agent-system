@@ -6,7 +6,7 @@ import { pendingDeliveries } from './delivery-state.mjs'
 import { readWorktrees, recordedOverlapBlockers } from './worktrees.mjs'
 import { readWorkflow } from './workflow-state.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
-import { autoSpawn, spawnReviewer, unmetBlockers, startHoldReason, routeReviewVerdicts } from './autospawn.mjs'
+import { autoSpawn, spawnReviewer, needsPlanCheck, unmetBlockers, startHoldReason, routeReviewVerdicts } from './autospawn.mjs'
 import { activeCardRun, pausedRunEnvironment, stopCardRun, withCardRunAssignment, interruptedCardRun } from './card-run.mjs'
 import { sessionOf } from './herdr.mjs'
 import { reviewClaimFor } from './review-claims.mjs'
@@ -73,7 +73,7 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
       routeReviewVerdicts(tasksDir, { reviewRoot, onlyIds: [card.id], log })
       return stop(`Review verdict: ${verdict.verdict}`)
     }
-    const role = ['planning'].includes(card.column) ? 'planner' : ['queue', 'planned', 'working'].includes(card.column) ? 'builder' : 'reviewer'
+    const role = card.column === 'planned' && config.planCheck !== false && needsPlanCheck(card) ? 'plancheck' : ['planning'].includes(card.column) ? 'planner' : ['queue', 'planned', 'working'].includes(card.column) ? 'builder' : 'reviewer'
     const stage = run.stages[role]
     if (stage) {
       if (stage.status === 'reserved') return // Same-process launch still owns its reservation.
@@ -94,6 +94,10 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
     const engine = r => config.engines?.[r] ?? config.engine
     const selected = stage => config.assignmentForCard?.(card, stage)
     const common = { project, projectPath, tasksDir, boardRoot }
+    if (role === 'plancheck') {
+      return await withCardRunAssignment(run, role, () => io.spawnReviewer({ ...common, cardIds: [card.id], reviewRoot, inventory,
+        planCheck: true, gitSettings, assignmentForCard: config.assignmentForCard }))
+    }
     if (card.column === 'planning') {
       const setting = selected('planning')
       return await withCardRunAssignment(run, 'planner', () => io.runCardPlanner({ ...common, onlyIds: [card.id], model: setting?.model ?? config.models.planning, engine: setting ? { kind: setting.engine, ...(setting.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${setting.reasoning}"`] } : {}) } : engine('planning'), assignmentForCard: config.assignmentForCard, mission: config.mission }))

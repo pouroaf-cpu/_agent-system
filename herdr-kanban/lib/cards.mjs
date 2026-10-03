@@ -240,8 +240,8 @@ export const CATEGORIES = ['ui', 'code', 'auth-security', 'data']
 // when it writes the card and a human can see it in the diff.
 const AUTOREVIEW = /^\*\*Auto-review:\*\*\s*(yes|no)\s*$/im
 const TRIVIAL = /^\*\*Trivial:\*\*\s*(yes|no)\s*$/im
-const AGENT_SETTING = /\*\*(Planner|Builder|Reviewer|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
-const AGENT_STAGE = { Planner: 'planning', Builder: 'working', Reviewer: 'review', Trivial: 'trivial' }
+const AGENT_SETTING = /\*\*(Planner|Plancheck|Builder|Reviewer|Trivial)\s+(engine|model|reasoning):\*\*\s*([^\n]+)$/gim
+const AGENT_STAGE = { Planner: 'planning', Plancheck: 'plancheck', Builder: 'working', Reviewer: 'review', Trivial: 'trivial' }
 // Planner-authored time estimates, same metadata line as Priority/Status/Surface.
 const EST_BUILD = /\*\*Est build:\*\*\s*(\d+)\s*m/i
 const EST_REVIEW = /\*\*Est review:\*\*\s*(\d+)\s*m/i

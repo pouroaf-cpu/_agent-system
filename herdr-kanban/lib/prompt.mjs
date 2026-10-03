@@ -74,6 +74,17 @@ export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspace
   )
 }
 
+export function planCheckerPrompt({ cards, projectPath, boardRoot, tasksDir, reviewClaim, reviewRoot, engine, envFile }) {
+  const card = cards[0]
+  const cmd = `${hkb(boardRoot, tasksDir)} --review-root ${psLiteral(reviewRoot)} --review-claim ${psLiteral(reviewClaim)} plancheck ${card.id}`
+  return oneLine(`Independently check this plan: ${briefing(tasksDir, card, 'planner')}.`,
+    `Read ${psLiteral(resolve(boardRoot, 'PLAN-CHECKER.md'))}. Your assigned unchanged card checkout is ${psLiteral(projectPath)}. Do not edit code or the card.`,
+    shellRule(engine),
+    ...(envFile ? [`Approved dev environment file: ${psLiteral(envFile)}. Use it only for the card's setup/Check; never copy or print its values.`] : []),
+    `Run the exact setup and Check. PASS requires a clean execution failing only on the AC's own assertion, with every selector, route, count, fixture and file verified in current code. FAIL only when the plan is wrong, with the precise Planner correction. Environment problems use RETRY.`,
+    `Handoff: ${cmd} PASS '<command, output, failing AC assertion and dependency evidence>' or ${cmd} FAIL '<what is wrong and what must change>' or ${cmd} RETRY '<observed environment failure>'. Quote literal evidence with PowerShell single quotes, doubling embedded apostrophes. Stop after handoff.`)
+}
+
 export function reviewerPrompt({ cards, projectPath, boardRoot, tasksDir, reviewClaim, reviewRoot = boardRoot, reportOnly = false, envFile, engine }) {
   const cmd = hkb(boardRoot, tasksDir) + (reviewClaim ? ` --review-root ${psLiteral(reviewRoot)} --review-claim ${psLiteral(reviewClaim)}` : '')
   const workspaceRule = reportOnly ? 'Non-Git workspace: inspection/report only. Do not run builds, install dependencies or mutate this shared directory; return any required isolated-build prerequisite to Planner.' : 'Use only this isolated checkout for builds; preserve its snapshot and evidence after handoff.'

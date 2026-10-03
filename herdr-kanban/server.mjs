@@ -46,7 +46,7 @@ const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mj
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -404,19 +404,21 @@ function projectSummary(project) {
 // slot is free; autoSpawn holds its own lock so a slow spawn cannot re-enter.
 async function tick(project, agents) {
   if (controlState(project, CONFIG_PATH).paused) return []
-  // Auto-Manager mode: Planned is not a gate, it is a staging shelf — every card on
-  // it belongs in the Queue (operator, 2026-08-17). No agent is needed to decide
-  // that, so the move happens here rather than costing a sweep. Queue order still
-  // holds the cards back: autoSpawn skips anything with an unmet "**Blocked by:**"
-  // or a dirty preflight, and only one card runs at a time.
+  // Card-owned Checks need independent verification before Queue; other plans
+  // promote directly. Builder dependency and dirty-file guards still apply.
   const tasksDir = tasksDirOf(project)
   const max = config.maxConcurrentAgents
   if (max <= 0 || breakerState(project).breakerTripped) return []
   if (config.mode === 'manager' || config.autoQueuePlanned === true) {
-    for (const id of promotePlanned(tasksDir, { mission: config.mission, project })) {
+    for (const id of promotePlanned(tasksDir, { mission: config.mission, project, planCheck: config.planCheck !== false })) {
       console.log(`queued: ${id}`)
       activity(project, id, 'move', 'planned -> queue (auto)')
     }
+    if (config.planCheck !== false) await autoPlanCheck({
+      project, tasksDir, projectPath: integrationPathOf(project), boardRoot: HERE, reviewRoot: REVIEW_ROOT,
+      inventory: reviewInventory, mission: config.mission, gitSettings: projectSettingsOf(project),
+      assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
+    }).catch(err => { if (!err.busy) schedulerActivity(project, `plan check skipped — ${err.message}`) })
   }
   // The cap is builders only. Slots are counted from card bindings, so the
   // operator's own panes — kanban manager, planner, reviewer, sweeper — are not
@@ -1334,6 +1336,10 @@ const handleRequest = async (req, res) => {
       if ('mode' in patch) {
         if (!['auto', 'manager'].includes(patch.mode)) throw new Error("mode must be 'auto' or 'manager'")
         config.mode = patch.mode
+      }
+      if ('planCheck' in patch) {
+        if (typeof patch.planCheck !== 'boolean') throw new Error('planCheck must be a boolean')
+        config.planCheck = patch.planCheck
       }
       if ('stallSeconds' in patch) {
         const n = Number(patch.stallSeconds)

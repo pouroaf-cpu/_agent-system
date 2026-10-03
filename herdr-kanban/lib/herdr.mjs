@@ -394,7 +394,7 @@ async function hold(paneId, fn) {
 // Operator 2026-09-28: Builders on Codex gpt-6-sol for speed; 2026-09-30: gpt-6.1-sol (Codex 0.159.2+).
 // Operator 2026-09-27: Planners on Codex gpt-6-luna to balance usage; claude-opus-5-5 (was 4-6: its cache reads cost ~2.5x) plans cards a Codex Planner could not.
 const BOARD_MODELS = {
-  r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
+  r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5', 'claude-sonnet-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   i: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-opus-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
   p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],

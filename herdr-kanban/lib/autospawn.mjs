@@ -17,20 +17,20 @@ import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
-import { spawnForCard, deliver, unsubmittedDelivery, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold } from './spawn.mjs'
+import { spawnForCard, deliver, unsubmittedDelivery, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, recordPlanCheckRetry } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { reviewerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
+import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
-import { overlapHoldReason, readWorktrees, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
+import { overlapHoldReason, readWorktrees, prepareCardWorktree, semanticDirtyFiles, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
-import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, snapshotContains } from './review-claims.mjs'
+import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, reviewClaimFor, snapshotContains } from './review-claims.mjs'
 
 // A Builder that disappears or ends without hkb done/issue leaves Working stuck.
 // Its card goes to Planning for a fresh Planner (Issues is retired, 2026-09-25); the
@@ -627,10 +627,65 @@ export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCar
   return routed
 }
 
-export function promotePlanned(tasksDir, { mission, project } = {}) {
+export function needsPlanCheck(card) {
+  if (!card.cardOwned || card.audit) return false
+  const plan = readFileSync(card.path, 'utf8').match(/^## Implementation plan\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || ''
+  return /\bcheck(?: command)?\s*:?/i.test(plan)
+}
+
+export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict, evidence }) {
+  const card = findCard(tasksDir, cardId)
+  const claim = reviewClaimFor(reviewRoot, tasksDir, card.id)
+  if (!claim || claim.id !== claimId || claim.role !== 'plancheck' || card.column !== 'planned') throw new Error('Active Planned plancheck claim required')
+  if (!['PASS', 'FAIL', 'RETRY'].includes(verdict) || !evidence?.trim()) throw new Error('Plan check needs PASS, FAIL or RETRY and observed evidence')
+  if (verdict === 'PASS') {
+    try {
+      assertReviewInputs(reviewRoot, tasksDir, card.id)
+      for (const path of [claim.snapshot.path, claim.integrationPath]) {
+        const head = spawnSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+        if (head.status !== 0 || head.stdout.trim() !== claim.snapshot.head) throw new Error('Base changed; rerun the Check on current unchanged code')
+      }
+      if (semanticDirtyFiles(claim.snapshot.path).length) throw new Error('Checker checkout contains code changes or untracked source')
+    } catch (err) { verdict = 'RETRY'; evidence = err.message }
+  }
+  if (verdict === 'RETRY') {
+    const result = recordPlanCheckRetry(tasksDir, card, evidence.trim(), claim.integrationPath, claimId)
+    updateReviewClaim(reviewRoot, claim.id, { closedAt: Date.now(), closeReason: result.reason })
+    return result
+  }
+  const reason = `Plan check: ${evidence.trim()}`
+  // Planned -> Planning is a Planner correction, never a failed Builder attempt.
+  const moved = moveCard(tasksDir, card.id, verdict === 'PASS' ? 'queue' : 'planning', { intake: true })
+  appendHistory(tasksDir, card.id, { event: 'plan-check', stage: 'plancheck', verdict, reason, claimId })
+  updateWorkflow(tasksDir, card.id, { planCheck: { verdict, reason, claimId, at: new Date().toISOString() }, operational: null, startFailure: null,
+    ...(verdict === 'FAIL' ? { correction: { category: 'planning', note: reason } } : {}) })
+  if (verdict === 'FAIL') {
+    writeCurrentFeedback(tasksDir, moved, 'Planner correction', reason)
+    requestPlannerCorrection(tasksDir, card.id)
+  }
+  failReviewClaim(reviewRoot, claim.id, `Plan check ${verdict}`)
+  return { id: card.id, to: moved.column, verdict, reason }
+}
+
+export async function autoPlanCheck({ mission, project, tasksDir, reviewRoot, inventory, spawn = spawnReviewer, ...options }) {
+  if (!readBoard(tasksDir).planned.some(needsPlanCheck)) return null
+  const claims = syncReviewClaims(reviewRoot, await inventory())
+  const board = readBoard(tasksDir)
+  const card = board.planned.find(c => needsPlanCheck(c) && !unmetBlockers(c, board, readWorktrees(tasksDir)).length
+    && (!mission?.id || (!mission.project || mission.project === project) && c.mission === mission.id)
+    && !claims.some(claim => claim.project === project && (!claim.cards.length || claim.cards.includes(c.id)))
+    && !operationalHold(tasksDir, c, options.projectPath)
+    && !startRetryHold(readWorkflow(tasksDir)[c.id], 'plancheck')
+    && !startHoldReason({ card: { ...c, column: 'queue' }, board, projectPath: options.projectPath, tasksDir, mission, gitSettings: options.gitSettings }))
+  if (!card) return null
+  return spawn({ ...options, project, tasksDir, reviewRoot, inventory, cardIds: [card.id], planCheck: true })
+}
+
+export function promotePlanned(tasksDir, { mission, project, planCheck = true } = {}) {
   const promoted = []
   const board = readBoard(tasksDir)
   for (const card of board.planned) {
+    if (planCheck && needsPlanCheck(card)) continue
     if (mission?.id && (mission.project && project !== mission.project || card.mission !== mission.id)) continue
     const unmet = unmetBlockers(card, board, readWorktrees(tasksDir))
     if (unmet.length) continue
@@ -692,8 +747,9 @@ export async function autoReview({ project, projectPath, tasksDir, boardRoot, re
 // One reviewer for every card sitting in Review, or — when `cardIds` is given —
 // just that subset (the review-plan batching). Batching is the point: a single
 // context reading several related cards costs far less than several contexts.
-export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, cardIds, inventory, assignmentForCard, now = Date.now() }) {
-  assertCardRunSelection(project, cardIds || [], 'reviewer')
+export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot, reviewRoot = boardRoot, model, engine, cardIds, inventory, assignmentForCard, planCheck = false, gitSettings, now = Date.now() }) {
+  const role = planCheck ? 'plancheck' : 'reviewer'
+  assertCardRunSelection(project, cardIds || [], role)
   assertPromptAllowed(project)
   // A cross-process reservation follows fresh global inventory, before launch.
   let claim, paneId, assignedCards = []
@@ -701,7 +757,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     const session = sessionOf(project)
 
     const board = readBoard(tasksDir)
-    let cards = cardIds?.length ? [...board.review, ...board.completed] : board.review
+    let cards = planCheck ? board.planned.filter(needsPlanCheck) : cardIds?.length ? [...board.review, ...board.completed] : board.review
     if (cardIds?.length) {
       const wanted = new Set(cardIds.map((id) => id.toUpperCase()))
       cards = cards.filter((c) => wanted.has(c.id))
@@ -709,18 +765,23 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (cards.some((c) => c.audit)) cards = [cards.find((c) => c.audit)]
     if (!cards.length) throw new Error('nothing in Review')
     assignedCards = cards
-    assertCardRunSelection(project, cards.map(c => c.id), 'reviewer')
-    const primary = assignmentForCard?.(cards[0], 'review')
+    assertCardRunSelection(project, cards.map(c => c.id), role)
+    if (planCheck && cards.length !== 1) throw new Error('Plan check requires one card')
+    const primary = assignmentForCard?.(cards[0], planCheck ? 'plancheck' : 'review') ?? (planCheck ? (await import('./agent-settings.mjs')).assignmentFor({}, cards[0], 'plancheck') : null)
     const choice = selectQuotaAssignment(boardRoot, primary ?? { engine: engineKind(engine), model }, now)
     const selected = primary ? choice.assignment : null
     if (choice.hold) throw Object.assign(new Error(choice.hold), { busy: true })
     for (const card of cards) {
-      const limit = checkWorkflowLimits(tasksDir, card.id, 'reviewer') || startRetryHold(readWorkflow(tasksDir)[card.id], 'reviewer')
+      const limit = checkWorkflowLimits(tasksDir, card.id, role) || startRetryHold(readWorkflow(tasksDir)[card.id], role)
       if (limit) throw Object.assign(new Error(limit), { busy: true })
       const held = operationalHold(tasksDir, card, projectPath)
       if (held) throw Object.assign(new Error(`Review recovery held: ${held}`), { busy: true })
     }
-    for (const group of readReviewGroups(tasksDir).filter(g => g.cards.some(id => cards.some(c => c.id === id)))) {
+    if (planCheck) {
+      const hold = startHoldReason({ card: { ...cards[0], column: 'queue' }, board, projectPath, tasksDir, gitSettings })
+      if (hold) throw Object.assign(new Error(hold), { busy: true })
+    }
+    for (const group of readReviewGroups(tasksDir).filter(g => !planCheck && g.cards.some(id => cards.some(c => c.id === id)))) {
       const remaining = group.cards.filter(id => !board.archive.some(c => c.id === id))
       if (remaining.length !== cards.length || remaining.some(id => !cards.some(c => c.id === id))) throw new Error(`Review explicit group together: ${group.name}`)
     }
@@ -728,10 +789,11 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     if (!inventory) throw new Error('Global reviewer inventory required')
     const integrated = readWorktrees(tasksDir)
     // Reviewers review integrated code; an isolated card commit must be integrated first.
-    for (const card of cards.filter(c => c.column === 'completed' || integrated[c.id])) {
+    for (const card of cards.filter(c => !planCheck && (c.column === 'completed' || integrated[c.id]))) {
       if (integrated[card.id]?.state !== 'integrated') throw new Error(`${card.id}: integration receipt required before review`)
     }
     claim = reserveReview(reviewRoot, { project, tasksDir, cards: cards.map(c => c.id), inventory: await inventory() })
+    if (planCheck) updateReviewClaim(reviewRoot, claim.id, { role })
     cards = cards.map(card => card.column === 'completed' ? moveCard(tasksDir, card.id, 'review') : card)
 
     for (const card of cards) {
@@ -743,12 +805,19 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
     const reviewerEngine = auditMcpEngine(selectedEngine, cards, tasksDir)
     const environment = projectEnvironment(project)
-    const snapshot = prepareReviewSnapshot(reviewRoot, projectPath, claim.id)
+    const prepared = planCheck ? prepareCardWorktree({ projectPath, tasksDir, card: cards[0], gitSettings }) : null
+    if (planCheck && !prepared.git) throw new Error('Plan check requires an isolated Git card checkout')
+    if (planCheck && semanticDirtyFiles(prepared.workspacePath).length) throw new Error('Plan check requires an unchanged base checkout')
+    const snapshot = planCheck ? { path: prepared.workspacePath, head: prepared.entry.baseCommit } : prepareReviewSnapshot(reviewRoot, projectPath, claim.id)
+    if (planCheck) {
+      const head = spawnSync('git', ['-C', snapshot.path, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+      if (head.status !== 0 || head.stdout.trim() !== snapshot.head) throw new Error('Card checkout contains saved implementation; an unchanged base is required')
+    }
     for (const card of cards) {
       const commit = integrated[card.id]?.commit
-      if (snapshot.head && commit && !snapshotContains(snapshot.path, commit)) throw new Error(`${card.id}: review snapshot ${snapshot.head} does not contain integrated commit ${commit}`)
+      if (!planCheck && snapshot.head && commit && !snapshotContains(snapshot.path, commit)) throw new Error(`${card.id}: review snapshot ${snapshot.head} does not contain integrated commit ${commit}`)
     }
-    updateReviewClaim(reviewRoot, claim.id, { engine: engineKind(reviewerEngine), model: selectedModel, snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
+    updateReviewClaim(reviewRoot, claim.id, { role, engine: engineKind(reviewerEngine), model: selectedModel, snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
 
     const workspace = await agentWorkspaceOr(projectPath, session)
     const created = await tabCreate({
@@ -757,7 +826,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     paneId = created?.root_pane?.pane_id
     if (!paneId) throw new Error(`tab create returned no pane id: ${JSON.stringify(created)}`)
     updateReviewClaim(reviewRoot, claim.id, { paneId })
-    bindCardRunAssignment(project, cards.map(c => c.id), 'reviewer', paneId)
+    bindCardRunAssignment(project, cards.map(c => c.id), role, paneId)
 
     // r-<first card> (a- for an audit) so closeFinished and reviewerRunning can
     // both recognise it; agentStart suffixes it if that name is still live.
@@ -775,13 +844,13 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
       try {
         recordUsageStart({
           tasksDir, project, requestId: `review:${cards.map((c) => c.id).join(',')}`, cardIds: cards.map((c) => c.id),
-          role: 'reviewer', paneId, tabId: created?.tab?.tab_id, model: selectedModel, name, agentSession: agent?.agent_session,
+          role, paneId, tabId: created?.tab?.tab_id, model: selectedModel, name, agentSession: agent?.agent_session,
         })
       } catch {}
-      await deliver(paneId, reviewerPrompt({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path, engine: reviewerEngine }), session, null, { engine: reviewerEngine })
+      await deliver(paneId, (planCheck ? planCheckerPrompt : reviewerPrompt)({ cards, projectPath: snapshot.path, boardRoot, reviewRoot, tasksDir, reviewClaim: claim.id, reportOnly: snapshot.reportOnly, envFile: environment?.path, engine: reviewerEngine }), session, null, { engine: reviewerEngine })
       updateReviewClaim(reviewRoot, claim.id, { phase: 'running', submittedAt: Date.now() })
-      for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null, startFailure: null })
-      if (choice.message) for (const card of cards) activityLog({ tasksDir, project, cardId: card.id, event: 'reviewer-start', message: choice.message, now })
+      for (const card of cards) updateWorkflow(tasksDir, card.id, { operational: null, ...(!planCheck ? { startFailure: null } : {}) })
+      if (choice.message) for (const card of cards) activityLog({ tasksDir, project, cardId: card.id, event: planCheck ? 'plancheck-start' : 'reviewer-start', message: choice.message, now })
     } catch (err) {
       if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
       throw Object.assign(new Error(`reviewer spawn failed: ${err.message}`), { paused: err.paused, preservePane: err.preservePane, startFailed: err.startFailed })
@@ -792,7 +861,12 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     // Reviewer ownership is in the separate global claim ledger, never Builder slots.
     return { pane_id: paneId, tab_id: created?.tab?.tab_id, model: selectedModel, name, cards: cards.map((c) => c.id) }
   } catch (err) {
-    if (err.startFailed) for (const card of assignedCards) recordStartFailure(tasksDir, card.id, 'reviewer', err.message)
+    if (planCheck && assignedCards.length && !err.preservePane && !err.busy && !err.paused) {
+      recordPlanCheckRetry(tasksDir, assignedCards[0], err.message, projectPath, claim?.id)
+      if (claim) updateReviewClaim(reviewRoot, claim.id, { closedAt: Date.now(), closeReason: err.message })
+      throw err
+    }
+    if (err.startFailed) for (const card of assignedCards) recordStartFailure(tasksDir, card.id, role, err.message)
     else if (!err.paused && !err.busy) for (const card of assignedCards) recordOperationalFailure(tasksDir, card, err.message, projectPath)
     // A start failure closed its pane, so the claim is released for the retry.
     if (claim && paneId && !err.startFailed) updateReviewClaim(reviewRoot, claim.id, { phase: 'uncertain', error: err.message })

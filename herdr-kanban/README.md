@@ -18,6 +18,15 @@ From this folder, run `.\kanban.ps1` to launch the board at `http://127.0.0.1:77
 
 ## Optional agent tools
 
+Card-owned plans with a Check receive an independent check in their unchanged card
+checkout before automatic Queue promotion. PASS requires correct execution failing
+on the AC assertion and verified selectors, routes, counts, fixtures and files.
+FAIL returns to Planning with `Plan check: ...` feedback, without a Builder return.
+The Planner's Base-check rule still applies. Set `planCheck: false` in
+board.config.json (or POST /api/config) to disable this gate.
+`agentSettings.global.plancheck` defaults to Claude, `claude-sonnet-5`, reasoning
+`medium`; card overrides use `Plancheck engine/model/reasoning`.
+
 For browser checks, prefer headless Chrome DevTools MCP when available; use headless Playwright if needed. Load browser instructions only for a browser task. Use Windows Computer Use only when browser tools cannot cover the task.
 
 MIT licence.

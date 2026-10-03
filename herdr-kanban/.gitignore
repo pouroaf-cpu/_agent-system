@@ -1,4 +1,5 @@
 node_modules/
+!PLAN-CHECKER.md
 *.log
 .board.json
 .board-retries.json

@@ -113,6 +113,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     }
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
+    if (card.column === 'planned' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational) return true
     // A Planner's `hkb wait` for a file or card that does not exist yet.
     if (card.column === 'planning' && workflow[card.id]?.waitFor) return true
     // Waiting for one of the capped Planner slots (card-planner maxPlanners), or its turn while Planners keep starting.

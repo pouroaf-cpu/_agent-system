@@ -1256,7 +1256,7 @@ function renderManagerTasksScreen() {
   wrap.append(ah, ap);
   const stages = state.config?.agentSettings || {};
   const catalog = state.config?.supportedAgentSettings || {};
-  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) {
+  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) {
     const current = stages[stage] || {};
     const line = document.createElement('div'); line.className = 'settings-agent-row';
     const title = document.createElement('strong'); title.textContent = label;
@@ -2807,7 +2807,7 @@ function renderDrawer() {
   const grid = document.createElement('div');
   grid.className = 'override-grid';
   const stagePick = document.createElement('select');
-  for (const [stage, label] of [['planning', 'Planner'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
+  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Builder'], ['review', 'Reviewer'], ['trivial', 'Trivial']]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
   const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
   stagePick.setAttribute('aria-label', 'Stage'); oe.setAttribute('aria-label', 'Engine'); om.setAttribute('aria-label', 'Model'); or.setAttribute('aria-label', 'Reasoning');
   os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';

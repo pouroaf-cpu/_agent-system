@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { findCard } from './cards.mjs'
 import { approvedManagedModel } from './herdr.mjs'
 
-export const STAGES = ['planning', 'working', 'review', 'trivial']
+export const STAGES = ['planning', 'plancheck', 'working', 'review', 'trivial']
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 export const SUPPORTED = {
   codex: {
@@ -31,6 +31,7 @@ export function validateAssignment(value, label = 'agent setting') {
 }
 
 function legacySetting(config, stage) {
+  if (stage === 'plancheck') return { engine: 'claude', model: 'claude-sonnet-5', reasoning: 'medium' }
   const role = legacyRole[stage]
   const engine = config.engines?.[role] ?? config.engine ?? { kind: 'claude' }
   const kind = kindOf(engine) || 'claude'
@@ -48,7 +49,7 @@ export function globalSettings(config) {
 
 // The launch guard (herdr.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
 // here too, or a saved setting only fails at agent start and sends cards to Owner (2026-09-26 I229).
-const ROLE = { planning: 'p', working: 'b', review: 'r', trivial: 'b' }
+const ROLE = { planning: 'p', plancheck: 'r', working: 'b', review: 'r', trivial: 'b' }
 function assertLaunchable(stage, setting) {
   const allowed = [approvedManagedModel(`${ROLE[stage]}-t-1`) ?? []].flat()
   if (allowed.length && !allowed.includes(setting.model)) throw new Error(`${stage}: model ${setting.model} is not approved for board launches (allowed: ${allowed.join(', ')})`)
@@ -83,7 +84,7 @@ export function catalog() {
   return Object.fromEntries(Object.entries(SUPPORTED).map(([engine, data]) => [engine, { models: [...data.models], reasoning: [...data.reasoning] }]))
 }
 
-const labels = { planning: 'Planner', working: 'Builder', review: 'Reviewer', trivial: 'Trivial' }
+const labels = { planning: 'Planner', plancheck: 'Plancheck', working: 'Builder', review: 'Reviewer', trivial: 'Trivial' }
 const fields = ['engine', 'model', 'reasoning']
 export function setCardOverride(tasksDir, cardId, stage, patch, config) {
   if (!STAGES.includes(stage)) throw new Error(`unsupported settings stage ${stage}`)

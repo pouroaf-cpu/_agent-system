@@ -10,14 +10,15 @@ import { recordUsageFinish } from './request-usage.mjs'
 import { cleanupPreparedWorktree, prepareCardWorktree } from './worktrees.mjs'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertCardRunSelection, cardRunContext, bindCardRunAssignment } from './card-run.mjs'
-import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
+import * as workflow from './workflow-state.mjs'
 import { deliveryKey, readDelivery, saveDelivery, pendingDeliveries, promptPath } from './delivery-state.mjs'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { assertGuardActive, assertRestrictedRuntimeVerified } from './builder-guard.mjs'
 import { activityLog } from './activity.mjs'
 import { isTransient, nextRetry, retryHold } from './transient.mjs'
+const { readWorkflow, updateWorkflow } = workflow
 
 // A prompt that never leaves the input box is the failure this guards against, so
 // the check is "did the agent start working", not "did the CLI return 0". One
@@ -207,16 +208,28 @@ export function recordStartFailure(tasksDir, cardId, role, reason, now = Date.no
   const card = findCard(tasksDir, cardId)
   const prior = readWorkflow(tasksDir)[card.id]?.startFailure
   const same = prior?.role === role
-  const retry = isTransient(reason) && nextRetry(same && prior.since ? prior : null, now)
-  const count = retry ? (same ? prior.count : 0) : same ? prior.count + 1 : 1
+  const retry = (role === 'plancheck' || isTransient(reason)) && nextRetry(same && prior.since ? prior : null, now)
+  const count = retry && role !== 'plancheck' ? (same ? prior.count : 0) : same ? prior.count + 1 : 1
   appendHistory(tasksDir, card.id, { event: 'start-failed', stage: card.column, role, reason, count, ...(retry && { nextAt: new Date(retry.nextAt).toISOString() }) })
   updateWorkflow(tasksDir, card.id, { startFailure: { role, count, reason, at: new Date(now).toISOString(), ...(retry && { since: retry.since, tries: retry.tries, nextAt: retry.nextAt }) } })
-  if ((retry ? !retry.exhausted : count < 2) || ['pou', 'owner'].includes(card.column)) return null
+  if (role === 'plancheck' || (retry ? !retry.exhausted : count < 2) || ['pou', 'owner'].includes(card.column)) return null
   const lane = columnByKey(card.column).label
   const moved = moveCard(tasksDir, card.id, 'owner')
   const who = `The ${role[0].toUpperCase() + role.slice(1)} for ${card.id}`, last = String(reason).replace(/\s+/g, ' ').slice(0, 300)
   writeCurrentFeedback(tasksDir, moved, 'Needs you', `${retry ? `${who} kept failing to start for 3 hours (${retry.tries} tries; last error: ${last})` : `${who} failed to start twice in a row (last error: ${last})`}. All work is preserved. Should the board try again? Drag it back to ${lane} to retry.`)
   return moved
+}
+export function recordPlanCheckRetry(tasksDir, card, reason, workspace, claimId, now = Date.now()) {
+  workflow.recordOperationalFailure(tasksDir, card, reason, workspace || resolve(tasksDir, '..'))
+  recordStartFailure(tasksDir, card.id, 'plancheck', reason, now)
+  const skipped = readWorkflow(tasksDir)[card.id].startFailure.count >= 2
+  const note = skipped ? `Plan check skipped: environment (${reason})` : `Plan check retry: environment (${reason})`
+  const moved = skipped ? moveCard(tasksDir, card.id, 'queue', { intake: true }) : card
+  appendHistory(tasksDir, card.id, { event: 'plan-check', stage: 'plancheck', verdict: 'RETRY', reason: note, claimId })
+  // The start backoff owns the hold; a prerequisite fingerprint must not block the retry.
+  updateWorkflow(tasksDir, card.id, { planCheck: { verdict: 'RETRY', reason: note, claimId, at: new Date(now).toISOString() }, operational: null,
+    ...(skipped ? { startFailure: null } : {}) })
+  return { id: card.id, to: moved.column, verdict: 'RETRY', reason: note }
 }
 // The visible hold while a role's start backs off, or null when it may start now.
 export function startRetryHold(saved, role, now = Date.now()) {

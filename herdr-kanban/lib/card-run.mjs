@@ -79,7 +79,7 @@ export function allowCardRunPrompt(project, { paneId, action = 'check' } = {}) {
     if (action !== 'check') {
       const config = JSON.parse(readFileSync(configPath(), 'utf8'))
       const card = findCard(join(config.projectsRoot, run.project, 'TASKS'), run.cardId)
-      const expected = { planner: 'planning', builder: 'working', reviewer: 'review' }[ctx.role]
+      const expected = { planner: 'planning', plancheck: 'planned', builder: 'working', reviewer: 'review' }[ctx.role]
       if (!expected || card.column !== expected) throw denied('Card stage changed; prompt is no longer authorized')
     }
     return stage

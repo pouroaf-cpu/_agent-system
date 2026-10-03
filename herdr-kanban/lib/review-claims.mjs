@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { prepareWorktreeEnvironment } from './worktrees.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
 import { readBoard, moveCard, currentReviewDecision, setAutoReview, findCard } from './cards.mjs'
-import { requestPlannerCorrection } from './card-planner.mjs'
+import { recordPlanCheckRetry } from './spawn.mjs'
 import { recordOperationalFailure, evidenceFingerprint } from './workflow-state.mjs'
 import { projectEnvironment } from './project-control.mjs'
 import { isCardId, isReviewerAgent } from './ids.mjs'
@@ -50,6 +50,11 @@ function ledger(root, update) {
   } finally { closeSync(fd); unlinkSync(lock) }
 }
 function retire(claim, now, reason) {
+  if (claim.role === 'plancheck') {
+    for (const card of readBoard(claim.tasksDir).planned.filter(c => claim.cards.includes(c.id))) {
+      recordPlanCheckRetry(claim.tasksDir, card, `checker ended without a verdict: ${reason}`, claim.integrationPath, claim.id, now)
+    }
+  }
   for (const card of readBoard(claim.tasksDir).review.filter(c => claim.cards.includes(c.id))) {
     if (currentReviewDecision(readFileSync(card.path, 'utf8'))) continue
     recordOperationalFailure(claim.tasksDir, card, `Reviewer ${claim.paneId || claim.id} ended without a per-card verdict: ${reason}`, claim.integrationPath || resolve(claim.tasksDir, '..'))

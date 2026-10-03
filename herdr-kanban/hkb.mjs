@@ -28,7 +28,7 @@ import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
 import { approvedManagedModel } from './lib/herdr.mjs'
-import { assertReviewHandoff, assertReviewInputs } from './lib/review-claims.mjs'
+import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
@@ -52,6 +52,16 @@ let plannerAssignment
 if (args[0] === '--planner-assignment') { plannerAssignment = args[1]; args.splice(0, 2) }
 const [verb, cardId, ...rest] = args
 const note = rest.join(' ').trim()
+
+if (reviewClaim && verb !== 'plancheck' && reviewClaimFor(reviewRoot, tasksDir, cardId)?.role === 'plancheck') fail('Plan checker permits only plancheck handoffs')
+
+if (verb === 'plancheck') {
+  try {
+    const { finishPlanCheck } = await import('./lib/autospawn.mjs')
+    console.log(JSON.stringify(finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId: reviewClaim, verdict: rest[0], evidence: rest.slice(1).join(' ') })))
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
 
 const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'planning', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'planning', pass: null, move: null }
 
