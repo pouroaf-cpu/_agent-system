@@ -116,7 +116,9 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
       return heldByLiveCard(card) || String(holds[card.id] || '').startsWith('installing dependencies in ')
     }
     // A plan check waits on the same file locks as a Builder start (Tradeflow TF136, 2026-10-03).
-    if (card.column === 'planned' && heldByLiveCard(card)) return true
+    // Holds are unknown until the first scheduler pass after a restart (Injectbuddy I701 went to
+    // Owner the minute the board restarted, 2026-10-03).
+    if (card.column === 'planned' && (!holdsKnown || heldByLiveCard(card))) return true
     // A card waits in Planning/Planned until its Blocked-by prerequisites land (TF44).
     if (['planning', 'planned'].includes(card.column) && waitingOnPrerequisites(card, board, registry).length) return true
     if (card.column === 'planned' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational) return true

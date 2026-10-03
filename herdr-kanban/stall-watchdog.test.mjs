@@ -104,6 +104,13 @@ test('a Planned card whose plan check waits on a live card\'s files is a wait (T
   assert.equal(findCard(tasks, 'T-2').column, 'planned')
 })
 
+test('right after a restart, before holds are known, a Planned card is not a stall (Injectbuddy I701)', t => {
+  const { tasks, put } = board(t)
+  put('backlog', 'T-1')
+  assert.deepEqual(checkStalls({ tasksDir: tasks, holdsKnown: false, now: T + 90 * MIN }), [])
+  assert.equal(checkStalls({ tasksDir: tasks, now: T + 111 * MIN }).length, 1, 'once holds are known, an unexplained wait is a stall')
+})
+
 test('the low-disk pause is a wait and restarts every stall window', t => {
   const { tasks, put } = board(t)
   put('planning', 'T-1')
