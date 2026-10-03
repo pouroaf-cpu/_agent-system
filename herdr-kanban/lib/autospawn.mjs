@@ -126,7 +126,7 @@ export function slotsFree({ tasksDir, agents, max, now = Date.now() }) {
 // Lives in cards.mjs so the Planner can use it without an import cycle.
 export { unmetBlockers }
 
-const liveCards = (board) => Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)
+const liveCards = (board) => Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key])
 
 function duplicateLiveId(card, board) {
   const hits = liveCards(board).filter((c) => c.id === card.id)
@@ -494,7 +494,8 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
   // retired after integration. Back in Planning/Queue the next build is a fresh Builder,
   // and the old idle one held its worktree's files (Tradeflow TF51: npm ci lock).
   const builderLanes = ['working', 'completed', 'review']
-  const liveCards = new Set(Object.entries(readBoard(tasksDir)).filter(([column]) => builderLanes.includes(column)).flatMap(([, cards]) => cards.map(c => c.id)))
+  const board = readBoard(tasksDir)
+  const liveCards = new Set(builderLanes.flatMap(column => board[column].map(c => c.id)))
   for (const [id, saved] of Object.entries(readWorkflow(tasksDir))) if (liveCards.has(id) && saved.builder) bound.add(saved.builder.pane_id)
   for (const a of agents) {
     if (isBoardAgent(a) && !bound.has(a.pane_id) && !isSpawning(a.pane_id)) continue
@@ -508,7 +509,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
     if (reviewOrSweep(a)) return doneLongEnough(a, now)
     return inactiveLongEnough(a, now)
   })
-  if (!retire) {
+  if (!retire && spent.length) {
     const owned = new Set(Object.values(readBoard(tasksDir)).flat().filter(c => c.cardOwned).map(c => c.id))
     const panes = new Set(Object.values(readUsage(tasksDir).runs).filter(r => r.cardIds?.length && r.cardIds.every(id => owned.has(id))).map(r => r.paneId))
     spent = spent.filter(a => panes.has(a.pane_id))
@@ -570,9 +571,10 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
 }
 
 export function archiveNoReviewCards(tasksDir) {
-  const worktrees = readWorktrees(tasksDir)
   const board = readBoard(tasksDir)
   const archived = [], skipped = []
+  if (!board.review.length && !board.completed.length) return { archived, skipped }
+  const worktrees = readWorktrees(tasksDir)
   for (const card of ['review', 'completed'].flatMap(column => board[column])) {
     // Reviewed cards are archived here too, once their PASS has routed them to Completed.
     if (!card.cardOwned || card.audit || (card.autoReview && !(card.column === 'completed' && card.reviewPassed))) continue
@@ -717,7 +719,9 @@ const busyError = () => Object.assign(new Error('a reviewer is already running')
 // prompt frees its board-wide slot, and its idle pane is closed (an unowned reviewer pane
 // holds verdict routing). This project's inventory reconciles only this project's claims.
 export async function reconcileReviewers({ reviewRoot, boardRoot, project, tasksDir, agents, now = Date.now(), close = paneClose, read = paneRead }) {
-  const open = new Set(readReviewClaims(reviewRoot).filter(c => !c.closedAt).map(c => c.id))
+  const claims = readReviewClaims(reviewRoot)
+  if (!claims.some(c => !c.closedAt && c.project === project) && !agents.some(isReviewerAgent)) return []
+  const open = new Set(claims.filter(c => !c.closedAt).map(c => c.id))
   syncReviewClaims(reviewRoot, [{ project, tasksDir, known: true, agents }], now)
   const retired = readReviewClaims(reviewRoot).filter(c => c.closedAt && open.has(c.id))
   for (const claim of retired) {

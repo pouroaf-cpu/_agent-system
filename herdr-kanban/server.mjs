@@ -40,7 +40,7 @@ const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard } = await import('./lib/cards.mjs')
-const { agentList, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -220,6 +220,8 @@ function tripBreakerIfNeeded(project) {
 // Concurrent callers (the poll loop, every open board tab) share one herdr call per
 // project: a slow herdr otherwise got one call per request and slowed further.
 const agentPolls = new Map()
+const usagePolls = new Map()
+const emptyPolls = new Map()
 function pollAgents(project) {
   if (!agentPolls.has(project)) agentPolls.set(project, pollAgentsNow(project).finally(() => agentPolls.delete(project)))
   return agentPolls.get(project)
@@ -228,7 +230,12 @@ function pollAgents(project) {
 async function pollAgentsNow(project) {
   try {
     const allAgents = await agentList(sessionOf(project), { ensureSession: !controlState(project, CONFIG_PATH).paused && config.maxConcurrentAgents > 0 && missionAllowsProject(project) })
-    reconcileUsage(tasksDirOf(project), allAgents)
+    // Usage repair scans historical runs; lifecycle hooks still record starts and
+    // finishes immediately. Refresh repair at most twice a minute.
+    if (Date.now() - (usagePolls.get(project) ?? -Infinity) >= 30000) {
+      reconcileUsage(tasksDirOf(project), allAgents)
+      usagePolls.set(project, Date.now())
+    }
     for (const [id, saved] of Object.entries(readWorkflow(tasksDirOf(project)))) {
       if (!saved.completedAt || saved.outputSavedAt === saved.completedAt || !saved.builder) continue
       const agent = allAgents.find(a => a.pane_id === saved.builder.pane_id && ['idle', 'done'].includes(a.agent_status))
@@ -487,10 +494,17 @@ async function pollProject(project) {
       }
     }
     const gitSettings = projectSettingsOf(project)
-    if (archiveNoReview(project, tasksDir)) broadcastBoard(project)
+    const liveBoard = readBoard(tasksDir)
+    if ((liveBoard.review.length || liveBoard.completed.length) && archiveNoReview(project, tasksDir)) broadcastBoard(project)
     const { agents, herdrUp } = await pollAgents(project)
     broadcast(project, 'agents', { project, agents, herdrUp })
     if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
+    // Scan live lanes every poll, so API/agent moves wake an empty project on the
+    // very next poll. Only its otherwise empty housekeeping pass is slowed down.
+    if (!agents.length && !COLUMNS.some(c => liveBoard[c.key].length) && !activeCardRun(project) && !controlState(project, CONFIG_PATH).release) {
+      if (Date.now() - (emptyPolls.get(project) ?? -Infinity) < 60000) return
+      emptyPolls.set(project, Date.now())
+    } else emptyPolls.delete(project)
     const lowDisk = diskLow()
     if (activeCardRun(project)) {
       if (!lowDisk) await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
@@ -595,10 +609,11 @@ async function pollProject(project) {
 
     // A Builder hands off before integration. Validate and cherry-pick each
     // completed card serially, routing only the failing card back to its Planner.
+    const handoffs = readBoard(tasksDir)
     if (gitSettings) {
       const waiting = {} // why each card is not integrated yet, for the stall watchdog's Owner note
       integrationHolds.set(project, waiting)
-      dirty = logIntegrationResults(project, await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck }), waiting) || dirty
+      if (handoffs.completed.length || handoffs.review.length) dirty = logIntegrationResults(project, await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck }), waiting) || dirty
     }
       } finally {
         reconciliationPolls.delete(project)
@@ -637,7 +652,7 @@ async function pollProject(project) {
     if (!lowDisk) { await tick(project, agents); holdsReady.add(project) }
 
     if (autoEnabled && !lowDisk) {
-      if (config.leadPlanner?.autoIssues) {
+      if (config.leadPlanner?.autoIssues && (readBoard(tasksDir).planning.length || Object.values(readCardPlanners(tasksDir)).some(owner => !owner.closedAt))) {
       const planner = await runCardPlanner({
         project,
         projectPath: integrationPathOf(project),
@@ -750,7 +765,9 @@ function broadcast(project, event, data) {
   for (const c of clients) if (c.project === project) send(c.res, event, data)
 }
 
-const broadcastBoard = (project) => broadcast(project, 'board', boardPayload(project))
+const broadcastBoard = (project) => {
+  if ([...clients].some(client => client.project === project)) broadcast(project, 'board', boardPayload(project))
+}
 
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 const lastCleanup = new Map()
@@ -1556,14 +1573,17 @@ async function startPollers() {
   console.log(`kanban: http://127.0.0.1:${port}`)
   console.log(`herdr: ${(await isRunning()) ? 'up' : 'down'}`)
   cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
+  setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
 
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.
   for (const project of config.projects) {
     const drained = drainIssues(tasksDirOf(project), (card, err) => activity(project, card.id, 'failure', `left in Issues: ${err.message}`, 'error'))
     for (const id of drained) activity(project, id, 'move', 'issues -> planning (Issues lane retired)')
-    setInterval(() => pollProject(project), config.agentPollMs)
   }
+  // All project inventories share the default session's single CLI list. Legacy
+  // sessions still need their own list so existing agents remain visible.
+  setInterval(() => withAgentListCycle(() => Promise.all(config.projects.map(project => pollProject(project)))), config.agentPollMs)
   setInterval(() => {
     const pids = stopRunawayTsservers(config.projectsRoot)
     if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')

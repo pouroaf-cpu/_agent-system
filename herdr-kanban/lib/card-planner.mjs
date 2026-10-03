@@ -212,7 +212,9 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
     }
     // Retire interactive Planners after handoff: idle Codex panes hold MCP servers.
     // Exited headless sessions use no resources and can resume for corrections.
-    for (const card of Object.entries(board).filter(([lane]) => lane !== 'planning').flatMap(([, cards]) => cards)) {
+    const handedOff = Object.keys(board).filter(lane => !['planning', 'archive'].includes(lane)).flatMap(lane => board[lane])
+    if (Object.values(owners).some(owner => !owner.closedAt)) handedOff.push(...board.archive)
+    for (const card of handedOff) {
       if (cardRunContext()) continue
       const owner = owners[card.id]
       if (!owner || owner.closedAt) continue

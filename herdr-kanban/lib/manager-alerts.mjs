@@ -83,7 +83,7 @@ export function ownerAgeing(tasksDir, { now = Date.now(), hours = 4, burst = 3 }
   const recent = board.owner.filter(c => age(c) < HOUR)
   if (!old.length && recent.length < burst) return null
   const owner = new Set(board.owner.map(c => c.id))
-  const blocked = Object.entries(board).filter(([k]) => !['owner', 'archive'].includes(k)).flatMap(([, cards]) => cards)
+  const blocked = Object.keys(board).filter(k => !['owner', 'archive'].includes(k)).flatMap(key => board[key])
     .filter(c => c.blockedBy?.some(id => owner.has(id))).map(c => c.id)
   return {
     title: old.length ? `${old.length} Owner card${old.length > 1 ? 's' : ''} waiting over ${hours}h` : `${recent.length} cards reached Owner within an hour`,

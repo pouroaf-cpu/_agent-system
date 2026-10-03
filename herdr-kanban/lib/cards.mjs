@@ -267,12 +267,6 @@ const FILES_SECTION = /##\s*Files\s*\n([\s\S]*?)(?=\n##\s|\n*$)/i
 const FILE_LINE = /^-\s*`([^`]+)`/gm
 const DIRTY_SNAPSHOT = /^\*\*Dirty snapshot:\*\*[^\n]*\n+```json\n([\s\S]*?)\n```/gm
 
-// Metadata may follow an assignment override longer than 2KB. Truncating here
-// silently loses Workflow/Auto-review and sends corrections down the wrong lane.
-function readHead(path) {
-  return readFileSync(path, 'utf8')
-}
-
 // Agents append their reason to the bottom of the card, so the one line the
 // operator actually needs lives in the tail, not the head.
 const ASK = /\*\*(Needs you|Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n+([\s\S]+?)(?=\n+---|\n*$)/g
@@ -282,20 +276,13 @@ const ASK = /\*\*(Needs you|Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\
 // diff — and so the loop cannot be reset by deleting a state file.
 const ROUND = /\*\*Review feedback\*\*/g
 
-function readAsk(path, bytes = 8192) {
-  const current = readFileSync(path, 'utf8').match(/^## Current feedback\r?\n([^\n]+): ([\s\S]*?)(?=^History entry:|^## |$(?![\s\S]))/m)
+function readAsk(text, buf, bytes = 8192) {
+  const current = text.match(/^## Current feedback\r?\n([^\n]+): ([\s\S]*?)(?=^History entry:|^## |$(?![\s\S]))/m)
   if (current) return { kind: current[1], text: current[2].trim() }
-  const buf = readFileSync(path)
   const tail = buf.subarray(Math.max(0, buf.length - bytes)).toString('utf8')
   let last = null
   for (const m of tail.matchAll(ASK)) last = { kind: m[1], text: m[2].trim() }
   return last
-}
-
-// Counted over the whole file: rounds accumulate over a card's life, and the
-// earliest ones scroll out of any tail window.
-function reviewRounds(path) {
-  return (readFileSync(path, 'utf8').match(ROUND) || []).length
 }
 
 const plain = (s) => (s ?? '').replace(/\*\*|`/g, '').trim()
@@ -398,19 +385,20 @@ export function currentDirtyMatchesSnapshot(card, projectPath) {
 // archive included, many times per poll: 82% of the server's time went to file reads
 // and board requests took up to 20s (2026-09-24). Reuse a parse until the file changes.
 const parsed = new Map()
+const copyCard = card => ({ ...card, blockedBy: [...card.blockedBy], ask: card.ask && { ...card.ask }, agentSettings: Object.fromEntries(Object.entries(card.agentSettings).map(([stage, settings]) => [stage, { ...settings }])) })
 export function parseCard(path, columnKey) {
   const stat = statSync(path)
   const hit = parsed.get(path)
-  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { ...structuredClone(hit.card), column: columnKey }
-  const card = parseCardFile(path, columnKey)
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { ...copyCard(hit.card), column: columnKey }
+  const card = parseCardFile(path, columnKey, stat)
   parsed.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, card })
-  return structuredClone(card)
+  return copyCard(card)
 }
 
-function parseCardFile(path, columnKey) {
+function parseCardFile(path, columnKey, stat) {
   const file = basename(path)
-  const head = readHead(path)
-  const text = readFileSync(path, 'utf8')
+  const buf = readFileSync(path)
+  const text = buf.toString('utf8'), head = text
   const heading = head.match(HEADING)
   const idFromName = file.match(ID_FROM_NAME)
 
@@ -451,13 +439,13 @@ function parseCardFile(path, columnKey) {
     mission: plain(head.match(MISSION)?.[1]),
     buildAttempts: (text.match(BUILD_ATTEMPT) || []).length,
     reviewPassed: hasCurrentReviewPass(text),
-    ask: readAsk(path),
-    reviewRounds: reviewRounds(path),
-    mtime: statSync(path).mtimeMs,
+    ask: readAsk(text, buf),
+    reviewRounds: (text.match(ROUND) || []).length,
+    mtime: stat.mtimeMs,
     // When the card first existed. A column move is a rename, which keeps birthtime
     // on Windows and ext4, so this survives the card's trip across the board — mtime
     // does not, it resets every time an agent appends a note.
-    added: statSync(path).birthtimeMs || statSync(path).ctimeMs,
+    added: stat.birthtimeMs || stat.ctimeMs,
   }
 }
 
@@ -617,7 +605,7 @@ function checkBlockers(board, id, ids, field) {
 // A dependency cycle among live cards; an archived card has landed, so nothing waits on it.
 export function cycleFor(card, board) {
   const byId = new Map()
-  for (const c of Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)) {
+  for (const c of Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key])) {
     if (!byId.has(c.id)) byId.set(c.id, c)
     else byId.set(c.id, null)
   }
@@ -698,27 +686,23 @@ export function setAutoReview(tasksDir, cardId, on) {
   return { ...card, autoReview: on }
 }
 
-// Archive holds most cards and rarely changes, yet every poll re-stats each file
-// (most of the board server's CPU, 2026-09-27). Reuse it until a card enters or
-// leaves (the folder's mtime changes), or ARCHIVE_TTL_MS passes for in-place edits.
-const ARCHIVE_TTL_MS = 30000
-const archiveCache = new Map()
+const columnFiles = new Map()
 function readColumn(tasksDir, col) {
-  if (col.key !== ARCHIVE.key) return readColumnNow(tasksDir, col)
-  let dirMtime
-  try { dirMtime = statSync(join(tasksDir, col.dir)).mtimeMs } catch { return [] }
-  const hit = archiveCache.get(tasksDir)
-  if (hit && hit.dirMtime === dirMtime && Date.now() - hit.at < ARCHIVE_TTL_MS) return structuredClone(hit.cards)
-  const cards = readColumnNow(tasksDir, col)
-  archiveCache.set(tasksDir, { dirMtime, at: Date.now(), cards })
-  return structuredClone(cards)
-}
-
-function readColumnNow(tasksDir, col) {
   const dir = join(tasksDir, col.dir)
-  if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .filter((f) => f.toLowerCase().endsWith('.md') && !NOT_A_CARD.test(f))
+  let stat
+  try { stat = statSync(dir) } catch (err) {
+    if (err.code !== 'ENOENT') throw err
+    columnFiles.delete(dir)
+    return []
+  }
+  let hit = columnFiles.get(dir)
+  // Directory timestamps detect membership changes; individual card stats below
+  // still detect in-place writes even when the directory itself is unchanged.
+  if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.ctimeMs !== stat.ctimeMs) {
+    hit = { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, files: readdirSync(dir).filter(f => f.toLowerCase().endsWith('.md') && !NOT_A_CARD.test(f)) }
+    columnFiles.set(dir, hit)
+  }
+  return hit.files
     .map((f) => {
       try {
         return parseCard(join(dir, f), col.key)
@@ -739,7 +723,14 @@ export const isParked = (card) => /\*\*Parked\*\*/.test(readFileSync(card.path, 
 // Full board snapshot: { planning: [...], planned: [...], ..., archive: [...] }
 export function readBoard(tasksDir) {
   const board = {}
-  for (const col of ALL) board[col.key] = readColumn(tasksDir, col)
+  for (const col of COLUMNS) board[col.key] = readColumn(tasksDir, col)
+  // Most schedulers only use live lanes. Load archive only when a caller needs it,
+  // retaining an enumerable property for full board/API snapshots.
+  Object.defineProperty(board, ARCHIVE.key, { enumerable: true, configurable: true, get() {
+    const cards = readColumn(tasksDir, ARCHIVE)
+    Object.defineProperty(board, ARCHIVE.key, { enumerable: true, writable: true, value: cards })
+    return cards
+  } })
   return board
 }
 
@@ -861,7 +852,7 @@ export function convertLegacyCard(tasksDir, card, now = new Date()) {
 
 // Blocked-by prerequisites not yet landed: Completed and integrated, or Archive.
 export function unmetBlockers(card, board, integrated = {}) {
-  const live = Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)
+  const live = Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key])
   return (card.blockedBy || []).filter((id) => {
     const alive = live.filter((c) => c.id === id)
     const archived = board.archive.filter((c) => c.id === id)
@@ -874,7 +865,7 @@ export function unmetBlockers(card, board, integrated = {}) {
 // prerequisite missing from the board can never land, so that is not a wait.
 export function waitingOnPrerequisites(card, board, integrated = {}) {
   const unmet = unmetBlockers(card, board, integrated)
-  const live = new Set(Object.entries(board).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards.map((c) => c.id)))
+  const live = new Set(Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key].map(c => c.id)))
   return unmet.length && unmet.every((id) => live.has(id)) ? unmet : []
 }
 

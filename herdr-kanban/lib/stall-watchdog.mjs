@@ -83,7 +83,7 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
     ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
     ...runs.filter(r => r.cardIds?.includes(card.id)).flatMap(r => [ms(r.start?.at), ms(r.finish?.at)]))
 
-  const byId = new Map(Object.entries(board).filter(([k]) => k !== 'archive').flatMap(([, cards]) => cards).map(c => [c.id, c]))
+  const byId = new Map(Object.keys(board).filter(k => k !== 'archive').flatMap(key => board[key]).map(c => [c.id, c]))
   const idle = new Map()
   for (const card of byId.values()) {
     if (['pou', 'owner'].includes(card.column)) continue

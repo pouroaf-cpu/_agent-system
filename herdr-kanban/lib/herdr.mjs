@@ -3,6 +3,7 @@
 
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,6 +16,13 @@ import { headless, isHeadless } from './headless.mjs'
 import { backendFor } from './agent-backend.mjs'
 
 const run = promisify(execFile)
+const inventoryCycle = new AsyncLocalStorage()
+let inventoryGeneration = 0
+export async function withAgentListCycle(action) {
+  const cycle = { lists: new Map(), active: true }
+  try { return await inventoryCycle.run(cycle, action) }
+  finally { cycle.active = false; cycle.lists.clear() }
+}
 const paneTrees = new PaneProcessTrees()
 const treePolls = new Map()
 const treeKey = (paneId, session) => {
@@ -219,6 +227,8 @@ async function ensureSessionReady(session) {
 }
 
 async function herdr(args, { timeout = 15000, session, ensureSession = true } = {}) {
+  // A launch, prompt or closure makes earlier inventories unsafe for dispatch.
+  if (!['list', 'read', 'process-info'].includes(args[1])) inventoryGeneration++
   // A pane never survives its server, so a stopped session is not restarted for a
   // pane-targeted call.
   if (ensureSession && refIndex(args) < 0) await ensureSessionReady(session === SHARED_SESSION ? null : session)
@@ -229,6 +239,7 @@ async function herdr(args, { timeout = 15000, session, ensureSession = true } = 
   if (args[0] === 'pane' && args[1] === 'send-keys') assertPromptAllowed(session, { paneId: args[2], action: 'enter' })
   const argv = herdrArgv(args, session)
   const { stdout } = await run(HERDR, argv, { timeout, windowsHide: true })
+  if (!['list', 'read', 'process-info'].includes(args[1])) inventoryGeneration++
   const text = stdout.trim()
   if (!text) return null
   let parsed
@@ -269,7 +280,7 @@ export function parseAgentList(result) {
 // session failing is still a failure, so callers keep failing closed.
 export async function agentList(session, options = {}) {
   const local = await headless.agentList(session)
-  const list = async (session, options) => {
+  const listNow = async (session, options) => {
     let result
     try { result = await herdr(['agent', 'list'], { ...options, session }) } catch (err) {
       if (/server_not_running/.test(err.message)) await paneTrees.sweep(session || SHARED_SESSION, new Set())
@@ -279,6 +290,15 @@ export async function agentList(session, options = {}) {
     // Cleanup is best-effort and runs in the background: it must never fail or slow the agent list.
     void pollPaneTrees(session, agents).catch(err => herdrLog(`process cleanup: ${err.message}`))
     return agents
+  }
+  const list = (session, options) => {
+    const cycle = inventoryCycle.getStore(), key = session || SHARED_SESSION
+    if (!cycle?.active) return listNow(session, options)
+    const hit = cycle.lists.get(key)
+    // Long integration checks can outlive a poll interval; never retain their
+    // starting inventory indefinitely.
+    if (!hit || hit.generation !== inventoryGeneration || Date.now() - hit.at >= (CONFIG.agentPollMs || 5000)) cycle.lists.set(key, { at: Date.now(), generation: inventoryGeneration, promise: listNow(session, options) })
+    return cycle.lists.get(key).promise
   }
   const interactive = async () => {
     if (!session || session === SHARED_SESSION) return list(session, options)
