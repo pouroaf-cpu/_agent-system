@@ -9,8 +9,11 @@ export function formatEvent(line) {
   if (!e || typeof e !== 'object') return compact(e)
   if (e.type === 'thread.started') return `Session ${e.thread_id}`
   if (e.type === 'system' && e.subtype === 'init') return `Session ${e.session_id} · ${e.model || 'Claude'}`
+  // Bookkeeping the old pane never showed: hooks, token counters, rate limits, heartbeats.
+  if (['system', 'rate_limit_event', 'tool_progress', 'stream_event'].includes(e.type) || (e.type === 'thinking' && !e.thinking)) return ''
   if ((e.type === 'assistant' || e.type === 'user') && Array.isArray(e.message?.content)) return e.message.content.map(part => {
     if (part.type === 'text') return part.text
+    if (part.type === 'thinking') return part.thinking ? `Thinking: ${part.thinking}` : ''
     if (part.type === 'tool_use') return `→ ${part.name} ${compact(part.input, 1000)}`
     if (part.type === 'tool_result') return `← ${part.is_error ? 'ERROR ' : ''}${compact(part.content)}`
     return compact(part)
