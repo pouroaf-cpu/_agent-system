@@ -131,6 +131,13 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')).agentSettings.global.review.fallback, fallback)
   const rejected = await fetch(`${base}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentSettings: { review: { fallback: { ...fallback, model: 'claude-opus-5-5' } } } }) })
   assert.equal(rejected.status, 400)
+  const backend = { reviewer: 'headless', plancheck: 'headless' }
+  const backendResponse = await fetch(`${base}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentBackend: backend }) })
+  assert.equal(backendResponse.status, 200)
+  assert.deepEqual((await backendResponse.json()).config.agentBackend, backend)
+  const invalidBackend = await fetch(`${base}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentBackend: { reviewer: 'invalid' } }) })
+  assert.equal(invalidBackend.status, 400)
+  assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')).agentBackend, backend)
   child.kill()
   await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve))
 })

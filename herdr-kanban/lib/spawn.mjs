@@ -2,6 +2,7 @@
 // A half-spawned tab is worse than no tab, so any failure closes the pane it made.
 
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
+import { isHeadless } from './headless.mjs'
 import { workerPrompt, paneLabel, agentName, isCodex } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
@@ -61,6 +62,7 @@ export async function deliverWith(options) {
 async function submitWith({
   paneId, text, session, engine, prompt = agentPrompt, read = paneRead, sendKeys = paneSendKeys, list = agentList, confirmMs = isCodex(engine) ? 30000 : 10000,
 }) {
+  if (isHeadless(paneId)) return prompt(paneId, text, { session, engine })
   if (/\n/.test(text)) throw new Error('prompt contains a newline; it would submit early')
   try {
     await prompt(paneId, text, { wait: true, timeoutMs: 20000, session, engine })
@@ -151,7 +153,7 @@ export function typedPrompt(text, file, engine) {
 
 export async function deliver(paneId, fullText, session, builderGuard = null, { engine } = {}) {
   const runId = cardRunContext()?.runId
-  const { text, file, full } = typedPrompt(fullText, promptPath(session, paneId), engine)
+  const { text, file, full } = isHeadless(paneId) ? { text: fullText } : typedPrompt(fullText, promptPath(session, paneId), engine)
   const key = deliveryKey(text)
   const prior = readDelivery(session, paneId)
   if (prior?.key === key && prior.status === 'confirmed') return

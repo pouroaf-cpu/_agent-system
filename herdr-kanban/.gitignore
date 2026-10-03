@@ -1,4 +1,5 @@
 node_modules/
+.agents/
 !PLAN-CHECKER.md
 *.log
 .board.json

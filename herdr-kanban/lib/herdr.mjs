@@ -11,6 +11,8 @@ import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
 import { agentRole, isBoardAgent } from './ids.mjs'
 import { PaneProcessTrees } from './process-tree.mjs'
+import { headless, isHeadless } from './headless.mjs'
+import { backendFor } from './agent-backend.mjs'
 
 const run = promisify(execFile)
 const paneTrees = new PaneProcessTrees()
@@ -266,6 +268,7 @@ export function parseAgentList(result) {
 // A legacy session that is no longer running simply has no agents; the shared
 // session failing is still a failure, so callers keep failing closed.
 export async function agentList(session, options = {}) {
+  const local = await headless.agentList(session)
   const list = async (session, options) => {
     let result
     try { result = await herdr(['agent', 'list'], { ...options, session }) } catch (err) {
@@ -277,12 +280,19 @@ export async function agentList(session, options = {}) {
     void pollPaneTrees(session, agents).catch(err => herdrLog(`process cleanup: ${err.message}`))
     return agents
   }
-  if (!session || session === SHARED_SESSION) return list(session, options)
-  const [legacy, all] = await Promise.all([
-    list(session, { ...options, ensureSession: false }).catch((err) => { if (/server_not_running/.test(err.message)) return []; throw err }),
-    list(SHARED_SESSION, options),
-  ])
-  return projectAgents(session, legacy, all, await sharedLabels(all))
+  const interactive = async () => {
+    if (!session || session === SHARED_SESSION) return list(session, options)
+    const [legacy, all] = await Promise.all([
+      list(session, { ...options, ensureSession: false }).catch((err) => { if (/server_not_running/.test(err.message)) return []; throw err }),
+      list(SHARED_SESSION, options),
+    ])
+    return projectAgents(session, legacy, all, await sharedLabels(all))
+  }
+  try { return [...await interactive(), ...local] } catch (err) {
+    // Only an absent server is safe to treat as empty; malformed inventory fails closed.
+    if ((local.length || backendFor('reviewer') === 'headless' || backendFor('plancheck') === 'headless') && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
+    throw err
+  }
 }
 
 // workspace_id -> label in the shared session, refreshed when an unknown id shows up.
@@ -388,7 +398,8 @@ export async function ensureAgentWorkspace(agents = [], log, session) {
 
 // New tabs always open in the shared session. Their ids come back qualified unless
 // the caller has no project session of its own (then the shared one is its session).
-export async function tabCreate({ cwd, label, focus = false, workspace, session }) {
+export async function tabCreate({ cwd, label, focus = false, workspace, session, backend }) {
+  if (backend === 'headless') return headless.tabCreate({ cwd, label, session })
   const args = ['tab', 'create', '--cwd', cwd]
   if (workspace) args.push('--workspace', workspace)
   if (label) args.push('--label', label)
@@ -531,6 +542,7 @@ async function freeName(base, paneId, session) {
 
 // Resolves to { name } — the name herdr actually registered.
 export async function agentStart({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs = 90000, session, browser = true }) {
+  if (isHeadless(paneId)) return headless.agentStart({ name, paneId, model, engine, kind, workspacePath, guardArgs, timeoutMs, session, browser })
   assertPromptAllowed(session)
   name = await freeName(name, paneId, session)
   try {
@@ -564,6 +576,7 @@ export async function waitForAgentPrompt(paneId, { timeoutMs = 240000, everyMs =
 }
 
 export async function agentPrompt(target, text, { wait = false, timeoutMs = 20000, session, engine } = {}) {
+  if (isHeadless(target)) return headless.agentPrompt(target, text, { session })
   assertPromptAllowed(session)
   const args = ['agent', 'prompt', target, text]
   // --wait makes herdr confirm the agent actually changed state after submission.
@@ -581,6 +594,7 @@ export async function agentPrompt(target, text, { wait = false, timeoutMs = 2000
 // A fresh tab is not: PowerShell has a profile to load first, and starting the
 // agent into a shell that is not ready hangs until the timeout expires.
 export async function waitForPrompt(paneId, { timeoutMs = 20000, everyMs = 400, session } = {}) {
+  if (isHeadless(paneId)) return true
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const text = String(await paneRead(paneId, session).catch(() => ''))
@@ -592,11 +606,13 @@ export async function waitForPrompt(paneId, { timeoutMs = 20000, everyMs = 400, 
 
 // Tail a pane's terminal output for the card detail view.
 export async function paneRead(paneId, session) {
+  if (isHeadless(paneId)) return headless.paneRead(paneId)
   const result = await herdr(['pane', 'read', paneId], { session })
   return result?.raw ?? result?.output ?? result ?? ''
 }
 
 export async function focusAgent(paneId, session) {
+  if (isHeadless(paneId)) return headless.focusAgent(paneId)
   const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
   if (!agent?.tab_id) throw new Error('Existing agent session/tab is unavailable')
   await herdr(['tab', 'focus', agent.tab_id], { session, ensureSession: false })
@@ -624,11 +640,13 @@ export async function openProjectSession(project, spawnClient = spawn, cli = her
 }
 
 export async function paneSendKeys(paneId, keys, session) {
+  if (isHeadless(paneId)) throw new Error('Headless agents do not accept typed keys')
   assertPromptAllowed(session)
   return herdr(['pane', 'send-keys', paneId, ...keys], { session })
 }
 
 export async function paneClose(paneId, session, { cli = herdr, trees = paneTrees } = {}) {
+  if (isHeadless(paneId)) return headless.paneClose(paneId)
   const key = treeKey(paneId, session)
   // Best-effort: a cleanup failure must never keep a pane open.
   try {

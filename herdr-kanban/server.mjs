@@ -33,6 +33,7 @@ const PUBLIC = join(HERE, 'public')
 const CONFIG_PATH = process.env.KANBAN_CONFIG ?? join(HERE, 'board.config.json')
 const REVIEW_ROOT = dirname(CONFIG_PATH)
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
+const { validateAgentBackend } = await import('./lib/agent-backend.mjs')
 // cmd's `set "X=v" && node` hands node a trailing space, and "192.168.1.11 " fails to
 // listen (ENOTFOUND): the phone board was silently off (2026-10-01).
 const lanHost = process.env.KANBAN_LAN_HOST?.trim()
@@ -1332,9 +1333,11 @@ const handleRequest = async (req, res) => {
     for await (const chunk of req) body += chunk
     try {
       const patch = JSON.parse(body || '{}')
+      if ('agentBackend' in patch) validateAgentBackend(patch.agentBackend)
       // Other writers (project pause, hand edits like workflowLimits) change the
       // file after startup; patch the current file, not the startup copy.
       Object.assign(config, JSON.parse(readFileSync(CONFIG_PATH, 'utf8')))
+      if ('agentBackend' in patch) config.agentBackend = patch.agentBackend
       if ('maxConcurrentAgents' in patch) {
         const n = Number(patch.maxConcurrentAgents)
         if (!Number.isInteger(n) || n < 0 || n > 10) {

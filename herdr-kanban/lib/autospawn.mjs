@@ -25,6 +25,7 @@ import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
+import { backendFor } from './agent-backend.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
@@ -826,9 +827,10 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     }
     updateReviewClaim(reviewRoot, claim.id, { role, engine: engineKind(reviewerEngine), model: selectedModel, snapshot, environment, integrationPath: projectPath, inputFingerprints: Object.fromEntries(cards.map(card => [card.id, evidenceFingerprint(card, snapshot.path)])) })
 
-    const workspace = await agentWorkspaceOr(projectPath, session)
+    const backend = backendFor(role)
+    const workspace = backend === 'headless' ? null : await agentWorkspaceOr(projectPath, session)
     const created = await tabCreate({
-      cwd: snapshot.path, label: reviewLabel(cards.length), focus: false, workspace, session,
+      cwd: snapshot.path, label: reviewLabel(cards.length), focus: false, workspace, session, backend,
     })
     paneId = created?.root_pane?.pane_id
     if (!paneId) throw new Error(`tab create returned no pane id: ${JSON.stringify(created)}`)
