@@ -279,7 +279,10 @@ try {
   prerequisiteWait = verb === 'issue' && !approvalWait && !decisionWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
   if (prerequisiteWait) {
     target = 'planning'
-    appendHistory(tasksDir, current.id, { event: 'planner-prerequisite-wait', stage: current.column, note, waitingFor: waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)) })
+    const waitingFor = waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir))
+    // Planned ahead but declined: wait for the blockers, then a fresh Planner (card-planner waitFor).
+    updateWorkflow(tasksDir, current.id, { waitFor: { cards: waitingFor, files: [], why: note, since: new Date().toISOString() } })
+    appendHistory(tasksDir, current.id, { event: 'planner-prerequisite-wait', stage: current.column, note, waitingFor })
   } else if (['issue', 'rework'].includes(verb) && !approvalWait && !decisionWait) {
     const category = failureCategory(note)
     if (category === 'incidental') fail('Incidental findings alone are not a failed handoff: record evidence/classification in the current result and use the normal done/pass handoff only when every agreed criterion is met. In-scope or change-caused defects still require issue/rework.')

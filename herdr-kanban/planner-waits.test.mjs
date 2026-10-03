@@ -88,7 +88,8 @@ try {
     assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /kept failing to start for 3 hours/)
   }
 
-  // 5. Blocked-by prerequisites unfinished (Tradeflow TF44): wait, no Planner, no loop.
+  // 5. Blocked-by prerequisites unfinished: planned ahead (operator, 2026-10-03). A Planner
+  // that still declines waits for them without a Planner and without a loop (TF44).
   {
     const { dir, log, run, setAgents } = fixture('blocked')
     mkdirSync(join(dir, 'queue'), { recursive: true })
@@ -96,30 +97,29 @@ try {
     const card = createCard(dir, { title: 'Dependent', brief: 'Plan after T-1' })
     const text = readFileSync(card.path, 'utf8').replace('**Priority** 5/10', '**Priority** 5/10\n**Blocked by:** T-1')
     writeFileSync(card.path, text)
-    assert.equal(await run(0), null); assert.equal(log.starts, 0, 'no Planner while T-1 is unfinished')
-    // A Planner that already reported "not build-ready yet" is a wait, not a no-handoff.
+    await run(0); assert.equal(log.starts, 1, 'a blocked card is planned ahead')
+    // The Planner declines anyway: recorded as a wait, not a failure.
     saveCardPlanners(dir, { [card.id]: { assignmentId: 'a1', lifecycle: 'active', paneId: 'p-old', submitted: true, inactiveSince: new Date(0).toISOString(), revokedPaneIds: [] } })
-    setAgents([{ pane_id: 'p-old', agent_status: 'idle' }])
-    for (const now of [10000, 20000, 30000]) await run(now)
-    const owner = readCardPlanners(dir)[card.id]
-    assert.equal(findCard(dir, card.id).column, 'planning')
-    assert.equal(owner.submitted, false); assert.equal(owner.noHandoffCount, undefined)
-    assert.equal(log.starts, 0); assert.deepEqual(log.delivered, [])
-    // The stall watchdog treats it as an allowed wait.
-    checkStalls({ tasksDir: dir, agents: [], builderSlotsFree: 0, now: 0 })
-    assert.deepEqual(checkStalls({ tasksDir: dir, agents: [], builderSlotsFree: 0, now: 60 * 60000 }), [])
-    // A Planner issue that names the unfinished prerequisite is recorded as a wait.
     const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] not build-ready until T-1 lands'], { encoding: 'utf8', env: { ...process.env } })
     assert.equal(hkb.status, 0, hkb.stderr)
     assert.equal(findCard(dir, card.id).column, 'planning')
     const events = history(dir, card.id).map(e => e.event)
     assert.ok(events.includes('planner-prerequisite-wait')); assert.ok(!events.includes('failure'))
     assert.equal(readWorkflow(dir)[card.id]?.correction, undefined)
-    // Once T-1 lands, the card is planned normally.
+    setAgents([{ pane_id: 'p-old', agent_status: 'idle' }])
+    for (const now of [10000, 20000, 30000]) await run(now)
+    const owner = readCardPlanners(dir)[card.id]
+    assert.equal(findCard(dir, card.id).column, 'planning')
+    assert.equal(owner.submitted, false); assert.equal(owner.noHandoffCount, undefined)
+    assert.equal(log.starts, 1, 'no new Planner while T-1 is unfinished')
+    // The stall watchdog treats it as an allowed wait.
+    checkStalls({ tasksDir: dir, agents: [], builderSlotsFree: 0, now: 0 })
+    assert.deepEqual(checkStalls({ tasksDir: dir, agents: [], builderSlotsFree: 0, now: 60 * 60000 }), [])
+    // Once T-1 lands, the card is planned again.
     mkdirSync(join(dir, 'archive'), { recursive: true })
     renameSync(join(dir, 'queue', 'T-1-prereq.md'), join(dir, 'archive', 'T-1-prereq.md'))
     const planned = await run(40000)
-    assert.equal(planned.spawnedNewAgent, true); assert.equal(log.starts, 1)
+    assert.equal(planned.spawnedNewAgent, true); assert.equal(log.starts, 2)
   }
   console.log('Planner waits passed')
 } finally { rmSync(root, { recursive: true, force: true }) }

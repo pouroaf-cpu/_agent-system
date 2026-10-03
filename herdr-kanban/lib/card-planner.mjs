@@ -255,10 +255,10 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         continue
       }
       let owner = owners[card.id]
-      // Blocked-by prerequisites still unfinished: planning now only produces
-      // "not build-ready yet" and loops to Owner (TF44). Wait without a Planner;
-      // a Planner that already reported stays idle and is not a no-handoff.
-      const waitingFor = card.column === 'planning' && !cardRunContext() && waitingOnPrerequisites(card, board, readWorktrees(tasksDir))
+      // Blocked cards are planned ahead (operator, 2026-10-03); the Builder start still waits
+      // for the blockers. Only a Planner that already declined (hkb records a waitFor) waits
+      // here without a Planner (TF44); it is not a no-handoff.
+      const waitingFor = card.column === 'planning' && !cardRunContext() && readWorkflow(tasksDir)[card.id]?.waitFor && waitingOnPrerequisites(card, board, readWorktrees(tasksDir))
       if (waitingFor?.length) {
         const busyPlanner = owner && agents.some(a => a.pane_id === owner.paneId && !['idle', 'done'].includes(a.agent_status))
         if (owner?.submitted && !busyPlanner) {
