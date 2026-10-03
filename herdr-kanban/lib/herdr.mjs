@@ -9,9 +9,44 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertPromptAllowed } from './project-control.mjs'
 import { assertPlannerPaneAllowed } from './planner-state.mjs'
-import { agentRole } from './ids.mjs'
+import { agentRole, isBoardAgent } from './ids.mjs'
+import { PaneProcessTrees } from './process-tree.mjs'
 
 const run = promisify(execFile)
+const paneTrees = new PaneProcessTrees()
+const treePolls = new Map()
+const treeKey = (paneId, session) => {
+  const ref = splitRef(paneId, session)
+  return `${ref.session || SHARED_SESSION}/${ref.id}`
+}
+
+async function rememberPane(paneId, session, cli = herdr, trees = paneTrees) {
+  const ref = splitRef(paneId, session)
+  const result = await cli(['pane', 'process-info', '--pane', ref.id], { session: ref.session, ensureSession: false })
+  const shellPid = (result?.process_info ?? result)?.shell_pid
+  if (!Number.isInteger(shellPid) || shellPid <= 0) throw new Error(`pane process-info: missing shell PID for ${paneId}`)
+  await trees.observe([{ key: treeKey(paneId, session), shellPid }])
+}
+
+async function pollPaneTrees(session, agents) {
+  session ||= SHARED_SESSION
+  const previous = treePolls.get(session)
+  // Listing every process costs ~2.5 s of PowerShell: once a minute is enough for leftovers.
+  if (previous && (previous.pending || Date.now() - previous.at < 60000)) return previous.poll
+  const poll = (async () => {
+    const result = await herdr(['pane', 'list'], { session, ensureSession: false })
+    if (!Array.isArray(result?.panes) || result.panes.some(p => !p || typeof p.pane_id !== 'string')) throw new Error('pane list: malformed response')
+    const live = new Set(result.panes.map(p => treeKey(p.pane_id, session)))
+    for (const agent of agents.filter(isBoardAgent)) {
+      if (live.has(treeKey(agent.pane_id, session)) && !paneTrees.panes.has(treeKey(agent.pane_id, session))) await rememberPane(agent.pane_id, session)
+    }
+    await paneTrees.observe([...live].filter(key => paneTrees.panes.has(key)).map(key => ({ key })))
+    await paneTrees.sweep(session, live)
+  })()
+  const entry = { poll, pending: true, at: Date.now() }
+  treePolls.set(session, entry)
+  try { await poll; entry.pending = false } catch (err) { treePolls.delete(session); throw err }
+}
 
 const HERDR = process.env.HERDR_BIN_PATH || 'herdr'
 const CLAUDE_AGENT_SETTINGS = fileURLToPath(new URL('../claude-agent-settings.json', import.meta.url))
@@ -231,7 +266,17 @@ export function parseAgentList(result) {
 // A legacy session that is no longer running simply has no agents; the shared
 // session failing is still a failure, so callers keep failing closed.
 export async function agentList(session, options = {}) {
-  const list = async (session, options) => parseAgentList(await herdr(['agent', 'list'], { ...options, session }))
+  const list = async (session, options) => {
+    let result
+    try { result = await herdr(['agent', 'list'], { ...options, session }) } catch (err) {
+      if (/server_not_running/.test(err.message)) await paneTrees.sweep(session || SHARED_SESSION, new Set())
+      throw err
+    }
+    const agents = parseAgentList(result)
+    // Cleanup is best-effort and runs in the background: it must never fail or slow the agent list.
+    void pollPaneTrees(session, agents).catch(err => herdrLog(`process cleanup: ${err.message}`))
+    return agents
+  }
   if (!session || session === SHARED_SESSION) return list(session, options)
   const [legacy, all] = await Promise.all([
     list(session, { ...options, ensureSession: false }).catch((err) => { if (/server_not_running/.test(err.message)) return []; throw err }),
@@ -349,6 +394,7 @@ export async function tabCreate({ cwd, label, focus = false, workspace, session 
   if (label) args.push('--label', label)
   args.push(focus ? '--focus' : '--no-focus')
   const created = await herdr(args, { timeout: 30000, session: SHARED_SESSION })
+  if (created?.root_pane?.pane_id) await rememberPane(created.root_pane.pane_id, SHARED_SESSION).catch(err => herdrLog(`process cleanup: ${err.message}`))
   if (!session || session === SHARED_SESSION || !created?.root_pane) return created
   const tab = created.tab && { ...created.tab, tab_id: shared(created.tab.tab_id) }
   return { ...created, root_pane: { ...created.root_pane, pane_id: shared(created.root_pane.pane_id), tab_id: shared(created.root_pane.tab_id) }, ...(tab ? { tab } : {}) }
@@ -582,8 +628,14 @@ export async function paneSendKeys(paneId, keys, session) {
   return herdr(['pane', 'send-keys', paneId, ...keys], { session })
 }
 
-export async function paneClose(paneId, session) {
-  return herdr(['pane', 'close', paneId], { session })
+export async function paneClose(paneId, session, { cli = herdr, trees = paneTrees } = {}) {
+  const key = treeKey(paneId, session)
+  // Best-effort: a cleanup failure must never keep a pane open.
+  try {
+    if (!trees.panes.has(key)) await rememberPane(paneId, session, cli, trees)
+    await trees.close(key)
+  } catch (err) { herdrLog(`process cleanup ${paneId}: ${err.message}`) }
+  return cli(['pane', 'close', paneId], { session })
 }
 
 export async function isRunning(session) {

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { readFileSync, utimesSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -1658,8 +1659,14 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
   writeFileSync(join(root, 'pane'), stateStub +
     `const args = process.argv.slice(2);\n` +
     `if (args[0] === 'read') console.log(JSON.stringify({ result: { output: state.agents.some(a => a.pane_id === args[1]) ? '› Ask Codex to do anything' : 'PS test>' } }));\n` +
+    `else if (args[0] === 'list') console.log(JSON.stringify({ result: { panes: [...new Set([...Object.keys(state.panes), ...state.agents.map(a => a.pane_id)])].map(pane_id => ({ pane_id })) } }));\n` +
+    `else if (args[0] === 'process-info') console.log(JSON.stringify({ result: { process_info: { shell_pid: 2147483647 } } }));\n` +
     `else console.log(JSON.stringify({ result: {} }));\n`)
   writeFileSync(join(root, 'log'), `console.log(JSON.stringify({ result: {} }));\n`)
+  // These panes are simulated: never enumerate or kill the host's real processes.
+  const treeModule = new URL('./lib/process-tree.mjs', import.meta.url).href
+  const processMock = join(root, 'process-mock.mjs')
+  writeFileSync(processMock, `import { mock } from 'node:test';\nimport { PaneProcessTrees } from ${JSON.stringify(treeModule)};\nmock.module(${JSON.stringify(treeModule)}, { namedExports: { PaneProcessTrees: class extends PaneProcessTrees { constructor() { super({ list: async () => [], kill: async () => { throw new Error('unexpected real process kill') } }) } } } });\n`)
 
   const port = 22000 + Math.floor(Math.random() * 20000)
   const configPath = join(root, 'board.config.json')
@@ -1678,7 +1685,7 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
     leadPlanner,
   }))
 
-  const server = spawn(process.execPath, [join(process.cwd(), 'server.mjs')], {
+  const server = spawn(process.execPath, ['--experimental-test-module-mocks', '--import', pathToFileURL(processMock).href, join(process.cwd(), 'server.mjs')], {
     cwd: root,
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: process.execPath, HERDR_TEST_AGENTS: JSON.stringify(resolvedAgents) },
     stdio: ['ignore', 'pipe', 'pipe'],
