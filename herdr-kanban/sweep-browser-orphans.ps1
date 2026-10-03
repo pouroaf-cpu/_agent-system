@@ -19,4 +19,13 @@ foreach ($p in $procs) {
     if (-not $DryRun) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     $killed += "$($p.Name):$($p.ProcessId)"
 }
+# Agents' `python3 - <<EOF ... || fallback` through the WindowsApps python3 alias never sees EOF
+# and spins a core forever (7 of them, up to 32 h CPU, 2026-10-03). A stdin script is never
+# legitimately alive after 2 hours here.
+$cutoff = (Get-Date).AddHours(-2)
+foreach ($p in $procs) {
+    if ($p.Name -ne 'python.exe' -or $p.CommandLine -notmatch '\\python\.exe"?\s+-\s*$' -or $p.CreationDate -gt $cutoff) { continue }
+    if (-not $DryRun) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    $killed += "$($p.Name):$($p.ProcessId)"
+}
 $killed
