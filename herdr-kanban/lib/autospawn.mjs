@@ -108,7 +108,8 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     return moved
   }
   appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
-  appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
+  // A filed hkb issue is already in history as the Builder's own handoff; only a silent exit is a no-handoff.
+  appendHistory(tasksDir, card.id, { event: issue ? 'builder-issue-exit' : 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   requestPlannerCorrection(tasksDir, card.id, { failure: true })
   return moved
 }

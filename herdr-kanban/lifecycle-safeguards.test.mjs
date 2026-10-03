@@ -49,6 +49,7 @@ test('Builder that filed hkb issue then exited is kicked back with its own note,
     assert.equal(moved.column, 'planning')
     assert.match(text, new RegExp(`Builder reported: ${note.replace(/[[\]/]/g, '\\$&')}`))
     assert.doesNotMatch(text, /Session unknown is missing/)
+    assert.doesNotMatch(readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8'), /builder-no-handoff/, 'a reported issue is not a no-handoff alert (I712-I714 burst)')
     prints.push(correctionFingerprint(text))
     rmSync(join(tasks, 'planning'), { recursive: true, force: true })
   }
