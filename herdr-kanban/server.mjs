@@ -50,7 +50,7 @@ const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mj
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -72,6 +72,7 @@ const projectSettingsOf = (project) => {
   return resolvedProjectSettings.get(project)
 }
 const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
+const holdsFor = (project) => schedulerHoldsFor(project, { tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), gitSettings: projectSettingsOf(project) })
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
 const assignmentForCard = (project, card, stage) => assignmentFor(config, { ...card, workflowState: readWorkflow(tasksDirOf(project))[card.id] }, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
@@ -533,6 +534,7 @@ async function pollProject(project) {
       try {
         const claims = readReviewClaims(REVIEW_ROOT)
         const stalls = checkStalls({ tasksDir, agents, claims, holds: { ...integrationHolds.get(project), ...holdsFor(project), ...quotaHoldsOf(project) }, minutes: config.stallMinutes ?? 20, paused: lowDisk || controlState(project, CONFIG_PATH).paused, resumedAt: controlState(project, CONFIG_PATH).changedAt, gapEndedAt: recordHealthyPoll(tasksDir), holdsKnown: holdsReady.has(project),
+          projectPath: integrationPathOf(project), gitSettings: projectSettingsOf(project),
           builderSlotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), plannerSlotsFree: (config.maxPlanners ?? 4) - busyPlanners(agents), reviewerSlotsFree: MAX_REVIEWERS - claims.filter(c => !c.closedAt).length })
         for (const s of stalls) activity(project, s.id, 'stall', `${s.column}: ${s.reason} — ${s.action}`, 'error')
         if (stalls.length) broadcastBoard(project)

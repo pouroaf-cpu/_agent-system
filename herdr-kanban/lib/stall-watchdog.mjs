@@ -16,7 +16,7 @@ import { readUsage } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
 import { sessionOf } from './herdr.mjs'
 import { isHeadless } from './headless.mjs'
-import { readWorktrees } from './worktrees.mjs'
+import { readWorktrees, overlapHoldReason, filesBusyHolder } from './worktrees.mjs'
 import { unmetBlockers } from './autospawn.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { CARD_ID } from './ids.mjs'
@@ -71,7 +71,7 @@ export function recordHealthyPoll(tasksDir, now = Date.now()) {
 // agent working or an allowed wait (workflow stallResetAt, written at most once a minute).
 // `resumedAt` (the project's last Pause/Start) and `gapEndedAt` (recordHealthyPoll) restart
 // every clock: time the board could not act is not a stall.
-export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, holdsKnown = true, resumedAt, gapEndedAt, now = Date.now() }) {
+export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), gitSettings, agents = [], claims = [], holds = {}, minutes = 20, builderSlotsFree = 1, plannerSlotsFree = 1, reviewerSlotsFree = 1, paused = false, holdsKnown = true, resumedAt, gapEndedAt, now = Date.now() }) {
   const board = readBoard(tasksDir)
   const bindings = readBindings(tasksDir), planners = readCardPlanners(tasksDir), workflow = readWorkflow(tasksDir), registry = readWorktrees(tasksDir)
   const mine = openClaims(claims, tasksDir)
@@ -98,7 +98,10 @@ export function checkStalls({ tasksDir, agents = [], claims = [], holds = {}, mi
   // Same rule as autospawn: the holder may sit in any live lane, Owner included.
   const heldByLiveCard = (card) => {
     const holder = String(holds[card.id] || '').match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
-    return !!holder && holder !== card.id && byId.has(holder)
+    if (holder && holder !== card.id && byId.has(holder)) return true
+    // A scheduler snapshot may omit a card it never tried this pass (Injectbuddy I701).
+    const current = filesBusyHolder(overlapHoldReason({ tasksDir, projectPath, card, board, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles }))
+    return !!current && byId.has(current)
   }
   const allowedWait = (card) => {
     if (paused) return true // paused (low disk, operator or release): nothing may start, so nothing is stuck (I393/I398/I401/I404 went to Owner mid-release, 2026-09-28)

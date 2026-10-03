@@ -1,10 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync, utimesSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { checkStalls, laneTimes, recordHealthyPoll } from './lib/stall-watchdog.mjs'
 import { findCard, readBoard } from './lib/cards.mjs'
+import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
 import { readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { readCardPlanners } from './lib/card-planner.mjs'
 
@@ -109,6 +110,35 @@ test('right after a restart, before holds are known, a Planned card is not a sta
   put('backlog', 'T-1')
   assert.deepEqual(checkStalls({ tasksDir: tasks, holdsKnown: false, now: T + 90 * MIN }), [])
   assert.equal(checkStalls({ tasksDir: tasks, now: T + 111 * MIN }).length, 1, 'once holds are known, an unexplained wait is a stall')
+})
+
+test('file holds survive passes that never try a Planned or Queue card (Injectbuddy I701)', async t => {
+  const { root, tasks, put } = board(t)
+  const scope = '## Files\n- `public/legacy/**/index.html`\n'
+  put('working', 'T-1', scope)
+  put('backlog', 'T-2', scope)
+  put('queue', 'T-3', '**Blocked by:** T-1\n## Files\n- `other.js`\n')
+  put('queue', 'T-4', '**Blocked by:** T-1\n## Files\n- `another.js`\n')
+  put('queue', 'T-5', '## Files\n- `public/legacy/old/index.html`\n')
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': {
+    state: 'building', integrationWorkspace: root, files: [join(root, 'public/legacy/**/index.html').replaceAll('\\', '/').toLowerCase()],
+  } }))
+  writeFileSync(join(tasks, '.board.json'), JSON.stringify({ 'T-1': { pane_id: 'b1' } }))
+  const agents = [{ pane_id: 'b1', agent_status: 'working' }]
+  const args = { project: root, projectPath: root, tasksDir: tasks, max: 5, agents, onlyIds: ['T-3', 'T-4'], spawn: () => assert.fail('blocked queue must not spawn') }
+  await autoSpawn(args)
+  for (const id of ['T-2', 'T-5']) assert.match(holdsFor(root)[id], /^files busy, held by T-1/)
+  await autoSpawn({ ...args, onlyIds: ['T-99'] }) // no selected cards: the scheduler clears its pass snapshot
+  const holds = holdsFor(root)
+  for (const id of ['T-2', 'T-5']) assert.match(holds[id], /^files busy, held by T-1/)
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents, holds, builderSlotsFree: 4, now: T + 25 * MIN }), [])
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents, holds: {}, builderSlotsFree: 4, now: T + 90 * MIN }), [], 'watchdog independently checks current file locks')
+  assert.equal(findCard(tasks, 'T-2').column, 'planned')
+  assert.equal(findCard(tasks, 'T-5').column, 'queue')
+  mkdirSync(join(tasks, 'archive'), { recursive: true })
+  renameSync(findCard(tasks, 'T-1').path, join(tasks, 'archive', 'T-1.md'))
+  assert.equal(holdsFor(root)['T-2'], undefined, 'an archived holder releases the wait')
+  assert.equal(holdsFor(root)['T-5'], undefined)
 })
 
 test('the low-disk pause is a wait and restarts every stall window', t => {

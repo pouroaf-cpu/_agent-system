@@ -33,7 +33,7 @@ import { isHeadless } from './headless.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
 import { computeReviewPlan, readReviewGroups } from './review-plan.mjs'
 import { readUsage, recordUsageFinish, recordUsageStart } from './request-usage.mjs'
-import { overlapHoldReason, readWorktrees, prepareCardWorktree, semanticDirtyFiles, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
+import { overlapHoldReason, filesBusyHolder, readWorktrees, prepareCardWorktree, semanticDirtyFiles, integrationStartHoldReason, dependencyInstallHold, startDependencyInstall } from './worktrees.mjs'
 import { recordSpawnFailure } from './breaker.mjs'
 import { auditMcpEngine, auditPreflightBlocked } from './audit-mcp.mjs'
 import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, failReviewClaim, prepareReviewSnapshot, assertReviewInputs, reviewClaimFor, snapshotContains } from './review-claims.mjs'
@@ -260,7 +260,18 @@ const holds = new Map() // project -> { cardId: reason }
 
 // Planned cards whose plan check waits on a file lock (TF136 sat 21 min with "no hold recorded", 2026-10-03).
 const planHolds = new Map() // project -> { cardId: reason }
-export const holdsFor = (project) => ({ ...planHolds.get(project), ...holds.get(project) })
+const holdContexts = new Map() // project -> file-lock settings, independent of dispatch selection
+export function holdsFor(project, context = holdContexts.get(project)) {
+  const held = { ...planHolds.get(project), ...holds.get(project) }
+  if (!context?.projectPath) return held
+  const { tasksDir, projectPath, gitSettings = {} } = context, board = readBoard(tasksDir)
+  for (const card of [...board.planned, ...board.queue]) {
+    const reason = overlapHoldReason({ tasksDir, projectPath, card, board, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles })
+    if (filesBusyHolder(reason)) held[card.id] = reason
+    else if (filesBusyHolder(held[card.id])) delete held[card.id]
+  }
+  return held
+}
 
 const HELD_BY = new RegExp(String.raw`held by (${CARD_ID})`)
 export function routeMutualHolds(tasksDir, held, log) {
@@ -288,6 +299,7 @@ const holderOf = (board) => [...board.working, ...board.review].map((c) => c.id)
 
 // Returns the ids it started. Safe to call on every board change and agent poll.
 export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, model, engine, max, agents, onChange, log, mission, onlyIds, gitSettings, assignmentForCard, stallSeconds = 300, now = Date.now(), spawn = spawnForCard }) {
+  holdContexts.set(project, { tasksDir, projectPath, gitSettings })
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'builder')
   if (spawn === spawnForCard && controlState(project).paused && !cardRunContext()) return []
   // Zero capacity (breaker tripped, builders switched off) is an operator pause, not a card hold.
@@ -714,6 +726,7 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
 }
 
 export async function autoPlanCheck({ mission, project, tasksDir, reviewRoot, inventory, spawn = spawnReviewer, ...options }) {
+  holdContexts.set(project, { tasksDir, projectPath: options.projectPath, gitSettings: options.gitSettings })
   planHolds.set(project, {})
   if (!readBoard(tasksDir).planned.some(needsPlanCheck)) return null
   const claims = syncReviewClaims(reviewRoot, await inventory())

@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, renameSync, utimesSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCard, moveCard } from './lib/cards.mjs'
@@ -45,6 +45,32 @@ const post = async (path, body) => {
 }
 const get = async (path) => { const r = await fetch(base + path); return { status: r.status, body: await r.json() } }
 const savedConfig = () => JSON.parse(readFileSync(configPath, 'utf8'))
+
+test('/api/stuck omits Planned file waits even before a scheduler dispatch pass', async () => {
+  const holder = createCard(tasks, { title: 'File holder', brief: 'x', prefix: 'P' })
+  const waiting = createCard(tasks, { title: 'Waiting plan', brief: 'x', prefix: 'P' })
+  for (const card of [holder, waiting]) writeFileSync(card.path, `# ${card.id} — file wait\n## Files\n- \`public/legacy/**/index.html\`\n`)
+  mkdirSync(join(tasks, 'working'), { recursive: true }); mkdirSync(join(tasks, 'backlog'), { recursive: true })
+  const holderPath = join(tasks, 'working', `${holder.id}.md`), waitingPath = join(tasks, 'backlog', `${waiting.id}.md`)
+  renameSync(holder.path, holderPath); renameSync(waiting.path, waitingPath)
+  const then = new Date(Date.now() - 30 * 60000)
+  utimesSync(waitingPath, then, then)
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ [holder.id]: {
+    state: 'building', integrationWorkspace: join(root, 'Proj'), files: [join(root, 'Proj/public/legacy/**/index.html').replaceAll('\\', '/').toLowerCase()],
+  } }))
+  try {
+    const r = await get('/api/stuck?project=Proj&minutes=20')
+    assert.equal(r.status, 200, r.body.error)
+    assert.ok(!r.body.cards.some(c => c.id === waiting.id))
+    mkdirSync(join(tasks, 'archive'), { recursive: true })
+    renameSync(holderPath, join(tasks, 'archive', `${holder.id}.md`))
+    assert.ok((await get('/api/stuck?project=Proj&minutes=20')).body.cards.some(c => c.id === waiting.id), 'closing the holder exposes the otherwise stalled plan')
+  } finally {
+    rmSync(holderPath, { force: true }); rmSync(waitingPath)
+    rmSync(join(tasks, 'archive', `${holder.id}.md`), { force: true })
+    rmSync(join(tasks, '.board-worktrees.json'))
+  }
+})
 
 test('project-manager registers, persists, reads back, unregisters and rejects bad input', async () => {
   const inbox = join(root, 'inbox', 'Proj-INBOX.md').replace(/\\/g, '/')
