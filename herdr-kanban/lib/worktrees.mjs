@@ -42,8 +42,8 @@ function updateEntry(tasksDir, id, patch) {
   return all[id.toUpperCase()]
 }
 
-function git(cwd, args, { allowFailure = false, encoding = 'utf8' } = {}) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { cwd, encoding, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })
+function git(cwd, args, { allowFailure = false, encoding = 'utf8', env = {} } = {}) {
+  const result = spawnSync('git', ['-C', cwd, ...args], { cwd, encoding, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...env } })
   if (result.error) throw new Error(`git ${args[0]} failed in ${cwd}: ${result.error.message}`)
   if (!allowFailure && result.status !== 0) {
     throw new Error(`git ${args[0]} failed in ${cwd}: ${String(result.stderr || result.stdout || `exit ${result.status}`).trim()}`)
@@ -460,7 +460,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   }
   if (existing) {
     prepareDependencies(existing.workspacePath, integrationWorkspace)
-    const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], state: 'building', reason: null, resumedAt: new Date().toISOString() })
+    const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
     return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false }
   }
 
@@ -482,6 +482,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     repoRoot: resolve(repoRoot),
     integrationWorkspace,
     envFile: gitSettings?.envFile,
+    generatedFiles: gitSettings?.generatedFiles,
     worktreePath,
     workspacePath,
     workspaceRel: slash(workspaceRel),
@@ -508,15 +509,15 @@ function cardIn(cards, id) {
 // parallelFiles (projectSettings.<project>.parallelFiles, repo-relative): big shared files
 // whose cards edit separate parts. Builders may run on them at once; integration still lands
 // one commit at a time, and a real conflict is rebased and goes back to a Builder once.
-const notParallel = (projectPath, parallelFiles = []) => {
-  const listed = new Set(parallelFiles.map(f => norm(resolve(projectPath, f))))
+const notParallel = (projectPath, parallelFiles = [], generatedFiles = {}) => {
+  const listed = new Set([...parallelFiles, ...Object.keys(generatedFiles)].map(f => norm(resolve(projectPath, f))))
   return (file) => !listed.has(file)
 }
 
-export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), parallelFiles }) {
+export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), parallelFiles, generatedFiles }) {
   const all = filesFor(card, resolve(projectPath, card.workspace || '.'))
   if (!all.length) return 'card not ready — no exact files listed'
-  const candidate = new Set(all.filter(notParallel(projectPath, parallelFiles)))
+  const candidate = new Set(all.filter(notParallel(projectPath, parallelFiles, generatedFiles)))
   const cards = Object.values(board).flat()
   const registry = readWorktrees(tasksDir)
   for (const [id, entry] of Object.entries(registry)) {
@@ -543,8 +544,8 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
 }
 
 // Read-only visualization of persisted exact-file locks, never prose guesses.
-export function recordedOverlapBlockers(card, projectPath, registry, parallelFiles) {
-  const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')).filter(notParallel(projectPath, parallelFiles)))
+export function recordedOverlapBlockers(card, projectPath, registry, parallelFiles, generatedFiles) {
+  const candidate = new Set(filesFor(card, resolve(projectPath, card.workspace || '.')).filter(notParallel(projectPath, parallelFiles, generatedFiles)))
   return Object.entries(registry).filter(([id, entry]) => id !== card.id && entry.state !== 'integrated'
     && (entry.files || []).some(file => [...candidate].some(c => filesOverlap(c, norm(file))))).map(([id]) => id)
 }
@@ -727,12 +728,28 @@ export function handoffCommitError(tasksDir, card) {
 // (never the integration checkout). The pre-rebase commit keeps a recovery ref.
 function rebaseCardOnto(entry, head) {
   git(entry.repoRoot, ['branch', `recovery/${entry.branch}-${Date.now().toString(36)}`, entry.commit], { allowFailure: true })
-  const rebase = git(entry.worktreePath, ['rebase', '--onto', head, entry.baseCommit], { allowFailure: true })
-  if (rebase.status === 0) return { clean: true, commit: git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() }
-  const files = git(entry.worktreePath, ['diff', '--name-only', '--diff-filter=U'], { allowFailure: true }).stdout.split(/\r?\n/).filter(Boolean)
-  const hunks = (git(entry.worktreePath, ['diff'], { allowFailure: true }).stdout || rebase.stderr || '').slice(0, 6000)
-  git(entry.worktreePath, ['rebase', '--abort'], { allowFailure: true })
-  return { clean: false, files, hunks }
+  let rebase = git(entry.worktreePath, ['rebase', '--onto', head, entry.baseCommit], { allowFailure: true })
+  const regenerated = new Set()
+  while (rebase.status !== 0) {
+    const files = git(entry.worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z'], { allowFailure: true }).stdout.split('\0').filter(Boolean)
+    let hunks = (git(entry.worktreePath, ['diff'], { allowFailure: true }).stdout || rebase.stderr || '').slice(0, 6000)
+    try {
+      if (!files.length || files.some(file => !Object.hasOwn(entry.generatedFiles || {}, file))) throw new Error('unresolved integration conflict')
+      for (const file of files) {
+        git(entry.worktreePath, ['checkout', '--theirs', '--', file])
+        const result = spawnSync(entry.generatedFiles[file], { cwd: entry.worktreePath, shell: true, windowsHide: true, timeout: 300_000, encoding: 'utf8' })
+        if (result.error || result.status !== 0) throw new Error(`regenerating ${file} failed: ${result.error?.message || result.stderr || result.stdout || `exit ${result.status}`}`)
+        git(entry.worktreePath, ['add', '--', file])
+        regenerated.add(file)
+      }
+      rebase = git(entry.worktreePath, ['rebase', '--continue'], { allowFailure: true, env: { GIT_EDITOR: 'true' } })
+    } catch (err) {
+      hunks = `${hunks}\n${err.message}`.slice(0, 6000)
+      git(entry.worktreePath, ['rebase', '--abort'], { allowFailure: true })
+      return { clean: false, files, hunks }
+    }
+  }
+  return { clean: true, commit: git(entry.worktreePath, ['rev-parse', 'HEAD']).stdout.trim(), regenerated: [...regenerated] }
 }
 
 export const updateWorktree = updateEntry
@@ -767,7 +784,7 @@ export function rebaseCompletedOntoIntegration(tasksDir, cardId) {
   if (entry.baseCommit === head) return { status: 'current', commit }
   const rebase = rebaseCardOnto({ ...entry, commit }, head)
   if (!rebase.clean) return { status: 'conflict', reason: `integration conflict while rebasing onto master ${head.slice(0, 12)}`, files: rebase.files, hunks: rebase.hunks, head }
-  updateEntry(tasksDir, cardId, { baseCommit: head, commit: rebase.commit })
+  updateEntry(tasksDir, cardId, { baseCommit: head, commit: rebase.commit, ...(rebase.regenerated.length ? { reason: `rebased onto integration HEAD ${head.slice(0, 12)}; regenerated ${rebase.regenerated.join(', ')}` } : {}) })
   return { status: 'current', commit: rebase.commit }
 }
 
@@ -833,8 +850,8 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
           const head = git(entry.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
           const rebase = rebaseCardOnto({ ...entry, commit }, head)
           if (rebase.clean) {
-            updateEntry(tasksDir, entry.cardId, { state: 'rebased', baseCommit: head, commit: rebase.commit, reason: `rebased onto integration HEAD ${head.slice(0, 12)}; the recorded check must pass before integration` })
-            results.push({ id: entry.cardId, status: 'rebased', commit: rebase.commit })
+            updateEntry(tasksDir, entry.cardId, { state: 'rebased', baseCommit: head, commit: rebase.commit, reason: `rebased onto integration HEAD ${head.slice(0, 12)}${rebase.regenerated.length ? `; regenerated ${rebase.regenerated.join(', ')}` : ''}; the recorded check must pass before integration` })
+            results.push({ id: entry.cardId, status: 'rebased', commit: rebase.commit, regenerated: rebase.regenerated })
           } else {
             updateEntry(tasksDir, entry.cardId, { state: 'conflict', commit, reason, rebaseTarget: head })
             results.push({ id: entry.cardId, status: 'conflict', reason, files: rebase.files, hunks: rebase.hunks, head })

@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -151,6 +151,75 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
     // No Builder resume needed: a hand-resolved conflict moved back to Completed integrates (Injectbuddy I387).
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks })[0].status, 'integrated')
     assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'integration\nbuilder\n')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('generated files never hold another card', () => {
+  const f = fixture()
+  try {
+    const generatedFiles = { 'app.js': `node -e "require('fs').writeFileSync('app.js', 'generated')"` }
+    prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1'), gitSettings: { ...f.settings, generatedFiles } })
+    moveCard(f.tasks, 'T-1', 'working')
+    const card = f.addCard('T-2')
+    assert.equal(overlapHoldReason({ tasksDir: f.tasks, card, projectPath: f.integration, generatedFiles }), null)
+    assert.deepEqual(recordedOverlapBlockers(card, f.integration, readWorktrees(f.tasks), [], generatedFiles), [])
+    assert.equal(startHoldReason({ tasksDir: f.tasks, card, projectPath: f.integration, board: readBoard(f.tasks), gitSettings: { ...f.settings, generatedFiles } }), null)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('two cards changing a generated file integrate after regeneration and the recorded check', async () => {
+  const f = fixture()
+  try {
+    f.settings.generatedFiles = { 'app.js': `node -e "require('fs').writeFileSync('app.js', 'generated')"` }
+    const cards = ['T-1', 'T-2'].map(id => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard(id), gitSettings: f.settings }))
+    for (const [i, card] of cards.entries()) {
+      writeFileSync(join(card.workspacePath, 'app.js'), `card ${i}`)
+      git(card.workspacePath, 'commit', '-am', `T-${i + 1} change`)
+      f.complete(`T-${i + 1}`)
+    }
+    const results = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.deepEqual(results.map(r => r.status), ['integrated', 'rebased'])
+    assert.deepEqual(results[1].regenerated, ['app.js'])
+    assert.match(readWorktrees(f.tasks)['T-2'].reason, /regenerated app.js/)
+    assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8'), 'card 0', 'the rebased card waits for its recorded check')
+    let checks = 0
+    const integrated = await reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test', onlyIds: ['T-2'], io: {
+      agentList: async () => [], reconcile: reconcileCompletedWorktrees,
+      runCheck: async (card, entry) => {
+        checks++
+        assert.equal(card.id, 'T-2')
+        assert.equal(readFileSync(join(entry.worktreePath, 'app.js'), 'utf8'), 'generated')
+        return { ok: true, output: 'PASS' }
+      },
+    } })
+    assert.equal(checks, 1)
+    assert.equal(integrated[0].status, 'integrated')
+    assert.equal(readFileSync(join(f.integration, 'app.js'), 'utf8'), 'generated')
+    assert.equal(git(f.integration, 'status', '--porcelain'), '')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+for (const failing of [false, true]) test(failing ? 'a failing regeneration command preserves the conflict' : 'a non-generated conflict is not regenerated', () => {
+  const f = fixture()
+  try {
+    f.settings.generatedFiles = failing
+      ? { 'app.js': 'node -e "process.exit(1)"' }
+      : { 'other.js': `node -e "require('fs').writeFileSync('other.js', 'generated')"` }
+    const card = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1'), gitSettings: f.settings })
+    writeFileSync(join(card.workspacePath, 'app.js'), 'builder')
+    git(card.workspacePath, 'commit', '-am', 'card change')
+    const commit = git(card.workspacePath, 'rev-parse', 'HEAD')
+    writeFileSync(join(f.integration, 'app.js'), 'integration')
+    git(f.integration, 'commit', '-am', 'parallel change')
+    f.complete('T-1')
+    const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.equal(result.status, 'conflict')
+    assert.deepEqual(result.files, ['app.js'])
+    assert.match(result.hunks, /<<<<<<<|builder/)
+    if (failing) assert.match(result.hunks, /regenerating app.js failed/)
+    assert.equal(git(card.workspacePath, 'rev-parse', 'HEAD'), commit)
+    assert.equal(git(card.workspacePath, 'status', '--porcelain'), '')
+    assert.equal(git(f.integration, 'status', '--porcelain'), '')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
