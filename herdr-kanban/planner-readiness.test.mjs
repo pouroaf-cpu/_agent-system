@@ -156,7 +156,7 @@ console.log('Planner readiness validation passed')
   try {
     git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
     mkdirSync(join(root, 'src')); mkdirSync(join(root, 'TASKS'))
-    writeFileSync(join(root, 'src', 'app.mjs'), ''); writeFileSync(join(root, '.gitignore'), '*.md\n')
+    writeFileSync(join(root, 'src', 'app.mjs'), ''); writeFileSync(join(root, '.gitignore'), '*.md\nnode_modules/\n')
     git('add', '.'); git('commit', '-qm', 'base')
     writeFileSync(join(root, 'REPORT.md'), 'ignored'); writeFileSync(join(root, 'TASKS', 'check.mjs'), 'untracked')
     const plan = realistic.replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')
@@ -165,6 +165,21 @@ console.log('Planner readiness validation passed')
     assert.throws(() => validatePlan(plan.replace('- `src/app.mjs` —', '- `REPORT.md` —'), { workspace: root }),
       /## Files path REPORT\.md exists .* not tracked by git .*absolute path as a read-only reference/)
     const prereq = (line) => plan.replace('Existing Node runtime; no additional access.', line)
+    // I735: package subpaths are shared dependencies, not root-relative edit targets.
+    mkdirSync(join(root, 'node_modules', 'somepkg', 'dist'), { recursive: true })
+    writeFileSync(join(root, 'node_modules', 'somepkg', 'dist', 'x.js'), '')
+    mkdirSync(join(root, 'node_modules', '.bin'))
+    writeFileSync(join(root, 'node_modules', '.bin', 'x.cmd'), '')
+    for (const path of ['somepkg/dist/x.js', 'node_modules/somepkg/dist/x.js']) {
+      validatePlan(prereq(`Read \`${path}\`.`), { workspace: root })
+      validatePlan(plan.replace('Changes:', `Read \`${path}\`.\nChanges:`), { workspace: root })
+      assert.throws(() => validatePlan(plan.replace('- `src/app.mjs` —', `- \`${path}\` —`), { workspace: root }),
+        /## Files path .* (does not exist|exists .* not tracked)/)
+    }
+    for (const path of ['somepkg/dist/missing.js']) {
+      assert.throws(() => validatePlan(prereq(`Read \`${path}\`.`), { workspace: root }),
+        /## Prerequisites path .* does not exist/)
+    }
     assert.throws(() => validatePlan(prereq('Run `node TASKS/check.mjs` then `TASKS/check.mjs` validates.'), { workspace: root }),
       /## Prerequisites path TASKS\/check\.mjs exists .* not tracked/)
     assert.throws(() => validatePlan(prereq('Rules: `C:/definitely/missing/CLAUDE.md`.'), { workspace: root }),
@@ -175,7 +190,7 @@ console.log('Planner readiness validation passed')
     // Root-level ignored files (.env*) exist in the integration checkout the Planner
     // reads but never in a card worktree (Injectbuddy I227/I265). Prerequisites and
     // Implementation plan setup commands are both checked, word by word.
-    writeFileSync(join(root, '.gitignore'), '*.md\n.env*\n'); writeFileSync(join(root, 'package.json'), '{}')
+    writeFileSync(join(root, '.gitignore'), '*.md\n.env*\nnode_modules/\n'); writeFileSync(join(root, 'package.json'), '{}')
     git('add', '.'); git('commit', '-qm', 'env ignore')
     writeFileSync(join(root, '.env.devtools.local'), 'X=1\n')
     assert.throws(() => validatePlan(prereq('`.env.devtools.local` exists; copy it to `.env.local` before starting Next.'), { workspace: root }),

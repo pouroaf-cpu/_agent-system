@@ -177,6 +177,8 @@ function checkPlanPaths(planRoot, filesSection, prereqSection, planSection) {
         }
         // Relative file paths only (a/b.ext, .env.local), not URLs, globs or node_modules (junctioned in).
         if (!/^[\w@.[\]-]+(?:\/[\w@.[\]-]+)*\.[\w-]{1,20}$/.test(token) || /^node_modules\//.test(token) || /(^|\/)\.\.(\/|$)/.test(token) || newFiles.has(token)) continue
+        // A package subpath (next/dist/x.js) is in that junction too (I735).
+        if (existsSync(resolve(planRoot, 'node_modules', token))) continue
         // A lone a/b.ext prerequisite must exist and be tracked. Anything else (root-level
         // names, command arguments, plan steps) is refused only when it is a file the
         // Planner can see that the card worktree will not have.
