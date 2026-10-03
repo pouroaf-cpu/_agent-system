@@ -327,3 +327,15 @@ test('version-2 done reads one-line comma fields and "Outcome: PASS: note" the s
   write('- Stage: builder, Outcome: PASS: fixed the toggle, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: 3 passed, Evidence: check-output.txt')
   assert.equal(done().status, 0, done().stderr)
 })
+
+test('done repairs a literal PowerShell `r`n that hid the Implementation heading (Injectbuddy I711)', t => {
+  const f = fixture(t)
+  const card = createCard(f.tasks, { title: 'escaped result', brief: 'correct result' })
+  writeFileSync(card.path, `# ${card.id} — escaped\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`
+    .replace('## Implementation\nChanged app.mjs', '## Implementation`r`nStage: builder, Outcome: PASS, Files: app.mjs, Blocker: none')
+    .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence`r`nCheck: node check.mjs; Result: passed; Evidence: check-output.txt'))
+  moveCard(f.tasks, card.id, 'working')
+  const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.doesNotMatch(readFileSync(findCard(f.tasks, card.id).path, 'utf8'), /`r`n/)
+})

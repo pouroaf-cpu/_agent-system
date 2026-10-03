@@ -20,7 +20,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 // `owner` is a decision, credential, asset or judgement call only the human can
 // supply — no amount of agent effort will resolve it.
 
-import { existsSync, appendFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { moveCard, columnByKey, findCard, updateCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
@@ -323,7 +323,9 @@ try {
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
   }
   if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
-    const text = readFileSync(current.path, 'utf8')
+    let text = readFileSync(current.path, 'utf8')
+    // A PowerShell single-quoted write leaves a literal `r`n, which hides the heading (I711).
+    if (text.includes('`r`n')) writeFileSync(current.path, text = text.replaceAll('`r`n', '\n'))
     const sections = []
     for (const heading of ['Implementation', 'Evidence']) {
       const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
