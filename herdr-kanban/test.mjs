@@ -218,7 +218,7 @@ test('the reviewer prompt stays inside card-listed files and one proportional ch
   assert.ok(text.includes('pass T-04'), 'passes go through hkb pass so reviewer evidence is written')
   assert.ok(text.includes('rework T-04'), 'failures use hkb rework')
   assert.match(text, /Only planning errors return to Planner; implementation errors return to the responsible Builder/)
-  assert.match(text, /Read .*REVIEWER\.md.*focused briefings.*mandatory project\/safety/i)
+  assert.match(text, /Read .*REVIEWER\.md.*focused briefings.*Project constraints section/i)
   assert.match(text, /one proportional check type/i)
   assert.doesNotMatch(text, /ORCHESTRATION\.md|CLAUDE\.md|browser behaviour|journal step/i)
   assert.match(text, /Chrome navigation.*checks are allowed/i)

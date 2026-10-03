@@ -712,7 +712,28 @@ function validateCompleted(card, entry) {
   if (!actual.length || outside.length) {
     throw new Error(`commit must change only card-listed files: allowed [${expected.join(', ')}], got [${actual.join(', ')}]`)
   }
+  // ponytail: skipped for big generated sets (I302's 141 guides), two git shows per file.
+  if (actual.length <= 20) {
+    const show = (rev, file) => { const r = git(entry.worktreePath, ['show', `${rev}:${file}`], { allowFailure: true, encoding: 'buffer' }); return r.status === 0 ? r.stdout : null }
+    const changed = actual.map(file => formatChangeError(file, show(`${commits[0]}^`, file), show(commits[0], file))).filter(Boolean)
+    if (changed.length) throw new Error(`commit rewrites file format (${changed.join('; ')}): restore each with git checkout ${commits[0]}^ -- <file>, then edit in place`)
+  }
   return commits[0]
+}
+
+// A whole-file rewrite (PowerShell Set-Content, a formatter, a script that joins lines) changes a
+// file's encoding, line endings or layout, and every card sharing it then conflicts (Injectbuddy
+// I692, 2026-10-03). Null when the format is kept or the file is new or deleted.
+export function formatChangeError(file, before, after) {
+  if (!before?.length || !after?.length) return null
+  const bom = b => b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf
+  if (bom(before) !== bom(after)) return `${file}: byte-order mark ${bom(after) ? 'added' : 'removed'}`
+  if (before.includes(0) !== after.includes(0)) return `${file}: encoding changed`
+  const text = b => b.toString('latin1'), lines = b => text(b).split('\n').length
+  if (lines(before) >= 20 && lines(after) < lines(before) / 10) return `${file}: ${lines(before)} lines became ${lines(after)}`
+  const crlf = b => (text(b).match(/\r\n/g) || []).length / (lines(b) - 1) > 0.5
+  if (lines(before) >= 20 && lines(after) > 1 && crlf(before) !== crlf(after)) return `${file}: line endings changed to ${crlf(after) ? 'CRLF' : 'LF'}`
+  return null
 }
 
 // The integration gate, run at the Builder's `hkb done` so the Builder fixes its own

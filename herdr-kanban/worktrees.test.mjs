@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -812,4 +812,39 @@ test('a missing worktree whose branch holds a commit is still refused, never sil
   } finally {
     rmSync(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
+})
+
+// Injectbuddy I692: a script joined ib-calc.css into one line, then PowerShell Set-Content
+// rewrote it; every card sharing the file would have conflicted.
+test('formatChangeError catches whole-file rewrites and allows normal edits', () => {
+  const css = Array.from({ length: 40 }, (_, i) => `.a${i} { color: red; }`).join('\n') + '\n'
+  const b = s => Buffer.from(s, 'utf8')
+  assert.equal(formatChangeError('x.css', b(css), b(css.replace('.a3 {', '.b3 {'))), null)
+  assert.equal(formatChangeError('x.css', b(css), b(css.split('\n').slice(0, 10).join('\n'))), null, 'deleting rules is fine')
+  assert.match(formatChangeError('x.css', b(css), b(css.replaceAll('\n', ' '))), /41 lines became 1/)
+  assert.match(formatChangeError('x.css', b(css), b(css.replaceAll('\n', '\r\n'))), /line endings changed to CRLF/)
+  assert.match(formatChangeError('x.css', b(css), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), b(css)])), /byte-order mark added/)
+  assert.match(formatChangeError('x.css', b(css), Buffer.from(css, 'utf16le')), /encoding changed/)
+  assert.equal(formatChangeError('x.css', null, b(css)), null, 'new file')
+})
+
+test('hkb done refuses a commit that collapses a file into one line', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const wt = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).entry.worktreePath
+    moveCard(f.tasks, 'T-1', 'working')
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n') + '\n'
+    writeFileSync(join(wt, 'app.js'), lines); git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'base lines')
+    // The fixture's base commit is the worktree's start: make the 30-line file part of it.
+    const entry = readWorktrees(f.tasks)['T-1']
+    const tasksFile = join(f.tasks, '.board-worktrees.json')
+    const all = JSON.parse(readFileSync(tasksFile, 'utf8')); all['T-1'].baseCommit = git(wt, 'rev-parse', 'HEAD'); writeFileSync(tasksFile, JSON.stringify(all))
+    writeFileSync(join(wt, 'app.js'), lines.replaceAll('\n', ' ')); git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'T-1 change')
+    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8' })
+    assert.ok(entry)
+    assert.equal(run.status, 1)
+    assert.match(run.stderr, /commit rewrites file format \(app\.js: 31 lines became 1\)/)
+    assert.equal(findCard(f.tasks, 'T-1').column, 'working')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
