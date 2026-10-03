@@ -108,7 +108,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
       const spec = join(root, `${id}.${randomUUID()}.launch.json`)
       // Each turn gets its own exit file, so a previous exit cannot mark a resumed turn done.
       const turnExit = spec + '.exit.json'
-      writeFileSync(spec, JSON.stringify({ exe, args: [...prefix, ...argv], cwd: row.options.workspacePath, exitFile: turnExit }))
+      writeFileSync(spec, JSON.stringify({ exe, args: [...prefix, ...argv], cwd: row.options.workspacePath, exitFile: turnExit, log: row.log }))
       const fd = openSync(row.log, 'a')
       let child
       try {
