@@ -418,11 +418,11 @@ function cardStatus(card) {
   if (card.column === 'pou') return { text: 'Waiting on Pou', tone: 'owner' };
   if (card.column === 'owner') return { text: 'Waiting on Kanban Manager', tone: 'muted' };
   const notice = state.workflow?.[card.id]?.operational?.reason || state.workflow?.[card.id]?.limitWarning;
-  if (notice) return { text: notice, tone: 'problem' };
+  if (notice) return { text: formatNZText(notice), tone: 'problem' };
   // Why the board passed this card over on its last tick: a Queue start hold, or any
   // lane waiting for an engine that is out of usage ("Codex usage limit; retrying at …").
   const hold = state.holds?.[card.id];
-  if (hold) return { text: hold, tone: 'muted' };
+  if (hold) return { text: formatNZText(hold), tone: 'muted' };
   const ind = state.stageIndicators?.[card.id];
   const review = ind?.stage === 'Reviewer';
   if (ind?.status === 'issue') return { text: review ? 'Review feedback' : 'Plan issue', tone: 'problem', title: ind.stage + ': ' + ind.reason };
@@ -715,7 +715,7 @@ function renderTestRuns() {
   const title = document.createElement('h2'); title.textContent = 'Nightly e2e (all Playwright specs)';
   card.append(title);
   const line = text => { const p = document.createElement('p'); p.textContent = text; card.append(p); return p; };
-  const when = iso => new Date(iso).toLocaleString();
+  const when = iso => formatNZTime(iso);
   if (tests.running) line('Running since ' + when(tests.running.started) + ' on ' + tests.running.head + '…').className = 'audit-status';
   const last = tests.runs[0];
   if (!last) line('No runs yet.');
@@ -765,7 +765,7 @@ function renderPageHistory() {
       const cell = row.insertCell(), results = history.get(route), result = results && Object.hasOwn(results, type) ? results[type] : null;
       if (result) {
         const status = document.createElement('span'); status.className = 'test-' + result.status; status.textContent = result.status;
-        const date = document.createElement('span'); date.className = 'usage-detail'; date.textContent = new Date(result.finished).toLocaleString();
+        const date = document.createElement('span'); date.className = 'usage-detail'; date.textContent = formatNZTime(result.finished);
         cell.append(status, date);
       }
     }
@@ -783,7 +783,7 @@ function renderPageHistory() {
         content.textContent = '';
         for (const run of result.runs) {
           const line = document.createElement('p');
-          line.textContent = new Date(run.finished).toLocaleString() + ' · ' + run.type + ' · ' + run.status + ' · ' + run.head;
+          line.textContent = formatNZTime(run.finished) + ' · ' + run.type + ' · ' + run.status + ' · ' + run.head;
           content.append(line);
         }
         if (!result.runs.length) content.textContent = 'No runs yet.';
@@ -810,7 +810,7 @@ function renderTestRequest() {
   else {
     if (!testDraft) {
       const now = new Date();
-      testDraft = { type: testRoutes.types[0], pages: [], at: new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16) };
+      testDraft = { type: testRoutes.types[0], pages: [], at: nzDateTimeInput(now) };
     }
     const form = document.createElement('form'); form.className = 'test-request-form';
     const typeLabel = document.createElement('label'); typeLabel.textContent = 'Audit type';
@@ -838,7 +838,7 @@ function renderTestRequest() {
       box.value = route; boxes.push(box);
     }
     form.append(pages);
-    const timeLabel = document.createElement('label'); timeLabel.textContent = 'Date and time';
+    const timeLabel = document.createElement('label'); timeLabel.textContent = 'Date and time (NZ)';
     const time = document.createElement('input'); time.type = 'datetime-local'; time.required = true; time.value = testDraft.at;
     time.addEventListener('input', () => { testDraft.at = time.value; }); timeLabel.append(time); form.append(timeLabel);
     const button = document.createElement('button'); button.type = 'submit'; button.className = 'btn audit-open'; button.textContent = 'Request'; form.append(button);
@@ -847,7 +847,7 @@ function renderTestRequest() {
       event.preventDefault(); button.disabled = true; error.textContent = '';
       try {
         if (!testDraft.pages.length) throw new Error('Select at least one page');
-        const response = await fetch('/api/tests/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, ...testDraft, at: new Date(testDraft.at).toISOString() }) });
+        const response = await fetch('/api/tests/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, ...testDraft, at: nzInputToISO(testDraft.at) }) });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || 'Could not request audit');
         await loadTests();
@@ -857,7 +857,7 @@ function renderTestRequest() {
   }
   for (const request of tests.requests || []) {
     const line = document.createElement('p');
-    line.textContent = request.type + ' · ' + request.pages.length + ' pages · ' + new Date(request.at).toLocaleString() + ' · ' + request.state;
+    line.textContent = request.type + ' · ' + request.pages.length + ' pages · ' + formatNZTime(request.at) + ' · ' + request.state;
     card.append(line);
     if (request.error) card.append(note(request.error));
   }
@@ -878,7 +878,7 @@ function renderAuditsScreen() {
     const card = document.createElement('article'); card.className = 'audit-card';
     const title = document.createElement('h2'); title.textContent = audit.title;
     const date = document.createElement('p');
-    date.textContent = audit.dateLabel + ': ' + new Date(audit.date).toLocaleDateString();
+    date.textContent = audit.dateLabel + ': ' + formatNZTime(audit.date, { day: 'numeric', month: 'short', year: 'numeric' });
     const status = document.createElement('p'); status.className = 'audit-status'; status.textContent = audit.status;
     card.append(title, date, status);
     for (const report of audit.reports) {
@@ -1415,9 +1415,9 @@ function fmtTaskTime(value) {
 
 
 
-const taskDateFmt = new Intl.DateTimeFormat('en-NZ', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' });
+const taskDateFmt = { format: value => formatNZTime(value, { year: 'numeric', month: '2-digit', day: '2-digit' }) };
 
-const taskTimeFmt = new Intl.DateTimeFormat('en-NZ', { timeZone: 'Pacific/Auckland', hour: '2-digit', minute: '2-digit' });
+const taskTimeFmt = { format: value => formatNZTime(value, { hour: '2-digit', minute: '2-digit' }) };
 
 
 
@@ -2223,7 +2223,7 @@ function renderAgents() {
     el.agents.append(m);
   };
   for (const [key, block] of Object.entries(state.quotaBlocks || {}))
-    say(`${key.replace(':', ' ')} usage limit — no such agent starts until ${new Date(block.until).toLocaleString()}.`);
+    say(`${key.replace(':', ' ')} usage limit — no such agent starts until ${formatNZTime(block.until)}.`);
   if (!state.herdrUp) say('herdr is not running — no agent status available.');
 }
 
@@ -2472,11 +2472,11 @@ function fmtWhen(ms) {
 
   const d = new Date(ms);
 
-  const today = new Date().toDateString() === d.toDateString();
+  const today = nzDateTimeInput(Date.now()).slice(0, 10) === nzDateTimeInput(d).slice(0, 10);
 
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = formatNZTime(d, { hour: 'numeric', minute: '2-digit' });
 
-  return today ? 'today ' + time : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + time;
+  return today ? 'today ' + time : formatNZTime(d);
 
 }
 
@@ -2665,7 +2665,7 @@ function renderDrawer() {
     const mine = kind === 'Needs you';
     const box = drawerSection(mine ? 'What needs to be done' : kind, 'ask' + (mine ? ' mine' : ''));
     const p = document.createElement('p');
-    p.textContent = (rest ? rest + ': ' : '') + card.ask.text;
+    p.textContent = formatNZText((rest ? rest + ': ' : '') + card.ask.text);
     box.append(p);
     el.drawerBody.append(box);
   }
@@ -2674,7 +2674,7 @@ function renderDrawer() {
   if (recoveryNotice) {
     const notice = document.createElement('p');
     notice.className = 'drawer-stall';
-    notice.textContent = recoveryNotice;
+    notice.textContent = formatNZText(recoveryNotice);
     el.drawerBody.append(notice);
   }
   if (stalled) {
@@ -2829,7 +2829,7 @@ function usageBreakdown(card, usage) {
   const wrap = document.createElement('div');
   wrap.className = 'usage-breakdown';
   const created = document.createElement('p');
-  created.textContent = `Created: ${new Date(card.createdAt || card.added).toLocaleString()}`;
+  created.textContent = `Created: ${formatNZTime(card.createdAt || card.added)}`;
   const total = document.createElement('p');
   total.textContent = usage?.tokens ? `${fmtNum(usage.tokens.total)} processed tokens${usage.unknown ? ' — partial; unverified runs excluded' : ''}` : 'Usage not yet verified';
   wrap.append(created, total);
@@ -2861,7 +2861,7 @@ function usageBreakdown(card, usage) {
     const agent = document.createElement('th'); agent.scope = 'row';
     agent.textContent = `${run.name || 'Unknown agent'} · ${run.role || 'Unknown role'}`;
     const detail = document.createElement('span'); detail.className = 'usage-detail';
-    detail.textContent = `${run.model || 'Unknown model'} · Started: ${run.startedAt ? new Date(run.startedAt).toLocaleString() : 'Unknown'} · Finished: ${run.finishedAt ? new Date(run.finishedAt).toLocaleString() : 'Pending'}`;
+    detail.textContent = `${run.model || 'Unknown model'} · Started: ${run.startedAt ? formatNZTime(run.startedAt) : 'Unknown'} · Finished: ${run.finishedAt ? formatNZTime(run.finishedAt) : 'Pending'}`;
     agent.append(detail); row.append(agent);
     appendTokenCells(row, run.tokens);
     row.insertCell().textContent = `${run.shared ? 'Shared — excluded from card total' : run.tokens ? 'Attributed to this card' : 'Missing / unverified — excluded'} · ${run.status || 'Unknown status'}`;

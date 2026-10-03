@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 // hkb — the one command a working agent runs to report back.
 //
 //   node hkb.mjs done  T-02
@@ -101,7 +102,7 @@ function tellManager(line, toBoard = false) {
   const manager = !toBoard && projectSettings()?.manager
   const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
   mkdirSync(dirname(inbox), { recursive: true })
-  appendFileSync(inbox, `- ${new Date().toISOString()} ${line}\n`)
+  appendFileSync(inbox, `- ${formatNZTime()} ${formatNZText(line)}\n`)
   return manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
 }
 

@@ -1,3 +1,4 @@
+import { formatNZTime } from './lib/nz-time.mjs'
 // Local kanban board over the filesystem. Phase 1+2: read, serve, move.
 
 import { createServer } from 'node:http'
@@ -700,7 +701,7 @@ async function pollProject(project) {
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
     for (const [kind, block] of Object.entries(activeQuota(HERE))) {
       await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} usage limit`,
-        detail: `No ${kind} agent starts on any project until ${new Date(block.until).toLocaleString()}. Waiting cards keep their lanes and resume by themselves.` })
+        detail: `No ${kind} agent starts on any project until ${formatNZTime(block.until)}. Waiting cards keep their lanes and resume by themselves.` })
     }
     const breaker = breakerState(project)
     if (breaker.breakerTripped) {

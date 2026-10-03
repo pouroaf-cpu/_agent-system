@@ -1,3 +1,4 @@
+import { formatNZTime } from './nz-time.mjs'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -324,7 +325,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         current.submitted = false
         save(tasksDir, owners)
         const moved = moveCard(tasksDir, card.id, 'planning')
-        appendFileSync(moved.path, `\n\n**Technical recovery** ${new Date(now).toISOString()}\n\n${error.message}. Card and worktree preserved. Planner recovery retries after a 15-minute cooldown; diagnose the failure before another build, do not repeat the same plan.\n`)
+        appendFileSync(moved.path, `\n\n**Technical recovery** ${formatNZTime(now)}\n\n${error.message}. Card and worktree preserved. Planner recovery retries after a 15-minute cooldown; diagnose the failure before another build, do not repeat the same plan.\n`)
       }
       if (owner?.error) {
         if (now < (owner.retryAfter || 0)) continue
@@ -409,7 +410,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         delete owner.inactiveSince
         save(tasksDir, owners)
         if (owner.noHandoffCount >= 2) { askOwnerAfterNoHandoffs(card, owner); continue }
-        appendFileSync(card.path, `\n\n**Planner fallback** ${new Date(now).toISOString()}\n\n${reason}. A fresh Planner is taking over this card; the previous session's output is saved in the card history.\n`)
+        appendFileSync(card.path, `\n\n**Planner fallback** ${formatNZTime(now)}\n\n${reason}. A fresh Planner is taking over this card; the previous session's output is saved in the card history.\n`)
         fresh = true
       }
       let spawnedNewAgent = false

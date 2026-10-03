@@ -17,11 +17,12 @@
 <body>
   <a href="/">Back to board</a>
   <h1>Daily board health</h1>
-  <p>Last 7 UTC days, newest first. Refreshes every 5 seconds.</p>
+  <p>Last 7 daily reporting periods in New Zealand time, newest first. Refreshes every 5 seconds.</p>
   <p>Finished = distinct cards integrated or archived that day. Kick-backs / finished = that day's Builder kick-backs divided by finished cards; — means none finished.</p>
   <p>Kick-back tags come from the reason's leading tag. Planner failures include reported blockers, failed starts, failed delivery and missing handoffs. Owner escalations count entries into Owner.</p>
   <p id="status" role="status">Loading…</p>
   <main id="projects"></main>
+  <script src="nz-time.js"></script>
   <script src="metrics.js"></script>
 </body>
 </html>

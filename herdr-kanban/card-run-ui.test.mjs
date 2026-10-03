@@ -23,7 +23,7 @@ test('Run this card is scoped, blocked reasons visible, and Pause cancels instea
       }
       if (path === '/api/project-control') { requests.push(route.request().postDataJSON()); board.cardRuns[0].status = 'stopped'; return route.fulfill({ json: { ok: true, control: { paused: true } } }) }
       const file = path === '/' ? 'index.html' : path.slice(1)
-      if (['index.html', 'board.js', 'dependency-hover.js', 'board.css'].includes(file)) return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: readFileSync(new URL('./public/' + file, import.meta.url), 'utf8') })
+      if (['index.html', 'board.js', 'nz-time.js', 'dependency-hover.js', 'board.css'].includes(file)) return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: readFileSync(new URL('./public/' + file, import.meta.url), 'utf8') })
       return route.fulfill({ status: 404, body: '' })
     })
     await page.goto('http://localhost:18786/?project=Proof')

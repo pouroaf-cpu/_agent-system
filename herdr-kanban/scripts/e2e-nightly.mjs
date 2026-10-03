@@ -1,3 +1,4 @@
+import { formatNZTime } from '../lib/nz-time.mjs'
 #!/usr/bin/env node
 // Nightly Injectbuddy e2e run with no AI (operator, 2026-10-02): run every Playwright spec
 // against kanban-integration HEAD in a throwaway worktree, save the JSON report, and on
@@ -65,7 +66,7 @@ try {
   const { stats } = parsed
   const failures = failedTests(parsed)
   record({ ...(filters.length && { filters }), pages: pageResults(parsed, routes), passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds: Math.round(stats.duration / 1000), report, failures: failures.slice(0, 50) })
-  const line = `${new Date().toISOString()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
+  const line = `${formatNZTime()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   if (stats.unexpected) appendFileSync(INBOX, `- FOUND Injectbuddy nightly ${line}\n`)
   if (run.status !== 0) {

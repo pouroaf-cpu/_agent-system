@@ -1,3 +1,4 @@
+import { formatNZText } from './nz-time.mjs'
 // Pushover alert when a card lands in Pou, the operator's lane, on any project. Owner
 // belongs to the Kanban Manager and never alerts. Same credentials and
 // one-attempt rule as watchdog-alert.ps1: the alerted set is persisted before the
@@ -21,7 +22,7 @@ export async function pushover(title, message, env = process.env) {
   const token = env.PUSHOVER_APP_TOKEN, user = env.PUSHOVER_USER_KEY
   if (!token || !user) throw new Error('Pushover credentials are not configured')
   const res = await fetch('https://api.pushover.net/1/messages.json', {
-    method: 'POST', body: new URLSearchParams({ token, user, title, message, priority: '0' }), signal: AbortSignal.timeout(30000),
+    method: 'POST', body: new URLSearchParams({ token, user, title, message: formatNZText(message), priority: '0' }), signal: AbortSignal.timeout(30000),
   })
   if ((await res.json().catch(() => ({})))?.status !== 1) throw new Error(`Pushover did not accept the alert (HTTP ${res.status})`)
 }
@@ -41,7 +42,7 @@ export async function alertOwnerCards({ project, tasksDir, send = pushover }) {
   } else {
     for (const c of fresh) {
       const reason = ownerReason(readFileSync(c.path, 'utf8'))
-      await send(`${project} ${c.id} needs you`, `${c.title}${reason ? `\n\n${reason}` : ''}`.slice(0, 1000))
+      await send(`${project} ${c.id} needs you`, formatNZText(`${c.title}${reason ? `\n\n${reason}` : ''}`).slice(0, 1000))
     }
   }
   return fresh.map(c => c.id)

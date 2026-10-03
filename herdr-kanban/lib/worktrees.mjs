@@ -1,3 +1,4 @@
+import { formatNZTime } from './nz-time.mjs'
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
@@ -442,7 +443,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
       const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
       git(existing.repoRoot, ['branch', recovery, head])
       git(wt, ['checkout', '--detach', existing.baseCommit]) // the work is on the recovery branch; leave the checkout at its base so it can be removed
-      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${new Date().toISOString()}\n\nThe card worktree from the previous plan attempt held saved work; it is on branch \`${recovery}\`. This attempt starts from a fresh worktree on integration HEAD.\n`)
+      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe card worktree from the previous plan attempt held saved work; it is on branch \`${recovery}\`. This attempt starts from a fresh worktree on integration HEAD.\n`)
     }
     removeCleanWorktree(tasksDir, existing)
     existing = null

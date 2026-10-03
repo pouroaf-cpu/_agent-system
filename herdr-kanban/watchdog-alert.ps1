@@ -24,8 +24,11 @@ function Send-Push {
     }
     if ($response.status -ne 1) { throw 'Pushover did not accept the alert' }
 }
+function Get-NzAlertTime {
+    node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { formatNZTime } = await import(pathToFileURL(process.argv[1])); console.log(formatNZTime())" (Join-Path $PSScriptRoot 'lib/nz-time.mjs')
+}
 function Send-BoardDownPush {
-    Send-Push 'Kanban board down' "The Kanban board did not respond at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'). The watchdog is checking recovery."
+    Send-Push 'Kanban board down' "The Kanban board did not respond at $(Get-NzAlertTime). The watchdog is checking recovery."
 }
 # This PC's phone (LAN) address: same rule as kanban.ps1 (DHCP, so it moves).
 function Get-LanAddress {

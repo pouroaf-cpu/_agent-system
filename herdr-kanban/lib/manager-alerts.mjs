@@ -1,3 +1,4 @@
+import { formatNZTime, formatNZText } from './nz-time.mjs'
 // Board exceptions for the Kanban Manager: a Pushover plus a line in the Manager's inbox
 // file. Neither needs herdr, so a herdr outage can be reported (audit 2026-09-26 F4: the
 // alerts went to a herdr agent that no longer existed). One send attempt per key per
@@ -51,9 +52,9 @@ export async function notifyManagerException({
   state.alerts[key] = { sentAt: now, body }
   writeState(file, state)
   mkdirSync(dirname(inbox), { recursive: true })
-  appendFileSync(inbox, `- ${new Date(now).toISOString()} ${body}\n`)
+  appendFileSync(inbox, `- ${formatNZTime(now)} ${formatNZText(body)}\n`)
   try {
-    await send(title, body.slice(0, 1000))
+    await send(title, formatNZText(body).slice(0, 1000))
     log?.(`manager alerted: ${title}`, 'error')
     return { sent: true }
   } catch (err) {

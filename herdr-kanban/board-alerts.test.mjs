@@ -44,7 +44,7 @@ test('board alerts fire at each threshold, persist cooldowns across restarts, an
     assert.equal(f.pushes[0][0], 'Board alert: Fixture')
     assert.match(f.pushes[0][1], expected)
     assert.equal(f.lines.length, 1)
-    assert.match(f.lines[0], /^- 2026-10-03T12:00:00.000Z ALERT Fixture /)
+    assert.match(f.lines[0], /^- 4 Oct, 1:00 am ALERT Fixture /)
     assert.match(f.lines[0], expected)
     assert.equal(f.lines[0].split('\n').length, 2)
     assert.deepEqual(await checkBoardAlerts({ ...f.options, now: now + ALERT_THRESHOLDS.dedupeMs - 1 }), [])

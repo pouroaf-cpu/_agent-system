@@ -1,4 +1,4 @@
-const headings = ['UTC day', 'Integrated', 'Archived', 'Finished', 'Kick-backs', '[planning]', '[implementation]', '[evidence]', '[operational]', 'Untagged', 'Delivery failed', 'No handoff', 'Planner failures', 'Stalls', 'Owner escalations', 'Kick-backs / finished']
+const headings = ['NZ reporting period', 'Integrated', 'Archived', 'Finished', 'Kick-backs', '[planning]', '[implementation]', '[evidence]', '[operational]', 'Untagged', 'Delivery failed', 'No handoff', 'Planner failures', 'Stalls', 'Owner escalations', 'Kick-backs / finished']
 async function get(url) {
   const response = await fetch(url)
   const data = await response.json()
@@ -28,7 +28,7 @@ async function refresh() {
         }
         const body = table.createTBody()
         for (const row of metrics) {
-          const cells = [row.day, row.integrated, row.archived, row.finished, row.kickBacks.total,
+          const cells = [formatNZTime(row.day + 'T00:00:00Z') + ' – ' + formatNZTime(Date.parse(row.day + 'T00:00:00Z') + 86400000), row.integrated, row.archived, row.finished, row.kickBacks.total,
             ...['planning', 'implementation', 'evidence', 'operational', 'untagged'].map(tag => row.kickBacks[tag]),
             row.builderDeliveryFailed, row.builderNoHandoff, row.plannerFailures, row.stalls, row.ownerEscalations,
             row.kickBacksPerFinishedCard == null ? '—' : row.kickBacksPerFinishedCard.toFixed(2)]

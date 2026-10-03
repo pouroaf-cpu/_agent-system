@@ -21,7 +21,7 @@ test('Audits uses burger and existing navbar, filters with project dropdown, ope
       if (url.pathname === '/api/open') return route.fulfill({ json: { ok: true } })
       if (url.pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: '' })
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
-      if (['index.html', 'board.js', 'dependency-hover.js', 'board.css'].includes(file)) return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: readFileSync(new URL(`./public/${file}`, import.meta.url), 'utf8') })
+      if (['index.html', 'board.js', 'nz-time.js', 'dependency-hover.js', 'board.css'].includes(file)) return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: readFileSync(new URL(`./public/${file}`, import.meta.url), 'utf8') })
       return route.fulfill({ status: 404, body: '' })
     })
     await page.goto('http://audit.test/?project=Proof')

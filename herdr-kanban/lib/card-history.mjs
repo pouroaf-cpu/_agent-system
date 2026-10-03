@@ -1,3 +1,4 @@
+import { formatNZTime, formatNZText } from './nz-time.mjs'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -171,7 +172,7 @@ export const lastBlockerLanded = (tasksDir, card, board, registry) => Math.max(0
 export function writeCurrentFeedback(tasksDir, card, heading, note) {
   const text = readFileSync(card.path, 'utf8')
   const event = appendHistory(tasksDir, card.id, { event: 'feedback', heading, note, text })
-  const section = `## Current feedback\n${heading}: ${note}\nHistory entry: ${event.id}\n`
+  const section = `## Current feedback\n${heading}: ${formatNZText(note)}\nHistory entry: ${event.id}\n`
   // Recovery counters and legacy attempt records can be appended after feedback.
   // They remain authoritative card state, not part of the replaceable note.
   const pattern = /^## Current feedback\r?\n[\s\S]*?(?=^## |^\*\*Recovery:\*\*|^---\s*$|^\*\*(?:Build attempt|Failed return \d+)\*\*|$(?![\s\S]))/m
@@ -193,7 +194,7 @@ export function askManager(tasksDir, card, note) {
     const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
     const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 600)
     mkdirSync(dirname(inbox), { recursive: true })
-    appendFileSync(inbox, `- ${new Date().toISOString()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${question}
+    appendFileSync(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
 `)
   } catch { /* the question is still on the card; routing is best effort */ }
 }

@@ -1,3 +1,4 @@
+import { formatNZTime } from './nz-time.mjs'
 import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renameSync } from './fs-retry.mjs'
@@ -56,7 +57,7 @@ export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), in
   renameSync(path + '.tmp', path)
   const errors = []
   for (const { message } of fresh) {
-    const line = `- ${new Date(now).toISOString()} ALERT ${project} ${message.replace(/[\r\n]+/g, ' ')}\n`
+    const line = `- ${formatNZTime(now)} ALERT ${project} ${message.replace(/[\r\n]+/g, ' ')}\n`
     try { await append(inboxPath, line) } catch (err) { errors.push(err) }
     try { await send(`Board alert: ${project}`, message) } catch (err) { errors.push(err) }
   }

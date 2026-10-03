@@ -1,3 +1,4 @@
+import { formatNZTime } from './nz-time.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
@@ -100,7 +101,7 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     activityLog({ tasksDir, project: basename(dirname(tasksDir)), cardId: card.id, event: 'agent-question-captured', message: question })
     return moved
   }
-  appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
+  appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
   appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   requestPlannerCorrection(tasksDir, card.id, { failure: true })
   return moved
@@ -233,7 +234,7 @@ export function routeMutualHolds(tasksDir, held, log) {
     // a worktree or allowing overlapping Builders to start.
     for (const cardId of [id, other]) {
       const moved = moveCard(tasksDir, cardId, 'planning')
-      appendFileSync(moved.path, `\n\n**Kicked back** ${new Date().toISOString()}\n\n[planning] Mutual file hold between ${id} and ${other}: ${held[cardId]}. Reconcile declared scope and preserved commits with the other card before requeueing; do not discard work or bypass file locks.\n`)
+      appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime()}\n\n[planning] Mutual file hold between ${id} and ${other}: ${held[cardId]}. Reconcile declared scope and preserved commits with the other card before requeueing; do not discard work or bypass file locks.\n`)
       requestPlannerCorrection(tasksDir, cardId, { failure: true })
       routed.push(cardId)
       log?.(`${cardId}: mutual file hold returned to Planner for preserved-work attribution`)
@@ -329,7 +330,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
           if (elapsed > 3 * stallSeconds * 1000) {
             const moved = moveCard(tasksDir, freshCard.id, 'planning')
             fresh = null
-            appendFileSync(moved.path, `\n\n**Kicked back** ${new Date(now).toISOString()}\n\n[planning] Queue hold expired: ${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
+            appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n[planning] Queue hold expired: ${hold}; continuously held for ${Math.round(elapsed / 1000)} seconds. Preserved work remains available for recovery.\n`)
             updateWorkflow(tasksDir, freshCard.id, { queueHoldSince: null })
             requestPlannerCorrection(tasksDir, freshCard.id, { failure: true })
             delete held[freshCard.id]
@@ -342,8 +343,8 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         fresh = null
         const reason = dupId || dupKey || hold
         const note = cardProblem
-          ? `**Kicked back** ${new Date(now).toISOString()}\n\n[planning] ${reason}. Planner: correct the card/dependency before requeueing. Preserved work remains available.`
-          : `**Needs you** ${new Date(now).toISOString()}\n\n${reason}. Decision needed: resolve this hold or authorize a recovery path before requeueing.`
+          ? `**Kicked back** ${formatNZTime(now)}\n\n[planning] ${reason}. Planner: correct the card/dependency before requeueing. Preserved work remains available.`
+          : `**Needs you** ${formatNZTime(now)}\n\n${reason}. Decision needed: resolve this hold or authorize a recovery path before requeueing.`
         appendFileSync(moved.path, `\n\n---\n\n${note}\n`)
         // Handed to the Planner, the hold is recorded on the card; kept in workflow it made
         // the Planner skip the card forever (Tradeflow T-36 sat in Planning with none).
@@ -618,7 +619,7 @@ export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCar
         if (moved.column !== 'owner' && !card.audit) setAutoReview(tasksDir, card.id, true)
         const heading = to === 'owner' ? 'Needs you' : 'Review feedback'
         const brief = `${decision.evidence}\n`
-        appendFileSync(moved.path, `\n\n---\n\n**${heading}** ${new Date().toISOString()}\n\n${brief}`)
+        appendFileSync(moved.path, `\n\n---\n\n**${heading}** ${formatNZTime()}\n\n${brief}`)
         updateWorkflow(tasksDir, card.id, { correction: { category, note: decision.evidence } })
         routed.push({ id: card.id, to: moved.column, verdict: decision.verdict })
       }

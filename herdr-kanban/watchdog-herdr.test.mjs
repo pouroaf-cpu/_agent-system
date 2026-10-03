@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
@@ -28,6 +28,8 @@ async function fixture(t) {
   await new Promise(done => server.listen(0, '127.0.0.1', done))
   t.after(() => { server.close(); rmSync(root, { recursive: true, force: true }) })
   mkdirSync(bin)
+  mkdirSync(join(root, 'lib'))
+  copyFileSync(join(HERE, 'lib', 'nz-time.mjs'), join(root, 'lib', 'nz-time.mjs'))
   writeFileSync(join(bin, 'herdr.cmd'), STUB_HERDR)
   copyFileSync(join(HERE, 'watch-kanban.ps1'), join(root, 'watch-kanban.ps1'))
   writeFileSync(join(root, 'watchdog-alert.ps1'), readFileSync(join(HERE, 'watchdog-alert.ps1'), 'utf8') + `
@@ -39,7 +41,7 @@ function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscusto
   writeFileSync(join(root, 'kanban.ps1'), `Add-Content (Join-Path $PSScriptRoot 'kanban-calls.txt') 'kanban'`)
   writeFileSync(join(root, 'restart-kanban.ps1'), `param([switch]$Lan)\nAdd-Content (Join-Path $PSScriptRoot 'restarts.txt') "restart Lan=$Lan"`)
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^path$/i.test(k)))
-  env.Path = [bin, join(process.env.SystemRoot, 'System32'), join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
+  env.Path = [bin, dirname(process.execPath), join(process.env.SystemRoot, 'System32'), join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
   const run = (lanAddress = '') => new Promise(done => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'watch-kanban.ps1')],
     { env: { ...env, TEST_LAN_ADDRESS: lanAddress }, timeout: 45000 }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
   const read = name => existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8') : ''
