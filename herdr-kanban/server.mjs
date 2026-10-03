@@ -991,7 +991,7 @@ const handleRequest = async (req, res) => {
       if (action === 'finish') {
         if (reconciliationPolls.has(p)) throw new Error('The board is integrating right now; try again in a few seconds')
         const settings = projectSettingsOf(p)
-        integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch })
+        integration = finishRelease({ integrationPath: settings?.integrationPath, commit, branch: settings?.releaseBranch, startedAt: active.startedAt })
       }
       Object.assign(config, setProjectPaused(p, false, CONFIG_PATH, {}, { liftHold: false }))
       broadcastBoard(p)

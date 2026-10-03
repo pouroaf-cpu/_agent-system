@@ -64,6 +64,15 @@ test('finish refuses a dirty checkout, an unreleased commit, a diverged HEAD and
   assert.throws(() => finishRelease({ integrationPath: undefined, commit: r.release }), /no git integration checkout/i)
 })
 
+test('finish refuses a commit made before the release started (a stale sha), changing nothing', t => {
+  const r = repos(t)
+  const before = git(r.integ, 'rev-parse', 'HEAD')
+  assert.throws(() => finishRelease({ integrationPath: r.integ, commit: r.release, startedAt: new Date(Date.now() + 60e3).toISOString() }), /predates this release/)
+  assert.equal(git(r.integ, 'rev-parse', 'HEAD'), before)
+  finishRelease({ integrationPath: r.integ, commit: r.release, startedAt: new Date(Date.now() - 3600e3).toISOString() })
+  assert.equal(git(r.integ, 'rev-parse', 'HEAD'), r.release)
+})
+
 test('finish merges a partial release in, keeping cards integrated after it; a conflict changes nothing', t => {
   const r = repos(t)
   writeFileSync(join(r.integ, 'd.txt'), 'integrated after release\n'); git(r.integ, 'add', '.'); git(r.integ, 'commit', '-m', 'late card')
@@ -134,6 +143,12 @@ test('release endpoints: start pauses with a marker, finish fast-forwards and un
   assert.equal(shown.control.paused, true); assert.ok(shown.release.startedAt)
   assert.equal((await post('start', { project: 'Proof' })).status, 200)
   assert.equal((await board('Proof')).release.startedAt, shown.release.startedAt)
+  const stale = await post('finish', { project: 'Proof', commit: r.release })
+  assert.equal(stale.status, 400); assert.match(stale.error, /predates this release/)
+  // This release's own commit: a card and its --no-ff merge into master, made after start.
+  git(r.dev, 'checkout', 'kanban-integration'); writeFileSync(join(r.dev, 'e.txt'), 'card 2\n'); git(r.dev, 'add', '.'); git(r.dev, 'commit', '-m', 'card 2'); git(r.dev, 'push', 'origin', 'kanban-integration')
+  git(r.dev, 'checkout', 'master'); git(r.dev, 'merge', '--no-ff', 'kanban-integration', '-m', 'release 2'); git(r.dev, 'push', 'origin', 'master')
+  r.release = git(r.dev, 'rev-parse', 'HEAD')
 
   writeFileSync(join(r.integ, 'b.txt'), 'dirty\n')
   const dirty = await post('finish', { project: 'Proof', commit: r.release })
