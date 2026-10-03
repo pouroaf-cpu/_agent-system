@@ -26,6 +26,7 @@ import { dailyMetrics } from './lib/metrics.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment } from './lib/quota.mjs'
+import { startProjectPolling } from './lib/project-polling.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
@@ -464,7 +465,7 @@ async function tick(project, agents) {
   return started
 }
 
-// Runs on a fixed interval per project, independent of whether any browser is
+// Runs on filesystem changes and a safety interval, whether any browser is
 // connected — a card must still get spawned when the board is opened headless.
 async function pollProject(project) {
   if (projectPolls.has(project)) {
@@ -1589,9 +1590,13 @@ async function startPollers() {
     const drained = drainIssues(tasksDirOf(project), (card, err) => activity(project, card.id, 'failure', `left in Issues: ${err.message}`, 'error'))
     for (const id of drained) activity(project, id, 'move', 'issues -> planning (Issues lane retired)')
   }
-  // All project inventories share the default session's single CLI list. Legacy
-  // sessions still need their own list so existing agents remain visible.
-  setInterval(() => withAgentListCycle(() => Promise.all(config.projects.map(project => pollProject(project)))), config.agentPollMs)
+  startProjectPolling({
+    projects: config.projects, tasksDirOf, agentsDir: join(HERE, '.agents'), sessionOf,
+    agentPollMs: config.agentPollMs,
+    poll: project => withAgentListCycle(() => pollProject(project)),
+    onBusy: project => { if (actingPolls.has(project)) recordHealthyPoll(tasksDirOf(project)) },
+    onError: err => console.error(`kanban polling: ${err.message}`),
+  })
   setInterval(() => {
     const pids = stopRunawayTsservers(config.projectsRoot)
     if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
