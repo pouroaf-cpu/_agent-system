@@ -1,7 +1,7 @@
 // Test runs for the Audits page (operator, 2026-10-02): when each project's nightly e2e last ran,
 // what failed, and a Run now button. The runner script writes TASKS/e2e/running.json while it
 // runs and appends one JSON line per finished run to TASKS/e2e/runs.jsonl.
-import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdirSync, writeFileSync, appendFileSync, openSync, closeSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { join, relative } from 'node:path'
@@ -65,7 +65,24 @@ export function startTestRun({ project, tasksDir, boardDir }) {
   const script = TEST_RUNNERS[project]
   if (!script) throw new Error(`${project} has no test runner`)
   if (readTestRuns(tasksDir).running || busyRequest(tasksDir)) throw new Error('A test run is already going')
-  const child = spawn(process.execPath, [join(boardDir, script)], { cwd: boardDir, detached: true, stdio: 'ignore', windowsHide: true })
+  // 2026-10-03: a misplaced shebang killed the detached runner without a run record.
+  const started = new Date().toISOString(), dir = join(tasksDir, 'e2e')
+  mkdirSync(dir, { recursive: true })
+  const log = join(dir, `${started.replace(/[:.]/g, '-')}-runner.log`), fd = openSync(log, 'a')
+  let child
+  try { child = spawn(process.execPath, [join(boardDir, script)], { cwd: boardDir, detached: true, stdio: ['ignore', 'ignore', fd], windowsHide: true }) }
+  finally { closeSync(fd) }
+  let recorded = false
+  const failed = error => {
+    if (recorded) return
+    recorded = true
+    const { running, runs } = readTestRuns(tasksDir, { limit: Infinity })
+    if (running?.pid === child.pid || runs.some(r => r.started >= started)) return
+    const detail = readFileSync(log, 'utf8').trim().slice(-4000)
+    appendFileSync(join(dir, 'runs.jsonl'), JSON.stringify({ started, finished: new Date().toISOString(), type: 'nightly', pages: {}, error: detail || error, log, repeatEach: 3, seconds: 0, secondsPerPass: 0 }) + '\n')
+  }
+  child.on('error', err => failed(err.message))
+  child.on('exit', (code, signal) => { if (code !== 0) failed(`Runner exited ${signal || code} before recording a run; see ${log}`) })
   child.unref()
   return { pid: child.pid }
 }
@@ -82,9 +99,11 @@ export function failedTests(report) {
 }
 
 // Match whole routes, so / does not match /calendar and /about does not match /about-us.
+const routePatterns = routes => routes.map(route => [route, new RegExp(`(?<![\\w/.-])${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/.-])`)])
+
 export function pageResults(report, routes) {
   const pages = {}
-  const patterns = routes.map(route => [route, new RegExp(`(?<![\\w/.-])${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/.-])`)])
+  const patterns = routePatterns(routes)
   const walk = suite => {
     for (const spec of suite.specs || []) {
       if (!spec.tests?.length) continue
@@ -96,6 +115,35 @@ export function pageResults(report, routes) {
   }
   for (const suite of report.suites || []) walk(suite)
   return pages
+}
+
+// Count each Playwright repetition once, excluding skipped tests and retry attempts.
+export function mergeTestTally(tally, report, routes, lastRun) {
+  const out = structuredClone(tally)
+  for (const key of ['specs', 'routes', 'tests']) out[key] ||= {}
+  const patterns = routePatterns(routes)
+  const add = (items, key, failed, dated = true) => {
+    const old = items[key] || { executed: 0, failed: 0 }
+    items[key] = { ...old, executed: old.executed + 1, failed: old.failed + Number(failed), ...(dated && { lastRun }) }
+  }
+  const walk = suite => {
+    for (const spec of suite.specs || []) for (const t of spec.tests || []) {
+      if (t.status === 'skipped' || (t.results && !t.results.some(r => r.status !== 'skipped'))) continue
+      const failed = t.status === 'unexpected'
+      add(out.specs, spec.file, failed)
+      add(out.tests, spec.title, failed, false)
+      for (const [route, pattern] of patterns) if (pattern.test(spec.title)) add(out.routes, route, failed)
+    }
+    for (const child of suite.suites || []) walk(child)
+  }
+  for (const suite of report.suites || []) walk(suite)
+  return out
+}
+
+export function repeatFailures(failures, runs) {
+  const previous = runs.find(r => r.type === 'nightly' && Array.isArray(r.failures))
+  const names = new Set(previous?.failures || [])
+  return [...new Set(failures)].filter(name => names.has(name))
 }
 
 export function pageRuns(runs, route) {

@@ -1,9 +1,64 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns } from './lib/test-runs.mjs'
+import { readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns, mergeTestTally, repeatFailures } from './lib/test-runs.mjs'
+
+test('2026-10-03: detached syntax failures retain stderr and a run error, without duplicating recorded failures', async () => {
+  const board = mkdtempSync(join(tmpdir(), 'runner-')), tasks = join(board, 'TASKS')
+  mkdirSync(join(board, 'scripts'))
+  const script = join(board, 'scripts', 'e2e-nightly.mjs')
+  const wait = async predicate => {
+    for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(r => setTimeout(r, 50)) }
+    assert.fail('runner did not finish')
+  }
+  try {
+    writeFileSync(script, 'import "node:fs"\n#!/usr/bin/env node\n')
+    startTestRun({ project: 'Injectbuddy', tasksDir: tasks, boardDir: board })
+    await wait(() => readTestRuns(tasks).runs.length === 1)
+    const run = readTestRuns(tasks).runs[0]
+    assert.equal(run.type, 'nightly')
+    assert.match(run.error, /SyntaxError/)
+    assert.match(readFileSync(run.log, 'utf8'), /SyntaxError/)
+    writeFileSync(script, `import { writeFileSync, appendFileSync, rmSync } from 'node:fs'
+      writeFileSync('TASKS/e2e/running.json', JSON.stringify({ pid: process.pid }))
+      appendFileSync('TASKS/e2e/runs.jsonl', JSON.stringify({ started: new Date().toISOString(), error: 'recorded' }) + '\\n')
+      rmSync('TASKS/e2e/running.json')
+      process.exitCode = 1`)
+    const { pid } = startTestRun({ project: 'Injectbuddy', tasksDir: tasks, boardDir: board })
+    await wait(() => { try { process.kill(pid, 0); return false } catch { return true } })
+    await new Promise(r => setTimeout(r, 50))
+    assert.equal(readTestRuns(tasks).runs.length, 2)
+    assert.equal(readTestRuns(tasks).runs[0].error, 'recorded')
+  } finally { rmSync(board, { recursive: true, force: true }) }
+})
+
+test('tally merges repetitions per spec, whole route and title without counting retries or skips or mutating input', () => {
+  const tally = { specs: { 'a.spec.ts': { executed: 5, failed: 1, lastRun: 'old' } }, routes: {}, tests: {} }
+  const original = structuredClone(tally)
+  const report = { suites: [{ specs: [{ file: 'a.spec.ts', title: 'checks /about-us', tests: [
+    { status: 'expected', results: [{ status: 'passed' }] },
+    { status: 'unexpected', results: [{ status: 'failed' }, { status: 'failed' }] },
+    { status: 'flaky', results: [{ status: 'failed' }, { status: 'passed' }] },
+    { status: 'skipped', results: [{ status: 'skipped' }] },
+    { status: 'unexpected', results: [] },
+  ] }], suites: [{ specs: [{ file: 'b.spec.ts', title: 'checks /', tests: [{ status: 'expected', results: [{ status: 'passed' }] }] }] }] }] }
+  const merged = mergeTestTally(tally, report, ['/', '/about', '/about-us'], 'now')
+  assert.deepEqual(tally, original)
+  assert.deepEqual(merged.specs, { 'a.spec.ts': { executed: 8, failed: 2, lastRun: 'now' }, 'b.spec.ts': { executed: 1, failed: 0, lastRun: 'now' } })
+  assert.deepEqual(merged.routes, { '/about-us': { executed: 3, failed: 1, lastRun: 'now' }, '/': { executed: 1, failed: 0, lastRun: 'now' } })
+  assert.deepEqual(merged.tests, { 'checks /about-us': { executed: 3, failed: 1 }, 'checks /': { executed: 1, failed: 0 } })
+  assert.deepEqual(mergeTestTally(merged, report, ['/', '/about', '/about-us'], 'later').routes['/about-us'], { executed: 6, failed: 2, lastRun: 'later' })
+  assert.deepEqual(mergeTestTally({}, {}, [], 'now'), { specs: {}, routes: {}, tests: {} })
+})
+
+test('repeat failures use the previous recorded nightly, ignoring audits and harness errors', () => {
+  const runs = [{ type: 'axe', failures: ['new'] }, { type: 'nightly', error: 'startup' }, { type: 'nightly', failures: ['old'] }, { type: 'nightly', failures: ['new'] }]
+  assert.deepEqual(repeatFailures(['old', 'old', 'new'], runs), ['old'])
+  assert.deepEqual(repeatFailures(['new'], []), [])
+  assert.deepEqual(repeatFailures(['old'], [{ type: 'nightly', failures: [] }, ...runs]), [])
+})
 
 test('reads runs newest first, skips bad lines, drops a dead running marker', () => {
   const tasks = mkdtempSync(join(tmpdir(), 'test-runs-')), dir = join(tasks, 'e2e')
