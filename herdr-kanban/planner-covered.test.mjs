@@ -60,7 +60,7 @@ test('covered refuses stale Planner ownership, missing evidence and a non-Planni
   assert.match(run('covered', card.id, 'I858', 'node check.mjs -> PASS').stderr, /is in owner/)
 })
 
-test('covered preserves the assigned-Planner and dropped-section guards', t => {
+test('covered keeps the assigned-Planner guard and restores a dropped section', t => {
   const { dir, card, run } = fixture(t)
   const owners = readCardPlanners(dir)
   owners[card.id].assignmentId = null; saveCardPlanners(dir, owners)
@@ -70,8 +70,9 @@ test('covered preserves the assigned-Planner and dropped-section guards', t => {
   const text = readFileSync(card.path, 'utf8')
   appendHistory(dir, card.id, { event: 'transition', from: 'planning', to: 'planning', text })
   writeFileSync(card.path, text.replace(/## Approved brief[\s\S]*?(?=## )/, ''))
-  assert.match(run('covered', card.id, 'I858', 'node check.mjs -> PASS').stderr, /## Approved brief had content/)
-  assert.equal(findCard(dir, card.id).column, 'planning')
+  assert.match(run('covered', card.id, 'I858', 'node check.mjs -> PASS').stdout, /restored ## Approved brief/)
+  assert.equal(findCard(dir, card.id).column, 'archive')
+  assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /## Approved brief/)
 })
 
 for (const lane of ['planned', 'queue']) test(`Planner handoff to ${lane} refuses empty Files with the covered close path`, t => {
