@@ -18,7 +18,7 @@ import { controlState, assertPromptAllowed } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneBeforeOwner } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
@@ -106,6 +106,18 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
 // A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
 export const ESCALATION_MODEL = 'claude-opus-5-5'
+function amendment(tasksDir, card) {
+  const correction = readWorkflow(tasksDir)[card.id]?.correction
+  const transition = lastTransition(tasksDir, card.id)
+  if (card.column !== 'planning' || transition?.from !== 'working' || transition.to !== 'planning' || correction?.category !== 'planning') return null
+  const note = correction.note?.replace(/^\s*\[planning\]\s*/i, '')
+  if (!note || !/^\s*\[planning\]/i.test(correction.note)) return null
+  // ponytail: conservative prose heuristic; uncertain or mixed feedback gets a full plan.
+  const clauses = note.split(/\n|;|[.!?]\s+|\b(?:and|but|also)\b/i).filter(s => s.trim())
+  return clauses.every(s => /\b(?:Files|Check|Prerequisites?)\b/i.test(s)
+    && /\b(?:add|include|list|missing|outside|omit\w*|correct\w*|edit|replace|wrong|invalid|command|does not exist|nonexistent|generated)\b/i.test(s)
+    && !/\b(?:acceptance|criteria|architecture|implement\w*|behavio\w*|scope expansion|redesign|security)\b/i.test(s)) ? correction.note : null
+}
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
@@ -178,11 +190,17 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       bindCardRunAssignment(project, [card.id], 'planner', paneId)
       const choice = choiceFor(card)
       const selected = selectedFor(card) ? choice.assignment : null
+      const amend = amendment(tasksDir, card)
       owner.model = selected?.model ?? model
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
+      if (amend && (selected?.engine ?? engineKind(engine)) === 'codex') {
+        owner.reasoning = ['none', 'minimal', 'low'].includes(owner.reasoning) ? owner.reasoning : 'low'
+      }
       save(tasksDir, owners)
-      owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
+      const launchEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${owner.reasoning}"`] } : {}) } : engine
+      const amendEngine = amend && engineKind(launchEngine) === 'codex' ? { ...(typeof launchEngine === 'object' ? launchEngine : {}), kind: 'codex', reasoningArgs: ['-c', `model_reasoning_effort="${owner.reasoning}"`] } : launchEngine
+      owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: amendEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
       if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
@@ -200,7 +218,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: amendment(tasksDir, card) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (!isHeadless(owner.paneId) && agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')

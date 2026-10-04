@@ -131,12 +131,18 @@ export function reviewerPrompt({ cards, projectPath, boardRoot, tasksDir, review
 
 // The card Planner's prompt (card-planner.mjs). PLANNER.md holds the ownership, failed-return and Owner rules; this gives the
 // cards, the files and the handoff (planner audit F7).
-export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine }) {
+export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine, amend }) {
   const cmd = hkb(boardRoot, tasksDir) + (plannerAssignment ? ` --planner-assignment ${plannerAssignment}` : '')
   const list = cards
     .map((c) => `${c.id} [${c.category || 'code'}] [${c.column}] (${briefing(tasksDir, c, 'planner')})`)
     .join(', ')
   const overlays = [...new Set(cards.map((c) => PLANNER_OVERLAYS[c.category || 'code'] || PLANNER_OVERLAYS.code))]
+  if (amend) return oneLine(
+    `Amend mode: correct the existing plan for ${list}. Builder's issue: ${amend}`,
+    shellRule(engine),
+    `Read the focused briefing for the existing plan, issue and authoritative card path. Edit only ## Files, the Check lines and ## Prerequisites in that card. Keep everything else unchanged, including the implementation plan, acceptance criteria and Difficulty. Do not re-plan, implement or delegate. Read only the exact source needed to verify the correction in ${psLiteral(projectPath)}; verify any corrected path or Check command before handoff. If the issue cannot be resolved within these edits, use ${cmd} issue ${cards[0].id} "[planning] precise broader blocker and evidence" instead of widening the amendment.`,
+    `After editing, run exactly one ${cmd} move ${cards[0].id} planned command and stop immediately. If a prerequisite genuinely needs a file or card that does not exist yet, use ${cmd} wait ${cards[0].id} "<file or card>" "<why>" and stop.`
+  )
   return oneLine(
     cards.length ? `Plan these approved cards: ${list}.` : `No cards to plan.`,
     shellRule(engine),
