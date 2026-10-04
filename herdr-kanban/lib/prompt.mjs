@@ -142,7 +142,7 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
     `Amend mode: correct the existing plan for ${list}. Builder's issue: ${amend}`,
     shellRule(engine),
     `Read the focused briefing for the existing plan, issue and authoritative card path. Edit only ## Files, the Check lines and ## Prerequisites in that card. Keep everything else unchanged, including the implementation plan, acceptance criteria and Difficulty. Do not re-plan, implement or delegate. Read only the exact source needed to verify the correction in ${psLiteral(projectPath)}; verify any corrected path or Check command before handoff. If the issue cannot be resolved within these edits, use ${cmd} issue ${cards[0].id} "[planning] precise broader blocker and evidence" instead of widening the amendment.`,
-    `After editing, run exactly one ${cmd} move ${cards[0].id} planned command and stop immediately. If a prerequisite genuinely needs a file or card that does not exist yet, use ${cmd} wait ${cards[0].id} "<file or card>" "<why>" and stop.`
+    `After editing, run exactly one ${cmd} move ${cards[0].id} planned command and stop immediately. If another card already fixed this, use ${cmd} covered ${cards[0].id} <card> "<check> -> <result>"; the covering card must be in Archive, Completed or Review. If a prerequisite genuinely needs a file or card that does not exist yet, use ${cmd} wait ${cards[0].id} "<file or card>" "<why>" and stop.`
   )
   return oneLine(
     cards.length ? `Plan these approved cards: ${list}.` : `No cards to plan.`,
@@ -153,7 +153,7 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
     `For verified missing permission/access only, run ${cmd} owner <ID> "Only the operator can grant <permission/access>; verified <failure>; approved methods exhausted; Evidence: <exact check/result>; <specific ask>" and stop.`,
     ...(cards.some(c => c.audit) ? [`For FINDINGS audits, validate current findings and deduplicate existing cards; create/update only missing approved remediation cards with scoped independent review. Number findings and map every one under ## Remediation links as - F1: <existing fix card ID>, preserving evidence. Archive the report once all findings are linked; linked fixes are not thereby complete. Respect explicit report-only-await-owner and do not expand business/data/deployment scope. For INCOMPLETE audits repair the evidence plan and prerequisite before returning to Review; never queue an audit itself for implementation. Otherwise:`] : []),
     `Run exactly one ${cmd} move <ID> planned command for this card; even when planning fails use one ${cmd} issue <ID> "[planning] precise unmet prerequisite and evidence" command. A product or operator decision is ${cmd} issue <ID> "[decision] <the question and the options>": it goes to the project manager, not another Planner. Do not leave the card in Planning without a handoff, retry a stopped Planner into ambiguity, or issue multiple handoffs. After the handoff succeeds, stop that card immediately.`,
-    `Use ${cmd} wait <ID> "<file or card>" "<why>" instead when the plan needs a file or card that does not exist yet; never use issue for that.`
+    `If another card already fixed this, use ${cmd} covered <ID> <card> "<check> -> <result>" and stop; the covering card must be in Archive, Completed or Review. Use ${cmd} wait <ID> "<file or card>" "<why>" instead when the plan needs a file or card that does not exist yet; never use issue for that.`
   )
 }
 

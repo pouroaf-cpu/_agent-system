@@ -801,7 +801,7 @@ export function moveCard(tasksDir, cardId, toKey, options = {}) {
     // silently is more surprising than refusing.
     throw new Error(`${card.id} only exists in archive (${card.file}) — move it by hand if you meant that`)
   }
-  if (toKey === 'archive' && !options.operatorArchive && !canArchive(card)) {
+  if (toKey === 'archive' && !options.operatorArchive && !(options.covered && card.column === 'planning') && !canArchive(card)) {
     throw new Error(`${card.id} is a mission card and needs Reviewer evidence plus Review verdict: PASS before archive`)
   }
 

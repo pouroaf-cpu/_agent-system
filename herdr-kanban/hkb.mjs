@@ -12,6 +12,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs found T-02 "e2e/x.spec.ts fails on base too: ..."
 //   node hkb.mjs found --board T-02 "hkb refused a valid handoff: ..."
 //   node hkb.mjs wait  T-02 "public/x/y.html, T-03" "the page this plan edits is created by T-03"
+//   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -22,7 +23,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, updateCard, canArchive, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
+import { moveCard, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
@@ -65,7 +66,7 @@ if (verb === 'plancheck') {
   } catch (err) { fail(err.message) }
 }
 
-const VERBS = { audit: 'planning', done: null, unchanged: 'completed', issue: 'planning', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'planning', pass: null, move: null }
+const VERBS = { audit: 'planning', covered: 'archive', done: null, unchanged: 'completed', issue: 'planning', owner: 'owner', park: 'owner', split: 'owner', review: 'review', rework: 'planning', pass: null, move: null }
 
 // What gets stamped above the note, and what the board reads back out.
 // split: an investigation found several separate issues. The card stops, and the project's
@@ -78,6 +79,8 @@ const MAX_REVIEW_ROUNDS = 3
 // The plan check at a Planner handoff: the card's workspace in the project's integration
 // checkout (where ## Files paths must already exist) and the project's sharedFiles.
 function planCheck(card) {
+  // I863: an already-covered card must close before the unchanged-base gate.
+  if (!cardFiles(card.path).length) fail(`no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`)
   const projectPath = dirname(tasksDir)
   const gitSettings = projectSettings()
   return { planWorkspace: resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.'), sharedFiles: gitSettings?.sharedFiles }
@@ -160,7 +163,7 @@ if (verb === 'wait') {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 
@@ -198,6 +201,7 @@ let decisionWait = false
 let plannerIssues = 0
 let escalated = false
 let auditNotReady = ''
+let coveringCard
 try {
   const current = findCard(tasksDir, cardId)
   // Review runs on integrated code, so every Builder handoff goes to Completed first.
@@ -222,6 +226,15 @@ try {
   }
   const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))
   if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again. Edit only your own sections; never rewrite other sections.`)
+  if (verb === 'covered') {
+    if (current.column !== 'planning') fail(`covered is a Planner handoff; ${current.id} is in ${current.column}`)
+    if (!readCardPlanners(tasksDir)[current.id]?.assignmentId) fail('covered requires the assigned Planner and --planner-assignment')
+    const evidence = rest.slice(1).join(' ').trim()
+    if (!rest[0] || !/^\S[\s\S]*?\s+->\s+\S/.test(evidence)) fail('covered needs the covering card and passing evidence: hkb covered <ID> <card> "<check> -> <result>"')
+    try { coveringCard = findCard(tasksDir, rest[0]) } catch (err) { fail(`${err.message}; use hkb wait ${current.id} ${rest[0]} "waiting for the covering fix" instead`) }
+    if (!coveringCard || !['archive', 'completed', 'review'].includes(coveringCard.column)) fail(`${rest[0]} must exist in archive, completed or review; use hkb wait ${current.id} ${rest[0]} "waiting for the covering fix" instead`)
+    appendFileSync(current.path, `\n\n**Covered by ${coveringCard.id}**\n\n${evidence}\n`)
+  }
   // A Planner cannot add an operator-only approval, so any Planner handoff on a plan
   // held only by one goes to Owner with the question, never back to planning (T-148).
   approvalWait = (plannerAssignment || current.column === 'planning') && ['move', 'issue', 'owner', 'park', 'split'].includes(verb) && awaitsOperatorApproval(readFileSync(current.path, 'utf8'))
@@ -341,8 +354,13 @@ try {
     }
   }
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
-  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
+  card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
+  if (verb === 'covered') {
+    updateWorkflow(tasksDir, card.id, { plannerIssues: null, plannerEscalation: null, waitFor: null, planCheck: null, operational: null, startFailure: null })
+    appendHistory(tasksDir, card.id, { event: 'covered', coveringCard: coveringCard.id, note: rest.slice(1).join(' ').trim(), text: readFileSync(card.path, 'utf8') })
+    stopCardRun(basename(dirname(tasksDir)), card.id, 'Archived as covered')
+  }
   // Only a plan the check accepted clears the blocker count: resetting it before a refused
   // move let Injectbuddy I267 loop six Planners past the three-in-a-row cap (2026-09-26).
   if (verb === 'move' && previousColumn === 'planning' && ['planned', 'queue'].includes(target)) updateWorkflow(tasksDir, current.id, { plannerIssues: null, plannerEscalation: null, waitFor: null })
