@@ -97,6 +97,23 @@ export function builderHandedOff(tasksDir, id) {
   }
   return handedOff
 }
+// I827: planning/checker files are not a Builder retry; only an earlier Builder run or kick-back is.
+// A changed plan gets a fresh worktree, so a same-plan re-issue keeps its retry prompt (c7c6d58).
+export function previousBuilderAttempt(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return false
+  let attempt = false, working = false, previous = false
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    try {
+      const e = JSON.parse(line)
+      if (e.event === 'transition' && e.to === 'working') { previous ||= attempt; working = true }
+      // Dispatch records its own attempt before preparing the checkout: exclude that one.
+      if (e.event === 'builder-attempt') attempt = true
+      if (e.event === 'builder-return' || (e.event === 'feedback' && e.heading === 'Review feedback') || (e.event === 'handoff' && e.stage === 'review' && e.outcome === 'rework')) previous = true
+    } catch { /* torn line */ }
+  }
+  return previous || (attempt && !working)
+}
 // I519: an issue is a handoff too, but only for the Builder that reported it.
 export function builderIssue(tasksDir, id, started) {
   const path = historyPath(tasksDir, id)

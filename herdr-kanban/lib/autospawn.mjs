@@ -720,6 +720,9 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
   if (verdict === 'FAIL') {
     writeCurrentFeedback(tasksDir, moved, 'Planner correction', reason)
     requestPlannerCorrection(tasksDir, card.id)
+  } else if (/^## Current feedback\r?\nPlanner correction: Plan check:/m.test(readFileSync(moved.path, 'utf8'))) {
+    // I875: a passing check supersedes its earlier failure in the Builder brief.
+    writeCurrentFeedback(tasksDir, moved, 'Resolved', 'a Planner made this card build-ready, so the earlier question no longer applies.\n')
   }
   failReviewClaim(reviewRoot, claim.id, `Plan check ${verdict}`)
   return { id: card.id, to: moved.column, verdict, reason }

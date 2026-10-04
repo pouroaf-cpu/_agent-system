@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard, filesOverlap, isGlob, globMatches } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
+import { previousBuilderAttempt } from './card-history.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
 import { isTransient, nextRetry, retryHold, inBackoff, killTree } from './transient.mjs'
 import { fileURLToPath } from 'node:url'
@@ -526,7 +527,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   if (existing) {
     prepareDependencies(existing.workspacePath, integrationWorkspace)
     const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], planRevision: revision, generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
-    const previousAttempt = semanticDirtyFiles(resumed.worktreePath).length > 0 || git(resumed.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== resumed.baseCommit
+    const previousAttempt = previousBuilderAttempt(tasksDir, id) && (semanticDirtyFiles(resumed.worktreePath).length > 0 || git(resumed.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== resumed.baseCommit)
     return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false, previousAttempt }
   }
 

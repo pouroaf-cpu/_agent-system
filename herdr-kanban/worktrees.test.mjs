@@ -10,7 +10,7 @@ import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWo
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { writeCurrentFeedback } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback } from './lib/card-history.mjs'
 import { reconcileCompletedHandoffs, runShell } from './lib/completed-handoff.mjs'
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 
@@ -851,6 +851,27 @@ test('a worktree from an earlier plan is saved to a recovery branch and replaced
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test('I827: planning changes do not prompt a first Builder to rework; an earlier Builder run does', () => {
+  const f = fixture()
+  try {
+    let card = f.addCard('T-1')
+    const prepare = () => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    const first = prepare()
+    writeFileSync(join(first.workspacePath, 'app.js'), 'planning fixture\n')
+    card = moveCard(f.tasks, 'T-1', 'planning', { intake: true })
+    card = moveCard(f.tasks, 'T-1', 'queue')
+    card = moveCard(f.tasks, 'T-1', 'working')
+    appendHistory(f.tasks, card.id, { event: 'builder-attempt' })
+    const prepared = prepare()
+    assert.equal(prepared.previousAttempt, false)
+    assert.doesNotMatch(workerPrompt({ card, projectPath: f.integration, boardRoot: f.root, tasksDir: f.tasks, workspacePath: prepared.workspacePath, previousAttempt: prepared.previousAttempt }), /previous attempt's changes/)
+    card = moveCard(f.tasks, 'T-1', 'queue', { correction: true })
+    card = moveCard(f.tasks, 'T-1', 'working')
+    appendHistory(f.tasks, card.id, { event: 'builder-attempt' })
+    assert.equal(prepare().previousAttempt, true, 'earlier Builder attempt survives the new dispatch')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('same-plan Builder retries retain saved changes and feedback; changed plans or conflicts start fresh', () => {
   const f = fixture()
   try {
@@ -867,6 +888,7 @@ test('same-plan Builder retries retain saved changes and feedback; changed plans
     git(f.integration, 'add', 'other.js'); git(f.integration, 'commit', '-m', 'integration advances')
     writeCurrentFeedback(f.tasks, card, 'Kicked back', 'Fix the missing assertion.')
     const index = git(first.workspacePath, 'diff', '--cached')
+    appendHistory(f.tasks, card.id, { event: 'builder-return' })
     for (const reissued of [false, true]) {
       card = moveCard(f.tasks, 'T-1', reissued ? 'planning' : 'queue', { correction: true })
       if (reissued) moveCard(f.tasks, 'T-1', 'queue') // New issued-plan ID, identical plan content.
