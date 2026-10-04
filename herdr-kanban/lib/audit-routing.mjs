@@ -20,7 +20,7 @@ export function auditArchiveError(text, exists) {
   if (!meaningful(section(text, 'Evidence'))) return 'Audit closure requires current evidence'
   if (status === 'CLEAR') return null
   if (status !== 'FINDINGS') return 'Incomplete audit cannot be archived'
-  const findings = [...meaningful(section(text, 'Findings')).matchAll(/^\s*(\d+)\./gm)].map(m => m[1])
+  const findings = [...meaningful(section(text, 'Findings')).matchAll(/^(\d+)\. /gm)].map(m => m[1])
   if (!findings.length) return 'Number current findings before linking remediation'
   const links = section(text, 'Remediation links')
   for (const id of findings) {
@@ -68,7 +68,7 @@ export function cardReadyFindings(text) {
     if (!free.length) throw new Error(`dependsOn has a cycle among findings ${[...pending.keys()].join(', ')}`)
     free.forEach(n => pending.delete(n))
   }
-  const numbered = [...meaningful(section(text, 'Findings')).matchAll(/^\s*(\d+)\./gm)].map(m => Number(m[1])).sort((a, b) => a - b)
+  const numbered = [...meaningful(section(text, 'Findings')).matchAll(/^(\d+)\. /gm)].map(m => Number(m[1])).sort((a, b) => a - b)
   if (numbered.join() !== [...ns].sort((a, b) => a - b).join()) throw new Error(`## Findings numbers (${numbered.join(', ') || 'none'}) must match the JSON findings (${ns.join(', ')})`)
   return list.map(f => ({ ...f, dependsOn: f.dependsOn || [] }))
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createCard, findCard, moveCard } from './lib/cards.mjs'
-import { auditOutcome, cardReadyFindings } from './lib/audit-routing.mjs'
+import { auditArchiveError, auditOutcome, cardReadyFindings } from './lib/audit-routing.mjs'
 import { needsAuditMcp } from './lib/audit-mcp.mjs'
 import { cardsFromAudit } from './lib/audit-cards.mjs'
 
@@ -49,6 +49,14 @@ test('card-ready findings validate strictly', () => {
   assert.match(auditOutcome(report([finding(1, { dependsOn: [2] }), finding(2, { dependsOn: [1] })]), 'general').reason, /cycle/)
   assert.match(auditOutcome(ok.replace('2. Problem 2', ''), 'general').reason, /must match/)
   assert.deepEqual(auditOutcome(ok.replace(/## Card-ready findings[\s\S]*?(?=## Audit)/, ''), 'design'), { status: 'FINDINGS' }, 'optional for other kinds')
+})
+
+test('finding counts ignore indented wrapped version numbers and require a space after the dot', () => {
+  const text = report([finding(1), finding(2)])
+    .replace('1. Problem 1', '1. Problem 1\n  15.5.18.\n15.5.18.\n  3. Wrapped line')
+    + '\n## Remediation links\n- F1: T-131\n- F2: T-131\n'
+  assert.deepEqual(cardReadyFindings(text).map(f => f.n), [1, 2])
+  assert.equal(auditArchiveError(text, id => id === 'T-131'), null)
 })
 
 test('hkb audit: FINDINGS without valid JSON is INCOMPLETE; valid JSON lands in Owner', () => {
