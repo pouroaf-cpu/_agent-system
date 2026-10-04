@@ -270,8 +270,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         continue
       }
       // A Planner's `hkb wait`: no Planner until every file exists in the integration checkout
-      // and every card has landed; then clear it and plan as normal. A [decision] wait clears
-      // only when a person moves the card (operatorRetry).
+      // and every card has landed; then clear it and plan as normal. A person moving the card
+      // clears any wait (operatorRetry); a [decision] wait clears only this way.
       const waitFor = card.column === 'planning' && !cardRunContext() && readWorkflow(tasksDir)[card.id]?.waitFor
       if (waitFor) {
         const root = resolve(projectPath, card.workspace || '.')

@@ -3,12 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { createCard, findCard } from './lib/cards.mjs'
 import { readCardPlanners, runCardPlanner, operatorRetry } from './lib/card-planner.mjs'
 import { saveCardPlanners } from './lib/planner-state.mjs'
-import { readWorkflow } from './lib/workflow-state.mjs'
+import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 
 const HKB = fileURLToPath(new URL('./hkb.mjs', import.meta.url))
 // Hand off as the card's (Codex) Planner, with the manager inbox in the test folder.
@@ -112,4 +113,47 @@ test('hkb issue [decision] from Planning holds the card for the manager, uncount
     assert.deepEqual((await run())?.cards, [card.id])
     assert.equal(starts, 1)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('/api/move planning -> planning clears a missing-file wait and requests a Planner correction', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-wait-move-'))
+  const dir = join(root, 'Proj', 'TASKS')
+  let child
+  try {
+    mkdirSync(dir, { recursive: true })
+    const card = createCard(dir, { title: 'Edit the missing guide', brief: 'x' })
+    const owners = readCardPlanners(dir)
+    owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
+    saveCardPlanners(dir, owners)
+    updateWorkflow(dir, card.id, { waitFor: { files: ['missing.md'], cards: [], decision: false } })
+    const s = createServer()
+    await new Promise(resolve => s.listen(0, '127.0.0.1', resolve))
+    const port = s.address().port
+    await new Promise(resolve => s.close(resolve))
+    const config = join(root, 'board.config.json')
+    writeFileSync(config, JSON.stringify({ port, mode: 'auto', projectsRoot: root, projects: ['Proj'], maxConcurrentAgents: 0, agentPollMs: 3600000, engine: { kind: 'codex' }, models: { working: 'test', review: 'test', issues: 'test' } }))
+    child = spawn(process.execPath, ['server.mjs'], {
+      cwd: new URL('.', import.meta.url),
+      env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-for-wait-test' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let output = ''
+    child.stdout.on('data', chunk => { output += chunk })
+    child.stderr.on('data', chunk => { output += chunk })
+    const base = `http://127.0.0.1:${port}`
+    for (let i = 0; ; i++) {
+      try { if ((await fetch(`${base}/api/board?project=Proj`)).ok) break } catch {}
+      if (i > 80 || child.exitCode !== null) throw new Error(`server did not start: ${output}`)
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    const response = await fetch(`${base}/api/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Proj', id: card.id, to: 'planning' }),
+    })
+    assert.equal(response.status, 200, JSON.stringify(await response.json()))
+    assert.equal(findCard(dir, card.id).column, 'planning')
+    assert.equal(readWorkflow(dir)[card.id].waitFor, null)
+    assert.ok(readCardPlanners(dir)[card.id].correctionRequestedAt)
+    assert.equal(readCardPlanners(dir)[card.id].submitted, false)
+  } finally { child?.kill(); rmSync(root, { recursive: true, force: true }) }
 })

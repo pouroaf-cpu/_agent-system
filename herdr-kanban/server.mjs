@@ -1200,9 +1200,9 @@ const handleRequest = async (req, res) => {
       const { project: p = config.projects[0], id, to } = JSON.parse(body)
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
-      // Moving a card held on a Planner's [decision] question is the answer: lift the hold.
-      const decision = before.column === 'planning' && readWorkflow(tasksDirOf(p))[card.id]?.waitFor?.decision
-      if ((['pou', 'owner'].includes(before.column) || decision) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
+      // A person moving a Planning card with any Planner wait is the answer: lift the hold.
+      const wait = before.column === 'planning' && readWorkflow(tasksDirOf(p))[card.id]?.waitFor
+      if ((['pou', 'owner'].includes(before.column) || wait) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
       if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)
