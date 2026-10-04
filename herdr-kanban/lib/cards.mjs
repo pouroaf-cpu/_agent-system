@@ -298,7 +298,7 @@ const plain = (s) => (s ?? '').replace(/\*\*|`/g, '').trim()
 // not the descriptive prose (which often has its own backtick-quoted names).
 // A line the plan marks unchanged or read-only is context, not a file the card edits,
 // so it takes no lock (Tradeflow TF54 waited 7 hours on files it only references).
-export const MAX_PLAN_FILES = 15
+export const MAX_PLAN_FILES = 10
 
 // A ## Files glob (only for script-generated files): `*` is one path segment, `**` any
 // depth. Case-insensitive, since card paths are Windows paths. Every file-scope check
