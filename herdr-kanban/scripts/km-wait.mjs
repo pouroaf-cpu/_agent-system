@@ -6,7 +6,7 @@
 //   STUCK <project>   a project's stuck count went up and stayed up three minutes
 //   WAKE <host> ...   the Waker chat cleared itself; send_message it RESUME (the Waker
 //                     wakes every other cleared chat, see _roles/wake-wait.mjs)
-//   RE-ARM            12 h passed quietly (a lifetime cap, so an orphan cannot outlive
+//   RE-ARM            58 min passed quietly (a lifetime cap, so an orphan cannot outlive
 //                     its chat the way `tail -F` did under Monitor)
 // Re-run it after every wake.
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url'
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
 const BOARD = 'http://127.0.0.1:7777/api/summary'
-const LIFETIME_MS = 12 * 3600e3
+const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const ROLES = 'C:/Users/PFrew/Projects/_roles'
 const { readyWakes, wakeLine } = await import(pathToFileURL(join(ROLES, 'wake-wait.mjs')).href)
 const wakers = () => { try { return Object.entries(JSON.parse(readFileSync(join(ROLES, 'state-map.json'), 'utf8'))).filter(([, c]) => c.waker).map(([h]) => h) } catch { return [] } }

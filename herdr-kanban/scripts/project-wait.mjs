@@ -5,7 +5,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const LIFETIME_MS = 12 * 3600e3
+const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
 
 export function wakeDecision(before, now) {
