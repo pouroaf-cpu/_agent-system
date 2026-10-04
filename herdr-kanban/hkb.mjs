@@ -33,7 +33,7 @@ import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './
 import { approvedManagedModel } from './lib/herdr.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
-import { appendHistory, writeCurrentFeedback, droppedSections, historyPath } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback, repairHandoffSections } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -144,8 +144,7 @@ if (verb === 'wait') {
     const current = findCard(tasksDir, cardId)
     if (current.column !== 'planning') fail(`wait is a Planner handoff; ${current.id} is in ${current.column}`)
     assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
-    const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))
-    if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again.`)
+    repairHandoffSections(tasksDir, current)
     // Cards join Blocked by, so the existing prerequisite wait covers them too.
     if (cards.length) updateCard(tasksDir, current.id, { addBlockedBy: cards })
     const project = basename(dirname(tasksDir)), waitFor = { cards, files, why, since: new Date().toISOString() }
@@ -224,8 +223,7 @@ try {
     console.log(`${current.id}: ${verb} handoff already recorded (${current.column})${bound || !saved?.completedStage ? '; finished its interrupted steps' : ''}`)
     process.exit(0)
   }
-  const dropped = droppedSections(tasksDir, current.id, readFileSync(current.path, 'utf8'))
-  if (dropped.length) fail(`${current.id}: handoff refused. ${dropped.map(s => `## ${s}`).join(', ')} had content in the last saved card but is now missing or empty. Put it back from the last "text" entry in ${historyPath(tasksDir, current.id).replaceAll('\\', '/')}, then hand off again. Edit only your own sections; never rewrite other sections.`)
+  repairHandoffSections(tasksDir, current)
   if (verb === 'covered') {
     if (current.column !== 'planning') fail(`covered is a Planner handoff; ${current.id} is in ${current.column}`)
     if (!readCardPlanners(tasksDir)[current.id]?.assignmentId) fail('covered requires the assigned Planner and --planner-assignment')
@@ -336,9 +334,7 @@ try {
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
   }
   if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
-    let text = readFileSync(current.path, 'utf8')
-    // A PowerShell single-quoted write leaves a literal `r`n, which hides the heading (I711).
-    if (text.includes('`r`n')) writeFileSync(current.path, text = text.replaceAll('`r`n', '\n'))
+    const text = readFileSync(current.path, 'utf8')
     const sections = []
     for (const heading of ['Implementation', 'Evidence']) {
       const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()

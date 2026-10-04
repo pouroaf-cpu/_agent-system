@@ -35,21 +35,19 @@ function board(t, column, id, text) {
 }
 const hkb = (tasks, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8' })
 
-test('a handoff that drops a required section is refused and nothing is restored', t => {
+test('a handoff restores dropped required sections, leaving previously empty sections alone', t => {
   const tasks = board(t, 'queue', 'T-1', PLAN.replace('## Acceptance criteria\n- Measurement saved.', '## Acceptance criteria\n<!-- empty in the saved copy -->'))
   moveCard(tasks, 'T-1', 'working') // the board snapshots the card on every transition
   const saved = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
   const rewritten = saved.replace(/## Files[\s\S]*?(?=## Implementation plan)/, '').replace('Measurement command: node measure.mjs\nExpected result: timing recorded\nStop rules: stop if the page is unavailable\n', '')
   writeFileSync(findCard(tasks, 'T-1').path, rewritten)
-  const refused = hkb(tasks, 'move', 'T-1', 'review')
-  assert.equal(refused.status, 1)
-  assert.match(refused.stderr, /handoff refused\. ## Files, ## Implementation plan had content/)
-  assert.doesNotMatch(refused.stderr, /Acceptance criteria/, 'a section empty in the saved copy may stay empty')
-  assert.equal(findCard(tasks, 'T-1').column, 'working')
-  assert.equal(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), rewritten, 'nothing restored automatically')
-
-  writeFileSync(findCard(tasks, 'T-1').path, saved)
-  assert.equal(hkb(tasks, 'move', 'T-1', 'review').status, 0)
+  const restored = hkb(tasks, 'move', 'T-1', 'review')
+  assert.equal(restored.status, 0, restored.stderr)
+  assert.match(restored.stdout, /restored ## Files, ## Implementation plan from history/)
+  assert.doesNotMatch(restored.stdout, /Acceptance criteria/, 'a section empty in the saved copy may stay empty')
+  const text = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
+  assert.match(text, /## Files\n- `evidence\/`\n\n## Implementation plan\nMeasurement command: node measure.mjs/)
+  assert.match(text, /## Acceptance criteria\n<!-- empty in the saved copy -->/)
   assert.equal(findCard(tasks, 'T-1').column, 'review')
 })
 

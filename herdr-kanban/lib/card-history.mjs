@@ -18,18 +18,48 @@ export function appendHistory(tasksDir, id, event) {
 }
 // T-147: a Builder rewrote its whole card and dropped Files, plan and criteria.
 // A handoff must keep every required section that had content in the board's last
-// saved copy of the card. Nothing is restored automatically.
+// saved copy of the card.
 const REQUIRED_SECTIONS = ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']
 const sectionBody = (text, name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
-export function droppedSections(tasksDir, id, text) {
+function lastSavedText(tasksDir, id) {
   const path = historyPath(tasksDir, id)
-  if (!existsSync(path)) return []
+  if (!existsSync(path)) return null
   const lines = readFileSync(path, 'utf8').trim().split('\n')
   let saved
   for (let i = lines.length - 1; i >= 0 && saved == null; i--) {
     try { const entry = JSON.parse(lines[i]); if (typeof entry.text === 'string') saved = entry.text } catch { /* torn line */ }
   }
+  return saved
+}
+export function droppedSections(tasksDir, id, text, saved = lastSavedText(tasksDir, id)) {
   return saved ? REQUIRED_SECTIONS.filter(name => sectionBody(saved, name) && !sectionBody(text, name)) : []
+}
+// I854/I823: prefix splices overwrote the plan and left PowerShell escapes in headings.
+export function repairHandoffSections(tasksDir, card) {
+  const original = readFileSync(card.path, 'utf8')
+  let text = original.replaceAll('`r`n', '\n').replace(/`n(?=[A-Z#*-]|\r?$)/gm, '\n')
+  if (text !== original) writeFileSync(card.path, text)
+  const saved = lastSavedText(tasksDir, card.id), dropped = droppedSections(tasksDir, card.id, text, saved)
+  if (!dropped.length) return
+  if (saved == null) throw new Error(`${card.id}: cannot restore sections without history text`)
+  const chunks = s => s.split(/(?=^## )/m), heading = s => s.match(/^## ([^\r\n]+)/)?.[1]?.trim()
+  const template = chunks(saved), order = template.map(heading), current = chunks(text)
+  const restored = new Map(dropped.map(name => [name, template.find(s => heading(s) === name)]))
+  for (const name of ['Implementation', 'Evidence']) {
+    const bodies = [...new Set(current.filter(s => heading(s) === name && sectionBody(s, name)).map(s => s.replace(/^## [^\r\n]+\r?\n/, '').trim()))]
+    if (bodies.length) restored.set(name, `## ${name}\n${bodies.join('\n\n')}\n\n`)
+  }
+  const kept = current.filter(s => !restored.has(heading(s)))
+  for (const name of [...restored.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b))) {
+    const rank = order.indexOf(name)
+    const next = rank < 0 ? -1 : kept.findIndex(s => order.indexOf(heading(s)) > rank)
+    kept.splice(next < 0 ? kept.length : next, 0, restored.get(name).trimEnd() + '\n\n')
+  }
+  text = kept.join('')
+  if (droppedSections(tasksDir, card.id, text, saved).length) throw new Error(`${card.id}: cannot restore sections from history text`)
+  writeFileSync(card.path, text)
+  appendHistory(tasksDir, card.id, { event: 'sections-restored', sections: dropped, text })
+  console.log(`hkb: ${card.id} restored ${dropped.map(s => `## ${s}`).join(', ')} from history`)
 }
 // The lane a card left when it last went to Pou or Owner, or null when history does not say.
 // An Owner -> Pou promotion is not a lane the card left.

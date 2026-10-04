@@ -339,3 +339,43 @@ test('done repairs a literal PowerShell `r`n that hid the Implementation heading
   assert.equal(run.status, 0, run.stderr)
   assert.doesNotMatch(readFileSync(findCard(f.tasks, card.id).path, 'utf8'), /`r`n/)
 })
+
+test('issue/done restore a prefix-overwritten plan and relocate duplicate Builder results (I854/I823)', t => {
+  const f = fixture(t)
+  for (const verb of ['issue', 'done']) {
+    const card = createCard(f.tasks, { title: 'prefix splice', brief: 'correct result' })
+    writeFileSync(card.path, `# ${card.id} — splice\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`)
+    moveCard(f.tasks, card.id, 'working')
+    const current = findCard(f.tasks, card.id), saved = readFileSync(current.path, 'utf8')
+    const outcome = verb === 'done' ? 'PASS' : 'BLOCKED'
+    const result = `## Implementation\x60nStage: builder, Outcome: ${outcome}, Files: app.mjs, Blocker: none\x60n`
+    // The Builder's first '## Implementation' match is the Planner's plan heading.
+    const start = saved.indexOf('## Implementation'), end = saved.indexOf('## Acceptance criteria', start)
+    writeFileSync(current.path, (saved.slice(0, start) + result + saved.slice(end))
+      .replace('## Implementation\nChanged app.mjs', result + '\n## Implementation\n<!-- empty -->')
+      .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence\x60r\x60nCheck: node check.mjs; Result: passed; Evidence: check-output.txt'))
+    const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, verb, card.id, ...(verb === 'issue' ? ['[planning] specified target is incomplete'] : [])], { encoding: 'utf8' })
+    assert.equal(run.status, 0, run.stderr)
+    assert.match(run.stdout, /restored ## Implementation plan from history/)
+    const text = readFileSync(findCard(f.tasks, card.id).path, 'utf8')
+    assert.match(text, /## Implementation plan\nChange app.mjs/)
+    assert.deepEqual([...text.matchAll(/^## ([^\n]+)/gm)].map(m => m[1]).filter(s => s !== 'Current feedback'), [...saved.matchAll(/^## ([^\n]+)/gm)].map(m => m[1]))
+    assert.equal(text.match(/Stage: builder/g).length, 1, 'duplicate content is retained once, empty placeholders removed')
+    assert.match(text, new RegExp(`## Implementation\nStage: builder, Outcome: ${outcome}`))
+    assert.doesNotMatch(text, /`[rn]/)
+    const restored = readFileSync(historyPath(f.tasks, card.id), 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.event === 'sections-restored')
+    assert.equal(restored.length, 1)
+    assert.deepEqual(restored[0].sections, ['Implementation plan'])
+    assert.equal(findCard(f.tasks, card.id).column, verb === 'done' ? 'completed' : 'planning')
+  }
+})
+
+test('shared handoff repairs lone PowerShell newlines but preserves inline `npm run`', t => {
+  const f = fixture(t)
+  const card = createCard(f.tasks, { title: 'inline command', brief: 'correct result' })
+  writeFileSync(card.path, `# ${card.id} — inline\n${plan}\n## Notes\nUse \x60npm run\x60 and \x60node check.mjs\x60.\x60n# Details\x60n- one\x60n* two\x60n`)
+  moveCard(f.tasks, card.id, 'working')
+  const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'move', card.id, 'completed'], { encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(readFileSync(findCard(f.tasks, card.id).path, 'utf8'), /Use `npm run` and `node check.mjs`\.\n# Details\n- one\n\* two\n/)
+})
