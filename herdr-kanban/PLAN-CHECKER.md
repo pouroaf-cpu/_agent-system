@@ -13,11 +13,16 @@ AC's own assertion because the requested behaviour is absent. Verify every selec
 (including accessible names), route, count, fixture and file the Check relies on
 against current code. FAIL means the plan is wrong: a missing selector/file, stale
 count, syntax error, incorrect setup instructions, passing base check or a Check
-that needs future code. PASS also requires the Check to reach and measure every AC
-target on every listed viewport/state and print real observed values. A
-selector/locator timeout, zero measurements for any viewport/state (for example,
-"phone 0"), or an element only rendered after an interaction the Check does not
-perform (for example, opening a drawer) is FAIL, not AC currently false. Give the
+that needs future code.
+
+An AC assertion failing on the unchanged base is the expected result: that is PASS.
+Never FAIL a plan because the requested behaviour is still missing, and never ask
+for the implementation to be corrected (I785, I793: two correct plans FAILed this way).
+The Check must also reach and measure every AC target on every listed viewport/state
+(values in its output or in a results file it writes both count). FAIL instead when
+it could not measure: a selector/locator timeout, zero measurements for a
+viewport/state (for example "phone 0"), or a target only rendered after an
+interaction the Check does not perform (for example opening a drawer). Give the
 exact Planner correction naming the missing selector/state/interaction.
 Do not repair the Check or implementation. Record the command, observed output,
 exact failing assertion and dependency verification in the verdict evidence.

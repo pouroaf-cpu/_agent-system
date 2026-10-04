@@ -18,8 +18,9 @@ import { planCheckerPrompt } from './lib/prompt.mjs'
 test('plan-check prompt requires measured AC targets and fails unmeasurable Checks', () => {
   const prompt = planCheckerPrompt({ cards: [{ id: 'T-1', path: 'TASKS/T-1.md' }],
     projectPath: '.', boardRoot: '.', reviewRoot: '.', reviewClaim: 'claim' })
-  assert.match(prompt, /reach and measure every AC target on every listed viewport\/state and print real observed values/)
-  assert.match(prompt, /A selector\/locator timeout, zero measurements for any viewport\/state, or an element only rendered after an interaction the Check does not perform is FAIL, not AC currently false/)
+  assert.match(prompt, /An AC assertion failing on the unchanged base is the expected result and is PASS/)
+  assert.match(prompt, /reach and measure every AC target on every listed viewport\/state/)
+  assert.match(prompt, /FAIL instead when the Check could not measure: a selector\/locator timeout, zero measurements/)
   assert.match(prompt, /exact Planner correction naming the missing selector\/state\/interaction/)
   assert.match(prompt, /RETRY is only for environment failures/)
 })
