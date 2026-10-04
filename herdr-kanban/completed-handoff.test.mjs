@@ -284,16 +284,22 @@ test('integration conflicts never loop: a Builder resolution, one fresh re-apply
   assert.deepEqual([first.status, first.to], ['returned', 'queue'])
   let text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
   assert.match(text, /Kicked back: Integration conflict with master[\s\S]*git rebase --onto h1 b0, fix app\.js[\s\S]*<<<<<<< HEAD/)
+  const checkoutOverride = "For this return, your worktree is expected at the card's earlier commit or base; this overrides any plan prerequisite or check requiring a clean checkout on current integration HEAD until the rebase/reset is done, then the plan's checks apply again."
+  assert.ok(text.includes(checkoutOverride))
   assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].state, 'conflict')
   // It conflicts again: one fresh re-apply on the new base (Injectbuddy I387/I388/I390), then Owner.
   moveCard(tasksDir, 'T-1', 'completed'); registry({ 'T-1': 'building' })
   const [second] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
   assert.equal(second.to, 'queue')
-  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /start fresh on the new base[\s\S]*git branch kanban-backup\/T-1-2 HEAD, git reset --hard h1/)
+  text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
+  assert.match(text, /start fresh on the new base[\s\S]*git branch kanban-backup\/T-1-2 HEAD, git reset --hard h1/)
+  assert.ok(text.includes(checkoutOverride))
   moveCard(tasksDir, 'T-1', 'completed'); registry({ 'T-1': 'building' })
   const [third] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io })
   assert.equal(third.to, 'owner')
-  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 still does not integrate with master after 3 tries[\s\S]*\?/)
+  text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
+  assert.match(text, /Needs you: T-1 still does not integrate with master after 3 tries[\s\S]*\?/)
+  assert.ok(!text.includes(checkoutOverride))
 
   // Clean rebase: the recorded check gates integration.
   registry({ 'T-2': 'rebased', 'T-3': 'rebased' })
