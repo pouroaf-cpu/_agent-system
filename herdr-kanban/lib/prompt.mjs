@@ -50,13 +50,14 @@ const oneLine = (...parts) => parts.join(' ').replace(/\s+/g, ' ').trim()
 // SINGLE LINE, always. Prompts are delivered as keystrokes into a TUI, where a
 // newline is the submit key — a multi-line prompt submits on its first blank line
 // and leaves the rest sitting unsent in the input box.
-export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: explicitWorkspacePath, engine }) {
+export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: explicitWorkspacePath, engine, previousAttempt = false }) {
   // Absolute paths, not relative: a relative path sends the agent hunting for the
   // file with a glob/search before it can read it, which costs a turn every spawn.
   const cardPath = briefing(tasksDir, card, 'builder')
   const workspacePath = resolve(explicitWorkspacePath || projectPath, explicitWorkspacePath ? '.' : (card.workspace || '.')).replace(/\\/g, '/')
   const cmd = hkb(boardRoot, tasksDir)
   return oneLine(
+    previousAttempt ? 'Your previous attempt\'s changes are already in this worktree; read the kick-back feedback in Current feedback, fix only what the feedback names, then re-run the Check. Preserve existing commits and files.' : '',
     `Read ${cardPath}, ${BUILDER}, the card's Project constraints section (there is no separate safety file) and only applicable required skills. Ponytail is already loaded by hook: do not open its SKILL.md, Projects/filemap.md, or any README.md/AGENTS.md unless this card names it (efficiency audit 2026-10-03: 11% of Codex input). Workspace root: ${workspacePath}; file paths are relative to it. Scope is the exact listed files; missing essential scope requires a specific proposed deviation and operator clarification, not self-approved widening or automatic planning restart.`,
     `Do not run repository-wide searches when the card supplies exact files or selectors.`,
     shellRule(engine),

@@ -12,6 +12,7 @@ import { recoveryState } from './recovery.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
 import { isTransient, nextRetry, retryHold, inBackoff, killTree } from './transient.mjs'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
 const lockPath = (tasksDir) => join(tasksDir, '.board-integration.lock')
@@ -401,6 +402,31 @@ function uniqueName(card) {
   return `${id}-${Date.now().toString(36)}-${process.pid}`
 }
 
+function planRevision(text) {
+  const hash = createHash('sha256')
+  for (const name of ['Files', 'Approved brief', 'Project constraints', 'Implementation plan', 'Acceptance criteria', 'Outcome checks', 'Prerequisites']) {
+    hash.update(name).update(text.match(new RegExp(`^## ${name}\\r?\\n([\\s\\S]*?)(?=^## |^\\*\\*(?:Recovery:|Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \\d+|Earlier plan's work saved)\\*\\*|^---|$(?![\\s\\S]))`, 'm'))?.[1]?.trim().replaceAll('\r\n', '\n') || '')
+  }
+  return hash.digest('hex')
+}
+
+// Probe the full saved attempt, including untracked edits, without touching its index or files.
+function retryConflicts(entry, repoRoot) {
+  const wt = entry.worktreePath
+  if (operationInProgress(wt) || git(wt, ['diff', '--name-only', '--diff-filter=U']).stdout.trim()) return true
+  if (git(repoRoot, ['rev-parse', 'HEAD']).stdout.trim() === entry.baseCommit) return false
+  const index = join(git(wt, ['rev-parse', '--absolute-git-dir']).stdout.trim(), `retry-${process.pid}-${Date.now()}.index`)
+  const env = { GIT_INDEX_FILE: index }
+  try {
+    git(wt, ['read-tree', 'HEAD'], { env })
+    git(wt, ['add', '-A'], { env })
+    const tree = git(wt, ['write-tree'], { env }).stdout.trim()
+    const head = git(wt, ['rev-parse', 'HEAD']).stdout.trim()
+    const snapshot = git(wt, ['commit-tree', tree, '-p', head, '-m', 'Retry compatibility check']).stdout.trim()
+    return git(repoRoot, ['merge-tree', '--write-tree', 'HEAD', snapshot], { allowFailure: true }).status !== 0
+  } finally { if (existsSync(index)) unlinkSync(index) }
+}
+
 // Git projects isolate by default; non-Git projects retain their workspace.
 export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }) {
   if (gitSettings?.envFile && !existsSync(gitSettings.envFile)) throw new Error('Required approved environment file is unavailable; restore it before dispatch')
@@ -418,7 +444,9 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     updateEntry(tasksDir, id, null) // An explicitly requeued card starts a fresh correction.
     existing = null
   }
-  const plan = recoveryState(readFileSync(card.path, 'utf8')).plan
+  const text = readFileSync(card.path, 'utf8')
+  const plan = recoveryState(text).plan
+  const revision = planRevision(text)
   // Git already removed this worktree but Windows kept its empty folder (Injectbuddy I238),
   // and its branch holds nothing beyond the base: nothing to preserve, start fresh.
   if (existing && existing.state !== 'integrated' && isResidue(existing)) {
@@ -429,23 +457,30 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   }
   if (existing) {
     if (existing.state === 'integrated') throw new Error(`${id} is already integrated; cleanup is pending`)
-    if (!existsSync(existing.worktreePath)) throw new Error(`${id} worktree registry points to missing path: ${existing.worktreePath}`)
+    if (!existsSync(existing.worktreePath)) {
+      const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
+      git(existing.repoRoot, ['branch', recovery, existing.branch])
+      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe previous worktree is missing; its branch is saved on \`${recovery}\`. This attempt starts from integration HEAD.\n`)
+      updateEntry(tasksDir, id, null)
+      existing = null
+    }
   }
-  // A worktree from an earlier plan sits on a stale base, often with a failed Builder's
-  // work: Injectbuddy I195's next Builder found 192 unrelated changed files and stopped.
-  // Save that work on a recovery branch, then start fresh on integration HEAD.
-  // No recorded plan means current (worktrees made before this check keep resuming).
-  if (existing?.planAttempt && existing.planAttempt !== plan) {
+  // Reissuing an unchanged plan must not discard the attempt. Older entries without
+  // a content revision retain the plan-attempt guard until their first safe resume.
+  const changedPlan = existing?.planRevision ? existing.planRevision !== revision : existing?.planAttempt && existing.planAttempt !== plan
+  if (existing && (changedPlan || retryConflicts(existing, repoRoot))) {
     const wt = existing.worktreePath
-    if (!clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '-m', `${id}: work saved from an earlier plan attempt`]) }
+    const unfinished = operationInProgress(wt) || git(wt, ['diff', '--name-only', '--diff-filter=U']).stdout.trim()
+    if (!unfinished && !clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '-m', `${id}: work saved from an earlier plan attempt`]) }
     const head = git(wt, ['rev-parse', 'HEAD']).stdout.trim()
     if (head !== existing.baseCommit) {
       const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
       git(existing.repoRoot, ['branch', recovery, head])
-      git(wt, ['checkout', '--detach', existing.baseCommit]) // the work is on the recovery branch; leave the checkout at its base so it can be removed
-      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe card worktree from the previous plan attempt held saved work; it is on branch \`${recovery}\`. This attempt starts from a fresh worktree on integration HEAD.\n`)
+      if (!unfinished) git(wt, ['checkout', '--detach', existing.baseCommit]) // the work is on the recovery branch; leave the checkout at its base so it can be removed
+      appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe previous attempt's work is on branch \`${recovery}\`${unfinished ? `; unfinished changes remain in ${wt}` : ''}. This attempt starts from a fresh worktree on integration HEAD.\n`)
     }
-    removeCleanWorktree(tasksDir, existing)
+    if (!unfinished) removeCleanWorktree(tasksDir, existing)
+    else appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nUnfinished Git operation preserved in ${wt}; this attempt uses a fresh worktree.\n`)
     existing = null
   }
   // An empty worktree made while the card waited sits on the base it was made from: I195's
@@ -460,8 +495,9 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   }
   if (existing) {
     prepareDependencies(existing.workspacePath, integrationWorkspace)
-    const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
-    return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false }
+    const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], planRevision: revision, generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
+    const previousAttempt = semanticDirtyFiles(resumed.worktreePath).length > 0 || git(resumed.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== resumed.baseCommit
+    return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false, previousAttempt }
   }
 
   const workspaceRel = relative(repoRoot, integrationWorkspace)
@@ -491,6 +527,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     files: filesFor(card, integrationWorkspace),
     state: 'building',
     planAttempt: plan,
+    planRevision: revision,
     createdAt: new Date().toISOString(),
   }
   updateEntry(tasksDir, id, entry)

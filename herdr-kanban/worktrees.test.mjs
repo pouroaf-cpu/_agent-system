@@ -10,6 +10,7 @@ import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWo
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
+import { writeCurrentFeedback } from './lib/card-history.mjs'
 import { reconcileCompletedHandoffs, runShell } from './lib/completed-handoff.mjs'
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 
@@ -706,14 +707,15 @@ test('a card waiting in Queue, Planned or Planning holds no file locks; its save
     // Running, a card locks its files again.
     moveCard(f.tasks, 'T-1', 'working')
     assert.match(hold('T-2'), /held by T-1 — app.js/)
-    // T-2 lands first; T-1's saved work is kept and returned as a conflict, never lost.
+    // T-2 lands first; T-1's conflicting saved work is kept before a fresh retry.
     moveCard(f.tasks, 'T-1', 'queue')
     f.complete('T-2')
     assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === 'T-2').status, 'integrated')
-    prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: moveCard(f.tasks, 'T-1', 'working'), gitSettings: f.settings })
-    f.complete('T-1')
-    assert.equal(reconcileCompletedWorktrees({ tasksDir: f.tasks }).find(r => r.id === 'T-1').status, 'conflict')
-    assert.equal(git(wt1, 'show', 'HEAD:app.js'), 'T-1')
+    const retry = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: moveCard(f.tasks, 'T-1', 'working'), gitSettings: f.settings })
+    assert.equal(retry.created, true)
+    assert.notEqual(retry.workspacePath, wt1)
+    const recovery = git(f.integration, 'branch', '--list', 'recovery/kanban/t-1-*', '--format=%(refname:short)')
+    assert.equal(git(f.integration, 'show', `${recovery}:app.js`), 'T-1')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
@@ -832,6 +834,8 @@ test('a worktree from an earlier plan is saved to a recovery branch and replaced
     git(f.integration, 'add', 'other.js')
     git(f.integration, 'commit', '-m', 'newer integration')
     moveCard(f.tasks, 'T-1', 'planning')
+    const replanned = findCard(f.tasks, 'T-1')
+    writeFileSync(replanned.path, readFileSync(replanned.path, 'utf8').replace('Change it.', 'Use a different approach.'))
     moveCard(f.tasks, 'T-1', 'queue')
     const card = moveCard(f.tasks, 'T-1', 'working')
     const fresh = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
@@ -844,6 +848,52 @@ test('a worktree from an earlier plan is saved to a recovery branch and replaced
     assert.match(recovery, /^recovery\/kanban\/t-1-/)
     assert.equal(git(f.integration, 'show', `${recovery}:saved.js`), 'failed builder work')
     assert.ok(readFileSync(card.path, 'utf8').includes(recovery))
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('same-plan Builder retries retain saved changes and feedback; changed plans or conflicts start fresh', () => {
+  const f = fixture()
+  try {
+    f.addCard('T-1')
+    moveCard(f.tasks, 'T-1', 'planning')
+    moveCard(f.tasks, 'T-1', 'queue')
+    let card = moveCard(f.tasks, 'T-1', 'working')
+    const prepare = () => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    const first = prepare()
+    writeFileSync(join(first.workspacePath, 'app.js'), 'previous changes\n')
+    git(first.workspacePath, 'add', 'app.js')
+    writeFileSync(join(first.workspacePath, 'saved.js'), 'untracked work\n')
+    writeFileSync(join(f.integration, 'other.js'), 'non-conflicting integration change\n')
+    git(f.integration, 'add', 'other.js'); git(f.integration, 'commit', '-m', 'integration advances')
+    writeCurrentFeedback(f.tasks, card, 'Kicked back', 'Fix the missing assertion.')
+    const index = git(first.workspacePath, 'diff', '--cached')
+    for (const reissued of [false, true]) {
+      card = moveCard(f.tasks, 'T-1', reissued ? 'planning' : 'queue', { correction: true })
+      if (reissued) moveCard(f.tasks, 'T-1', 'queue') // New issued-plan ID, identical plan content.
+      card = moveCard(f.tasks, 'T-1', 'working')
+      const retry = prepare()
+      assert.equal(retry.workspacePath, first.workspacePath)
+      assert.equal(retry.created, false)
+      assert.equal(git(retry.workspacePath, 'diff', '--cached'), index)
+      assert.equal(readFileSync(join(retry.workspacePath, 'saved.js'), 'utf8'), 'untracked work\n')
+      const prompt = workerPrompt({ card, projectPath: f.integration, boardRoot: f.root, tasksDir: f.tasks, workspacePath: retry.workspacePath, previousAttempt: retry.previousAttempt })
+      assert.match(prompt, /previous attempt's changes are already in this worktree/)
+      assert.match(prompt, /fix only what the feedback names, then re-run the Check/)
+      assert.match(readFileSync(prompt.match(/Read (.+?) \(revision/)[1], 'utf8'), /Fix the missing assertion/)
+    }
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('Change it.', 'Changed plan.'))
+    const changed = prepare()
+    assert.equal(changed.created, true)
+    assert.notEqual(changed.workspacePath, first.workspacePath)
+    assert.equal(changed.previousAttempt, undefined)
+    writeFileSync(join(changed.workspacePath, 'app.js'), 'conflicting attempt\n')
+    writeFileSync(join(f.integration, 'app.js'), 'conflicting integration\n')
+    git(f.integration, 'commit', '-am', 'integration conflicts')
+    const fresh = prepare()
+    assert.equal(fresh.created, true)
+    assert.notEqual(fresh.workspacePath, changed.workspacePath)
+    const recovery = git(f.integration, 'branch', '--list', `recovery/${changed.entry.branch}-*`, '--format=%(refname:short)')
+    assert.equal(git(f.integration, 'show', `${recovery}:app.js`), 'conflicting attempt')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
@@ -865,7 +915,7 @@ test('an empty folder Windows kept after Git removed the worktree is cleared, no
   }
 })
 
-test('a missing worktree whose branch holds a commit is still refused, never silently replaced', () => {
+test('a missing worktree whose branch holds a commit is saved before replacement', () => {
   const f = fixture()
   try {
     const card = f.addCard('T-1')
@@ -873,7 +923,10 @@ test('a missing worktree whose branch holds a commit is still refused, never sil
     writeFileSync(join(prepared.workspacePath, 'app.js'), 'work\n')
     git(prepared.workspacePath, 'commit', '-am', 'T-1 work')
     git(f.integration, 'worktree', 'remove', '--force', readWorktrees(f.tasks)['T-1'].worktreePath)
-    assert.throws(() => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }), /missing path/)
+    const fresh = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.equal(fresh.created, true)
+    const recovery = git(f.integration, 'branch', '--list', `recovery/${prepared.entry.branch}-*`, '--format=%(refname:short)')
+    assert.equal(git(f.integration, 'show', `${recovery}:app.js`), 'work')
   } finally {
     rmSync(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }

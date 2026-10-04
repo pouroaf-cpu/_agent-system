@@ -263,7 +263,7 @@ export async function spawnForCard({
   if (restrictedBuilder) assertRestrictedRuntimeVerified()
   const prepared = prepareCardWorktree({ projectPath, tasksDir, card, gitSettings })
   const saved = readWorkflow(tasksDir)[card.id]
-  const prior = saved?.correction?.category === 'implementation' ? saved.builder : null
+  const prior = !prepared.created && saved?.correction?.category === 'implementation' ? saved.builder : null
   // A bare (legacy) pane id resolves in the project's old session and a qualified
   // `id@default` one in the shared session; agentList(session) returns both forms.
   const resume = prior && (await agentList(session, { ensureSession: false })).find(a => a.pane_id === prior.pane_id && ['done', 'idle'].includes(a.agent_status) && (!isHeadless(a.pane_id) || a.agent_session))
@@ -345,7 +345,7 @@ export async function spawnForCard({
     const environment = gitSettings?.envFile
       ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Signed-in check scripts (DEVTOOLS_TEST_EMAIL) load only .env.devtools.local from the project folder, never together with this envFile: both define the test account and the last --env-file wins. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing.`
       : ''
-    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
+    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, previousAttempt: prepared.previousAttempt, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })
