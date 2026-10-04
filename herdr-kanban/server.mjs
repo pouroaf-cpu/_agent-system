@@ -57,7 +57,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, freeGb } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, freeGb, integratedDependencyHold } = await import('./lib/worktrees.mjs')
 const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
@@ -172,6 +172,10 @@ function logIntegrationResults(project, results, waiting = {}) {
     if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
     if (result.status === 'integrated') {
       activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
+      try {
+        const hold = integratedDependencyHold(readWorktrees(tasksDir)[result.id], tasksDir)
+        if (hold) activity(project, result.id, 'hold', hold)
+      } catch (err) { activity(project, result.id, 'hold', `dependency check: ${err.message}`) }
       dirty = true
     } else if (result.status === 'cleaned') {
       activity(project, result.id, 'cleanup', 'removed integrated card worktree and local branch')

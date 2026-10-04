@@ -206,6 +206,24 @@ export function resolveGitSettings({ projectPath, gitSettings }) {
 const needsInstall = (workspacePath, message) => Object.assign(new Error(`dependency setup needed: ${message}; installing dependencies in ${workspacePath}`), { installIn: workspacePath })
 const LOCKFILES = ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']
 const sameText = (a, b) => existsSync(a) === existsSync(b) && (!existsSync(a) || readFileSync(a, 'utf8').replaceAll('\r\n', '\n') === readFileSync(b, 'utf8').replaceAll('\r\n', '\n'))
+const versionChecks = new Map()
+function installedVersionDrift(folder) {
+  const lock = join(folder, 'package-lock.json')
+  if (!existsSync(lock) || existsSync(join(folder, 'pnpm-lock.yaml')) || existsSync(join(folder, 'yarn.lock'))) return false
+  const key = norm(folder), mtime = statSync(lock).mtimeMs, cached = versionChecks.get(key)
+  if (cached?.mtime === mtime) return cached.drift
+  const packages = JSON.parse(readFileSync(lock, 'utf8')).packages
+  const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
+  // I764/I876: matching lockfile text hid stale Next in integration's shared modules.
+  const drift = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).some(name => {
+    const version = packages?.[`node_modules/${name}`]?.version
+    if (!version) return false
+    try { return JSON.parse(readFileSync(join(folder, 'node_modules', name, 'package.json'), 'utf8')).version !== version }
+    catch { return true }
+  })
+  versionChecks.set(key, { mtime, drift })
+  return drift
+}
 
 function prepareDependencies(workspacePath, source) {
   if (!existsSync(join(workspacePath, 'package.json'))) {
@@ -234,6 +252,7 @@ function prepareDependencies(workspacePath, source) {
   }
   const drift = LOCKFILES.find(file => !sameText(join(workspacePath, file), join(source, file)))
   if (drift) throw needsInstall(workspacePath, `${drift} differs from integration`)
+  if (installedVersionDrift(source)) throw needsInstall(source, 'installed versions differ from package-lock.json')
   if (existsSync(local)) { requireInstalled(workspacePath); return } // our junction, still matching
   if (git(workspacePath, ['check-ignore', 'node_modules/'], { allowFailure: true }).status !== 0) return
   requireInstalled(source)
@@ -242,6 +261,14 @@ function prepareDependencies(workspacePath, source) {
 
 export function prepareWorktreeEnvironment(entry) {
   prepareDependencies(entry.workspacePath, entry.integrationWorkspace)
+}
+
+export function integratedDependencyHold(entry, tasksDir) {
+  const folder = entry?.integrationWorkspace
+  if (!folder || !entry.commit) return null
+  const lock = slash(relative(entry.repoRoot, join(folder, 'package-lock.json')))
+  if (!git(entry.repoRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', entry.commit, '--', lock]).stdout.trim()) return null
+  return installedVersionDrift(folder) ? startDependencyInstall({ folder, tasksDir }) : null
 }
 
 export const freeGb = (path) => { const s = statfsSync(path); return s.bavail * s.bsize / 1e9 }
@@ -329,6 +356,7 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   // Only this run may settle its slot: a hung run already expired above must not overwrite a newer one.
   const settle = (err) => {
     if (installs.get(key) !== run) return
+    versionChecks.delete(key)
     if (run.pid) recordInstall(key, null)
     if (!err) return installs.delete(key)
     const error = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)
@@ -360,6 +388,8 @@ export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings
     if (!existsSync(join(folder, 'package.json'))) return null
     const state = installs.get(norm(folder)) || { failures: 0 }
     if (state.running || state.failures >= 2 || state.retry) return startDependencyInstall({ folder, ...opts })
+    const local = entry?.workspacePath && join(entry.workspacePath, 'node_modules')
+    if ((!local || !existsSync(local) || lstatSync(local).isSymbolicLink()) && installedVersionDrift(folder)) return startDependencyInstall({ folder, ...opts })
     // Installed, not merely present: a card's node_modules is a junction to integration's,
     // and an emptied integration folder still exists (Tradeflow TF95, Injectbuddy I332).
     if (entry?.workspacePath && installedIn(folder, entry.workspacePath)) return null

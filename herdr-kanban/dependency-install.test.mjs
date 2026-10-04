@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
-import { dependencyInstallHold, startDependencyInstall } from './lib/worktrees.mjs'
+import { dependencyInstallHold, startDependencyInstall, prepareWorktreeEnvironment } from './lib/worktrees.mjs'
 
 // Running installs are recorded beside the board config, so a restarted board can see them.
 const stateDir = mkdtempSync(join(tmpdir(), 'hkb-deps-state-'))
@@ -28,6 +28,35 @@ function fixture(t) {
   return { folder, calls, hold, settle: () => settle }
 }
 const tick = () => new Promise(r => setImmediate(r))
+
+for (const version of ['15.5.18', '15.5.27']) test(`shared integration Next ${version} is checked against the lock (I764/I876)`, async t => {
+  const f = fixture(t), card = join(f.folder, '..', 'card'), tasksDir = join(f.folder, '..', 'TASKS')
+  const manifest = '{"dependencies":{"next":"15.5.27"}}', lock = '{"packages":{"node_modules/next":{"version":"15.5.27"}}}'
+  mkdirSync(card)
+  for (const dir of [f.folder, card]) {
+    writeFileSync(join(dir, 'package.json'), manifest)
+    writeFileSync(join(dir, 'package-lock.json'), lock)
+  }
+  mkdirSync(join(f.folder, 'node_modules', 'next'), { recursive: true })
+  writeFileSync(join(f.folder, 'node_modules', 'next', 'package.json'), JSON.stringify({ version }))
+  symlinkSync(join(f.folder, 'node_modules'), join(card, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+  const entry = { workspacePath: card, integrationWorkspace: f.folder }
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry }))
+  const calls = [], install = dir => { calls.push(dir); writeFileSync(join(dir, 'node_modules', 'next', 'package.json'), '{"version":"15.5.27"}') }
+  if (version === '15.5.18') {
+    assert.throws(() => prepareWorktreeEnvironment(entry), err => err.installIn === f.folder)
+    assert.equal(f.hold({ install }), `installing dependencies in ${f.folder}`)
+    await tick()
+    assert.deepEqual(calls, [f.folder], 'install in integration, never through the card junction')
+  } else {
+    prepareWorktreeEnvironment(entry)
+    assert.equal(f.hold({ install }), null)
+    await tick()
+    assert.deepEqual(calls, [])
+  }
+  assert.equal(f.hold({ install }), null, 'successful install clears the cached drift')
+  prepareWorktreeEnvironment(entry)
+})
 
 test('a missing node_modules starts one background install; the card waits, then starts', async t => {
   const f = fixture(t)
