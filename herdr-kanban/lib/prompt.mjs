@@ -82,7 +82,7 @@ export function planCheckerPrompt({ cards, projectPath, boardRoot, tasksDir, rev
     `Read ${psLiteral(resolve(boardRoot, 'PLAN-CHECKER.md'))}. Your assigned unchanged card checkout is ${psLiteral(projectPath)}. Do not edit code or the card.`,
     shellRule(engine),
     ...(envFile ? [`Approved dev environment file: ${psLiteral(envFile)}. Use it only for the card's setup/Check; never copy or print its values.`] : []),
-    `Run the exact setup and Check. PASS requires a clean execution failing only on the AC's own assertion, with every selector, route, count, fixture and file verified in current code. FAIL only when the plan is wrong, with the precise Planner correction. Environment problems use RETRY.`,
+    `Run the exact setup and Check. PASS requires a clean execution failing only on the AC's own assertion, with every selector, route, count, fixture and file verified in current code. The Check must reach and measure every AC target on every listed viewport/state and print real observed values. A selector/locator timeout, zero measurements for any viewport/state, or an element only rendered after an interaction the Check does not perform is FAIL, not AC currently false; give the exact Planner correction naming the missing selector/state/interaction. RETRY is only for environment failures.`,
     `Handoff: ${cmd} PASS '<command, output, failing AC assertion and dependency evidence>' or ${cmd} FAIL '<what is wrong and what must change>' or ${cmd} RETRY '<observed environment failure>'. Quote literal evidence with PowerShell single quotes, doubling embedded apostrophes. Stop after handoff.`)
 }
 

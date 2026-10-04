@@ -13,6 +13,16 @@ import { historyPath } from './lib/card-history.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { globalSettings, assignmentFor, setCardOverride } from './lib/agent-settings.mjs'
 import { startRetryHold } from './lib/spawn.mjs'
+import { planCheckerPrompt } from './lib/prompt.mjs'
+
+test('plan-check prompt requires measured AC targets and fails unmeasurable Checks', () => {
+  const prompt = planCheckerPrompt({ cards: [{ id: 'T-1', path: 'TASKS/T-1.md' }],
+    projectPath: '.', boardRoot: '.', reviewRoot: '.', reviewClaim: 'claim' })
+  assert.match(prompt, /reach and measure every AC target on every listed viewport\/state and print real observed values/)
+  assert.match(prompt, /A selector\/locator timeout, zero measurements for any viewport\/state, or an element only rendered after an interaction the Check does not perform is FAIL, not AC currently false/)
+  assert.match(prompt, /exact Planner correction naming the missing selector\/state\/interaction/)
+  assert.match(prompt, /RETRY is only for environment failures/)
+})
 
 test('independent plan gate dispatches once, queues PASS, returns FAIL to Planner without return counts, and can be disabled', async t => {
   const root = mkdtempSync(join(tmpdir(), 'plan-check-')), repo = join(root, 'repo'), tasksDir = join(root, 'TASKS')
