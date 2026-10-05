@@ -39,10 +39,23 @@ export function repairHandoffSections(tasksDir, card) {
   const original = readFileSync(card.path, 'utf8')
   let text = original.replaceAll('`r`n', '\n').replace(/`n(?=[A-Z#*-]|\r?$)/gm, '\n')
   if (text !== original) writeFileSync(card.path, text)
-  const saved = lastSavedText(tasksDir, card.id), dropped = droppedSections(tasksDir, card.id, text, saved)
+  const saved = lastSavedText(tasksDir, card.id)
+  const chunks = s => s.split(/(?=^## )/m), heading = s => s.match(/^## ([^\r\n]+)/)?.[1]?.trim()
+  // I906: a Builder wrote its result under '## Implementation plan', leaving '## Implementation' empty.
+  // Move the result across and empty the plan so it is restored from history below.
+  if (saved && sectionBody(saved, 'Implementation plan') && !sectionBody(text, 'Implementation')) {
+    const parts = chunks(text), at = parts.findIndex(s => heading(s) === 'Implementation plan')
+    const from = at < 0 ? -1 : parts[at].search(/^(?:- )?Stage: builder/m)
+    if (from >= 0) {
+      const result = `## Implementation\n${parts[at].slice(from).trimEnd()}\n\n`, empty = parts.findIndex(s => heading(s) === 'Implementation')
+      parts[at] = '## Implementation plan\n\n'
+      empty < 0 ? parts.push(result) : parts.splice(empty, 1, result)
+      text = parts.join('')
+    }
+  }
+  const dropped = droppedSections(tasksDir, card.id, text, saved)
   if (!dropped.length) return
   if (saved == null) throw new Error(`${card.id}: cannot restore sections without history text`)
-  const chunks = s => s.split(/(?=^## )/m), heading = s => s.match(/^## ([^\r\n]+)/)?.[1]?.trim()
   const template = chunks(saved), order = template.map(heading), current = chunks(text)
   const restored = new Map(dropped.map(name => [name, template.find(s => heading(s) === name)]))
   for (const name of ['Implementation', 'Evidence']) {

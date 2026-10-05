@@ -370,6 +370,23 @@ test('issue/done restore a prefix-overwritten plan and relocate duplicate Builde
   }
 })
 
+test('done moves a Builder result written under Implementation plan into Implementation (Injectbuddy I906)', t => {
+  const f = fixture(t)
+  const card = createCard(f.tasks, { title: 'result under plan', brief: 'correct result' })
+  writeFileSync(card.path, `# ${card.id} — plan\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`)
+  moveCard(f.tasks, card.id, 'working')
+  const current = findCard(f.tasks, card.id), saved = readFileSync(current.path, 'utf8')
+  const result = 'Stage: builder\nOutcome: PASS\nFiles: app.mjs\nCheck: node check.mjs\nResult: passed\nEvidence: check-output.txt\nBlocker: none'
+  writeFileSync(current.path, saved.replace('## Implementation plan\nChange app.mjs', `## Implementation plan\n${result}`).replace('## Implementation\nChanged app.mjs', '## Implementation\n<!-- result -->'))
+  const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  const text = readFileSync(findCard(f.tasks, card.id).path, 'utf8')
+  assert.match(text, /## Implementation plan\nChange app.mjs\n/)
+  assert.match(text, new RegExp(`## Implementation\n${result.replaceAll('.', '\\.')}\n`))
+  assert.equal(text.match(/Stage: builder/g).length, 1)
+  assert.equal(findCard(f.tasks, card.id).column, 'completed')
+})
+
 test('shared handoff repairs lone PowerShell newlines but preserves inline `npm run`', t => {
   const f = fixture(t)
   const card = createCard(f.tasks, { title: 'inline command', brief: 'correct result' })
