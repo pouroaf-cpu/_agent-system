@@ -63,6 +63,7 @@ test('live snapshots defer archive, full snapshots include it, and edits/moves a
 test('column listing cache reuses unchanged directories and notices additions, removals and replacement', t => {
   const root = fixture(t), dir = join(root, 'queue'), path = join(dir, 'T-1.md')
   fs.writeFileSync(path, '# T-1 — First\n')
+  const old = new Date(Date.now() - 60000); fs.utimesSync(dir, old, old) // settled: older than the 2 s same-tick window
   readBoard(root)
   const before = directories.filter(path => path === dir).length
   readBoard(root)
@@ -78,4 +79,16 @@ test('column listing cache reuses unchanged directories and notices additions, r
   fs.mkdirSync(dir)
   fs.writeFileSync(path, '# T-1 — Replacement\n')
   assert.equal(readBoard(root).queue[0].title, 'Replacement')
+})
+
+test('a move inside the same timestamp tick is seen, even when the directory times did not change', t => {
+  const root = fixture(t), dir = join(root, 'queue'), path = join(dir, 'T-1.md')
+  fs.writeFileSync(path, '# T-1 — First\n')
+  assert.equal(readBoard(root).queue.length, 1)
+  const { atime, mtime } = fs.statSync(dir)
+  fs.renameSync(path, join(root, 'working', 'T-1.md'))
+  fs.utimesSync(dir, atime, mtime) // same tick: the directory looks untouched
+  const board = readBoard(root)
+  assert.equal(board.queue.length, 0)
+  assert.equal(board.working.length, 1)
 })

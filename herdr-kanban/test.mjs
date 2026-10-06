@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSy
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
+import { createServer as createNetServer } from 'node:net'
 import { readFileSync, utimesSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -1669,7 +1670,11 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
   const processMock = join(root, 'process-mock.mjs')
   writeFileSync(processMock, `import { mock } from 'node:test';\nimport { PaneProcessTrees } from ${JSON.stringify(treeModule)};\nmock.module(${JSON.stringify(treeModule)}, { namedExports: { PaneProcessTrees: class extends PaneProcessTrees { constructor() { super({ list: async () => [], kill: async () => { throw new Error('unexpected real process kill') } }) } } } });\n`)
 
-  const port = 22000 + Math.floor(Math.random() * 20000)
+  // An OS-chosen free port: a random one landed in Windows' excluded ranges (listen EACCES).
+  const probe = createNetServer()
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
+  const port = probe.address().port
+  await new Promise(resolve => probe.close(resolve))
   const configPath = join(root, 'board.config.json')
   writeFileSync(configPath, JSON.stringify({
     port,

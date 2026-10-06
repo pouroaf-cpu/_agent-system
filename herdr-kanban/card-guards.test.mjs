@@ -3,7 +3,7 @@
 // limit that held a retried card forever.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, utimesSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -53,11 +53,13 @@ test('a handoff restores dropped required sections, leaving previously empty sec
 
 // Tradeflow T-42: the board moved the card out of Working under a live Builder,
 // which then wrote its result to the old lane path and recreated the file.
+// A write after the move must look later than it: file times can trail Date.now() by a few ms.
+const lateWrite = (path, text) => { writeFileSync(path, text); const at = new Date(Date.now() + 2000); utimesSync(path, at, at) }
 test('a card recreated in the lane it just left is merged into the live copy, not held as ambiguous', t => {
   const tasks = board(t, 'working', 'T-1', PLAN)
   moveCard(tasks, 'T-1', 'planning')
   const live = readFileSync(join(tasks, 'planning', 'T-1.md'), 'utf8')
-  writeFileSync(join(tasks, 'working', 'T-1.md'), '## Evidence\nBuilt; node measure.mjs passed.\n')
+  lateWrite(join(tasks, 'working', 'T-1.md'), '## Evidence\nBuilt; node measure.mjs passed.\n')
   const card = findCard(tasks, 'T-1')
   assert.equal(card.column, 'planning')
   const merged = readFileSync(card.path, 'utf8')
@@ -66,7 +68,7 @@ test('a card recreated in the lane it just left is merged into the live copy, no
   assert.ok(!existsSync(join(tasks, 'working', 'T-1.md')), 'no second live copy')
   assert.match(readFileSync(join(tasks, '.stray', readdirSync(join(tasks, '.stray'))[0]), 'utf8'), /Built; node measure/, 'the stale copy is kept')
   // The agent writes again: nothing it already delivered is appended twice.
-  writeFileSync(join(tasks, 'working', 'T-1.md'), `${live}\n## Evidence\nBuilt; node measure.mjs passed.\n`)
+  lateWrite(join(tasks, 'working', 'T-1.md'), `${live}\n## Evidence\nBuilt; node measure.mjs passed.\n`)
   assert.equal(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), merged)
 })
 

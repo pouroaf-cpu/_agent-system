@@ -705,9 +705,12 @@ function readColumn(tasksDir, col) {
   }
   let hit = columnFiles.get(dir)
   // Directory timestamps detect membership changes; individual card stats below
-  // still detect in-place writes even when the directory itself is unchanged.
-  if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.ctimeMs !== stat.ctimeMs) {
-    hit = { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, files: readdirSync(dir).filter(f => f.toLowerCase().endsWith('.md') && !NOT_A_CARD.test(f)) }
+  // still detect in-place writes even when the directory itself is unchanged. A listing read
+  // within 2 s of the directory's last change is never trusted: two moves in one timestamp tick
+  // (Windows directory times are coarse and lazy) left a stale list (flaky unknown card/EEXIST).
+  if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.ctimeMs !== stat.ctimeMs || hit.at - hit.mtimeMs < 2000) {
+    const at = Date.now()
+    hit = { at, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, files: readdirSync(dir).filter(f => f.toLowerCase().endsWith('.md') && !NOT_A_CARD.test(f)) }
     columnFiles.set(dir, hit)
   }
   return hit.files
