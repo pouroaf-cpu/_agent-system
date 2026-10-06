@@ -488,7 +488,8 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   }
   if (existing) {
     if (existing.state === 'integrated') throw new Error(`${id} is already integrated; cleanup is pending`)
-    if (!existsSync(existing.worktreePath)) {
+    // No .git: Git removed the worktree but a dev server refilled the folder with build output (Injectbuddy I925, .next).
+    if (!existsSync(join(existing.worktreePath, '.git'))) {
       const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
       git(existing.repoRoot, ['branch', recovery, existing.branch])
       appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe previous worktree is missing; its branch is saved on \`${recovery}\`. This attempt starts from integration HEAD.\n`)

@@ -954,6 +954,24 @@ test('a missing worktree whose branch holds a commit is saved before replacement
   }
 })
 
+test('a removed worktree whose folder a dev server refilled with build output starts fresh (Injectbuddy I925)', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    const old = readWorktrees(f.tasks)['T-1'].worktreePath
+    git(f.integration, 'worktree', 'remove', '--force', old)
+    mkdirSync(join(old, '.next'), { recursive: true })
+    writeFileSync(join(old, '.next', 'trace'), 'x')
+    const fresh = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.equal(fresh.created, true)
+    assert.ok(existsSync(join(fresh.workspacePath, 'app.js')))
+    assert.ok(existsSync(join(old, '.next', 'trace')), 'leftover folder is left alone')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 // Injectbuddy I692: a script joined ib-calc.css into one line, then PowerShell Set-Content
 // rewrote it; every card sharing the file would have conflicted.
 test('formatChangeError catches whole-file rewrites and allows normal edits', () => {
