@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns, mergeTestTally, repeatFailures } from './lib/test-runs.mjs'
+import { parseReport, readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns, mergeTestTally, repeatFailures } from './lib/test-runs.mjs'
 
 test('2026-10-03: detached syntax failures retain stderr and a run error, without duplicating recorded failures', async () => {
   const board = mkdtempSync(join(tmpdir(), 'runner-')), tasks = join(board, 'TASKS')
@@ -150,4 +150,9 @@ test('validates requests and picks the oldest due scheduled request', () => {
   writeFileSync(join(tasks, 'test-lab', 'requests', oldest.id + '.json'), JSON.stringify(oldest))
   assert.equal(busyRequest(tasks).id, oldest.id)
   assert.throws(() => startTestRun({ project: 'Injectbuddy', tasksDir: tasks, boardDir: '.' }), /already going/)
+})
+
+test('2026-10-06: report parse skips dotenv banner lines before the JSON', () => {
+  assert.deepEqual(parseReport('◇ injected env (3) from .env.local\n[dotenv] tip\n{"stats":{"expected":1}}\n'), { stats: { expected: 1 } })
+  assert.throws(() => parseReport('◇ no json here'))
 })

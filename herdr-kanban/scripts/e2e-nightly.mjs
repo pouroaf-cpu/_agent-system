@@ -9,7 +9,7 @@ import { formatNZTime } from '../lib/nz-time.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { failedTests, staticAppRoutes, pageResults, mergeTestTally, repeatFailures, readTestRuns, TEST_TYPES } from '../lib/test-runs.mjs'
+import { parseReport, failedTests, staticAppRoutes, pageResults, mergeTestTally, repeatFailures, readTestRuns, TEST_TYPES } from '../lib/test-runs.mjs'
 
 const INTEG = 'C:/Users/PFrew/KanbanProjects/.worktrees/Injectbuddy/integration'
 const ENV = 'C:/Users/PFrew/Projects/Injectbuddy/.env.local'
@@ -64,7 +64,7 @@ try {
   // A harness fault, not product failures: don't send the manager a list of dead-server errors.
   if (server.exitCode !== null) throw new Error(`dev server died during the run: ${logTail()}`)
   let parsed
-  try { parsed = JSON.parse(run.stdout) } catch { throw new Error(`Playwright gave no report (${run.error?.message || 'exit ' + run.status}); see ${stamp}-playwright.log`) }
+  try { parsed = parseReport(run.stdout) } catch { throw new Error(`Playwright gave no report (${run.error?.message || 'exit ' + run.status}); see ${stamp}-playwright.log`) }
   const { stats } = parsed
   const failures = failedTests(parsed)
   const repeated = type === 'nightly' ? repeatFailures(failures, readTestRuns(TASKS, { limit: Infinity }).runs) : []
@@ -76,7 +76,7 @@ try {
   writeFileSync(temp, JSON.stringify(mergeTestTally(tally, parsed, routes, new Date().toISOString())))
   renameSync(temp, tallyFile)
   const seconds = Math.round(stats.duration / 1000)
-  record({ ...(filters.length && { filters }), pages: pageResults(parsed, routes), passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds, secondsPerPass: seconds / repeatEach, report, failures: [...new Set(failures)] })
+  record({ ...(filters.length && { filters }), ...(parsed.errors?.length && { errors: parsed.errors.map(e => (e.message || '').slice(0, 500)) }), pages: pageResults(parsed, routes), passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds, secondsPerPass: seconds / repeatEach, report, failures: [...new Set(failures)] })
   const line = `${formatNZTime()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   // 2026-10-05: first-night failures stay in the report/tally; only repeats reach chat.

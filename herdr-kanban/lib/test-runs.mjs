@@ -88,6 +88,12 @@ export function startTestRun({ project, tasksDir, boardDir }) {
 }
 
 // Failed test names, "file › title [project]", from Playwright's JSON report.
+// 2026-10-06: dotenv prints '◇ injected env' banner lines to stdout before Playwright's JSON.
+export function parseReport(stdout) {
+  const start = stdout.search(/^\{/m)
+  return JSON.parse(start < 0 ? stdout : stdout.slice(start))
+}
+
 export function failedTests(report) {
   const out = []
   const walk = suite => {
