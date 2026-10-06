@@ -38,6 +38,9 @@ const stuck = async () => {
 
 const done = line => { console.log(line); process.exit(0) }
 const seen = new Set(cards())
+// The Manager takes 10-30 s to handle a wake and the mod restarts this waiter at once, so the
+// same file would fire a duplicate RESUME (2026-10-06): skip files already there for 2 minutes.
+const wakesSeen = new Set(readyWakes().map(r => r.file))
 let lines = inboxLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
@@ -46,7 +49,7 @@ for (let tick = 0; ; tick++) {
   await new Promise(r => setTimeout(r, 10000))
   const added = cards().filter(c => !seen.has(c))
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
-  const wake = readyWakes().find(r => wakers().includes(r.host))
+  const wake = readyWakes().find(r => wakers().includes(r.host) && (!wakesSeen.has(r.file) || Date.now() - started > 120e3))
   if (wake) done(wakeLine(wake))
   const inbox = inboxLines()
   if (inbox.length > lines) done(`INBOX ${inbox.slice(lines).join('\n')}`)
