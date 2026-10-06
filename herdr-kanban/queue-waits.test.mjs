@@ -126,6 +126,26 @@ test('cards waiting on files held by another live card stay in Queue; the stall 
   assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 60 * 60000 }).map(s => s.id).sort(), ['T-35', 'T-37'], 'a holder that is no longer live is not')
 })
 
+// InjectbuddyApp 2026-10-06: IA19 moved working -> planning at .889; the scheduler's next
+// pass at .919 read the board column by column and caught IA19 between columns, so IA19 was
+// in no live lane at all. IA21's file hold still named IA19 (overlapHoldReason keeps a lock
+// for a removed or ambiguous card on purpose), but autospawn required the holder to appear
+// in that same torn snapshot and sent IA21 to Owner instead of leaving it waiting.
+test('a card held by files of a card missing from the board snapshot stays in Queue, not Owner (InjectbuddyApp IA21/IA19)', async t => {
+  const f = repo(t)
+  // The holder (IA19) has a recorded lock in the worktree registry but no card on the board
+  // at all — not in any column — exactly what a torn column-by-column read can produce.
+  writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify({
+    'IA19': { cardId: 'IA19', state: 'building', integrationWorkspace: join(f.integration, 'site'), files: [norm(join(f.integration, 'site', 'app.js'))] },
+  }))
+  f.add('IA21', ['site/app.js'])
+  const args = { project: 'torn', projectPath: f.integration, tasksDir: f.tasks, boardRoot: f.root, model: 'm', agents: [], max: 5, gitSettings: {}, spawn: async () => { throw new Error('must not start') } }
+  await autoSpawn(args)
+  assert.equal(holdsFor('torn')['IA21'], 'files busy, held by IA19 — site/app.js')
+  assert.equal(findCard(f.tasks, 'IA21').column, 'queue', 'stays waiting, not escalated to Owner')
+  assert.equal(readWorkflow(f.tasks)['IA21']?.queueHoldSince ?? null, null, 'no expiry clock on an allowed wait')
+})
+
 test('a workspace-prefixed file list integrates the card commit', t => {
   const f = repo(t)
   const card = f.add('T-34', ['site/app.js'])

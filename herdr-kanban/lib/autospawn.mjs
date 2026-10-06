@@ -361,7 +361,14 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         // Waiting on another live card's files is allowed in any lane, Owner included:
         // only the holder is escalated, never the cards queued behind it (Tradeflow T-35).
         const fileHolder = hold.match(new RegExp(String.raw`^files busy, (?:likely )?held by (${CARD_ID})`))?.[1]
-        const allowedFileWait = !!fileHolder && fileHolder !== freshCard.id && liveCards(fresh).some(c => c.id === fileHolder)
+        // Never require the holder in `fresh`: it is read column by column, so a holder
+        // mid-move between columns in the same tick can be briefly missing from every one
+        // (InjectbuddyApp 2026-10-06: IA19 working -> planning landed at .889, IA21's file
+        // hold on IA19 was checked at .919 and went to Owner). overlapHoldReason already
+        // keeps the lock for a removed or ambiguous card on purpose; a holder that is truly
+        // gone still gets escalated by stall-watchdog's heldByLiveCard, which rereads the
+        // board on its own slower cadence instead of trusting this torn snapshot.
+        const allowedFileWait = !!fileHolder && fileHolder !== freshCard.id
         // Waiting for a free Builder slot is not the card's fault: no expiry clock. Expiring it sent
         // Injectbuddy I389 back to Planning as its fifth failed return, then to Owner (2026-09-28, cap 5).
         const slotWait = hold === 'slots full'
