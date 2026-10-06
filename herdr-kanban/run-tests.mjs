@@ -3,14 +3,20 @@
 // after 60s. Slow files get longer and start first. worktrees.test.mjs is git processes and no waits
 // (86s alone, 98s in the suite) and release.test.mjs builds three origin/clone repos plus a server
 // (16s alone, 35s beside a second suite): both only get slower as the machine gets busier.
-// Needs the local TASK-TEMPLATE.md and board.config.json (both git-ignored).
-import { readdirSync } from 'node:fs'
+// Needs the local TASK-TEMPLATE.md (git-ignored). Runs against a temp KANBAN_CONFIG, never the live board.config.json.
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
-import { availableParallelism } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const dir = import.meta.dirname
 const files = process.argv.slice(2).length ? process.argv.slice(2)
   : readdirSync(dir).filter(f => f === 'test.mjs' || f.endsWith('.test.mjs')).sort()
+// Tests never read the live board.config.json: its night/off switch (maxConcurrentAgents 0) or a
+// project pause made every project count as paused. An empty config pauses nothing and, like no
+// config in KANBAN_TEST, selects the herdr backend.
+const configDir = process.env.KANBAN_CONFIG ? null : mkdtempSync(join(tmpdir(), 'kanban-tests-'))
+if (configDir) { process.env.KANBAN_CONFIG = join(configDir, 'board.config.json'); writeFileSync(process.env.KANBAN_CONFIG, '{}') }
 const args = ['--test', '--test-isolation=none', '--experimental-test-module-mocks', '--test-timeout=60000']
 const SLOW = { 'worktrees.test.mjs': 300000, 'release.test.mjs': 120000, 'test.mjs': 120000, 'watchdog-herdr.test.mjs': 150000 } // test.mjs: ~35s alone, over 60s while agents build
 const limit = file => SLOW[file] ?? 60000
@@ -33,5 +39,6 @@ for (const { file, err, out, secs } of results.sort((a, b) => a.file.localeCompa
   failed.push(file)
   console.log(`FAIL  ${file}${err.killed ? ` (timed out after ${limit(file) / 1000}s)` : ''}\n${out}`)
 }
+if (configDir) rmSync(configDir, { recursive: true, force: true })
 console.log(`\n${files.length} files, ${tests} tests, ${failed.length} failing files${failed.length ? `: ${failed.join(', ')}` : ''}`)
 process.exit(failed.length ? 1 : 0)
