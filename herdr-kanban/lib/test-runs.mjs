@@ -87,6 +87,9 @@ export function startTestRun({ project, tasksDir, boardDir }) {
   return { pid: child.pid }
 }
 
+// True if anything answers HTTP at url (any status): next dev's parent outlives its dead child server.
+export const serverAnswers = (url, ms = 30000) => fetch(url, { signal: AbortSignal.timeout(ms) }).then(() => true, () => false)
+
 // Failed test names, "file › title [project]", from Playwright's JSON report.
 // 2026-10-06: dotenv prints '◇ injected env' banner lines to stdout before Playwright's JSON.
 export function parseReport(stdout) {

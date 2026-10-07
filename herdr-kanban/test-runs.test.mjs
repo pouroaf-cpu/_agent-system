@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseReport, readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns, mergeTestTally, repeatFailures } from './lib/test-runs.mjs'
+import { createServer } from 'node:http'
+import { parseReport, readTestRuns, startTestRun, failedTests, staticAppRoutes, addRequest, listRequests, dueRequest, busyRequest, pageResults, pageHistory, pageRuns, mergeTestTally, repeatFailures, serverAnswers } from './lib/test-runs.mjs'
 
 test('2026-10-03: detached syntax failures retain stderr and a run error, without duplicating recorded failures', async () => {
   const board = mkdtempSync(join(tmpdir(), 'runner-')), tasks = join(board, 'TASKS')
@@ -155,4 +156,14 @@ test('validates requests and picks the oldest due scheduled request', () => {
 test('2026-10-06: report parse skips dotenv banner lines before the JSON', () => {
   assert.deepEqual(parseReport('◇ injected env (3) from .env.local\n[dotenv] tip\n{"stats":{"expected":1}}\n'), { stats: { expected: 1 } })
   assert.throws(() => parseReport('◇ no json here'))
+})
+
+// 2026-10-06: next dev's parent outlived its dead child server, so 7662 ECONNREFUSED were recorded as product failures.
+test('serverAnswers is true for any HTTP reply and false once the port is closed', async () => {
+  const srv = createServer((_, res) => res.writeHead(500).end())
+  await new Promise(r => srv.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${srv.address().port}/`
+  assert.equal(await serverAnswers(url, 5000), true)
+  await new Promise(r => srv.close(r))
+  assert.equal(await serverAnswers(url, 5000), false)
 })

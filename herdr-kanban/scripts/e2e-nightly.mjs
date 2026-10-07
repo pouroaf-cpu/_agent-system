@@ -9,7 +9,7 @@ import { formatNZTime } from '../lib/nz-time.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseReport, failedTests, staticAppRoutes, pageResults, mergeTestTally, repeatFailures, readTestRuns, TEST_TYPES } from '../lib/test-runs.mjs'
+import { parseReport, failedTests, serverAnswers, staticAppRoutes, pageResults, mergeTestTally, repeatFailures, readTestRuns, TEST_TYPES } from '../lib/test-runs.mjs'
 
 const INTEG = 'C:/Users/PFrew/KanbanProjects/.worktrees/Injectbuddy/integration'
 const ENV = 'C:/Users/PFrew/Projects/Injectbuddy/.env.local'
@@ -63,6 +63,7 @@ try {
   if (run.stderr) writeFileSync(join(OUT, `${stamp}-playwright.log`), run.stderr)
   // A harness fault, not product failures: don't send the manager a list of dead-server errors.
   if (server.exitCode !== null) throw new Error(`dev server died during the run: ${logTail()}`)
+  if (!await serverAnswers(base)) throw new Error(`dev server stopped answering during the run: ${logTail()}`)
   let parsed
   try { parsed = parseReport(run.stdout) } catch { throw new Error(`Playwright gave no report (${run.error?.message || 'exit ' + run.status}); see ${stamp}-playwright.log`) }
   const { stats } = parsed
