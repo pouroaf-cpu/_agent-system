@@ -4,22 +4,16 @@
 //   OWNER/POU <file>  a card landed in Owner or Pou
 //   INBOX <line>      KANBAN_MANAGER-INBOX.md got a line (alerts, FOUND --board)
 //   STUCK <project>   a project's stuck count went up and stayed up three minutes
-//   WAKE <host> ...   the Waker chat cleared itself; send_message it RESUME (the Waker
-//                     wakes every other cleared chat, see _roles/wake-wait.mjs)
 //   RE-ARM            58 min passed quietly (a lifetime cap, so an orphan cannot outlive
 //                     its chat the way `tail -F` did under Monitor)
 // Re-run it after every wake.
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
 const BOARD = 'http://127.0.0.1:7777/api/summary'
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
-const ROLES = 'C:/Users/PFrew/Projects/_roles'
-const { readyWakes, wakeLine } = await import(pathToFileURL(join(ROLES, 'wake-wait.mjs')).href)
-const wakers = () => { try { return Object.entries(JSON.parse(readFileSync(join(ROLES, 'state-map.json'), 'utf8'))).filter(([, c]) => c.waker).map(([h]) => h) } catch { return [] } }
 
 const cards = () => readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isDirectory()).flatMap(d =>
   ['owner', 'pou'].flatMap(lane => {
@@ -38,9 +32,6 @@ const stuck = async () => {
 
 const done = line => { console.log(line); process.exit(0) }
 const seen = new Set(cards())
-// The Manager takes 10-30 s to handle a wake and the mod restarts this waiter at once, so the
-// same file would fire a duplicate RESUME (2026-10-06): skip files already there for 2 minutes.
-const wakesSeen = new Set(readyWakes().map(r => r.file))
 let lines = inboxLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
@@ -49,8 +40,6 @@ for (let tick = 0; ; tick++) {
   await new Promise(r => setTimeout(r, 10000))
   const added = cards().filter(c => !seen.has(c))
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
-  const wake = readyWakes().find(r => wakers().includes(r.host) && (!wakesSeen.has(r.file) || Date.now() - started > 120e3))
-  if (wake) done(wakeLine(wake))
   const inbox = inboxLines()
   if (inbox.length > lines) done(`INBOX ${inbox.slice(lines).join('\n')}`)
   lines = inbox.length // after a trim, the next alert must still wake the Manager
