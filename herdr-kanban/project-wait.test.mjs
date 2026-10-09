@@ -25,3 +25,11 @@ test('project waiter wakes for decisions and findings, never integration', () =>
   assert.equal(wakeDecision({ ...before, inbox: ['old'] }, trimmed), null)
   assert.equal(wakeDecision(trimmed, { ...trimmed, inbox: ['new'] }), 'INBOX new')
 })
+
+test('an inbox burst settles into one wake with every line', async () => {
+  const { settled } = await import('./scripts/project-wait.mjs')
+  const inbox = ['old', 'a']
+  setTimeout(() => inbox.push('b'), 15)
+  setTimeout(() => inbox.push('c'), 35)
+  assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+})

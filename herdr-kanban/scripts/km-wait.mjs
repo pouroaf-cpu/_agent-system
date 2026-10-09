@@ -9,6 +9,7 @@
 // Re-run it after every wake.
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { settled } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -41,7 +42,7 @@ for (let tick = 0; ; tick++) {
   const added = cards().filter(c => !seen.has(c))
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
   const inbox = inboxLines()
-  if (inbox.length > lines) done(`INBOX ${inbox.slice(lines).join('\n')}`)
+  if (inbox.length > lines) done(`INBOX ${(await settled(inboxLines, lines)).join('\n')}`)
   lines = inbox.length // after a trim, the next alert must still wake the Manager
   if (tick % 6 === 5) {
     const now = await stuck()

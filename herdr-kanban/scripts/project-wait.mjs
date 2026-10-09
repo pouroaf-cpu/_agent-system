@@ -8,6 +8,20 @@ import { pathToFileURL } from 'node:url'
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
 
+// Planners file ASK/FOUND lines in bursts (7 in 8 min on 2026-10-09 20:01) and each wake was
+// its own BOARD EVENT on the operator's phone: wait for 2 quiet minutes (10 at most) and send
+// the burst as one.
+export async function settled(read, from, quietMs = 120e3, capMs = 600e3, tickMs = 10e3) {
+  const start = Date.now()
+  let seen = read().length, quietSince = Date.now()
+  while (Date.now() - quietSince < quietMs && Date.now() - start < capMs) {
+    await new Promise(r => setTimeout(r, tickMs))
+    const n = read().length
+    if (n !== seen) { seen = n; quietSince = Date.now() }
+  }
+  return read().slice(from)
+}
+
 export function wakeDecision(before, now) {
   const added = now.cards.filter(c => !before.cards.includes(c))
   if (added.length) return `OWNER/POU ${added.join(', ')}`
@@ -47,6 +61,7 @@ async function main() {
     await new Promise(r => setTimeout(r, 10000))
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
     const wake = wakeDecision(before, now)
+    if (wake?.startsWith('INBOX ')) { console.log(`INBOX ${(await settled(() => lines(inbox), before.inbox.length)).join(' | ')}`); return }
     if (wake) { console.log(wake); return }
     if (now.stuck == null) now.stuck = before.stuck
     before = now // after a trim or a card leaving, its next arrival must still wake
