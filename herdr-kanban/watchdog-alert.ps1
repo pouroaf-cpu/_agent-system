@@ -14,7 +14,9 @@ function Update-BoardOutage {
 function Send-Push {
     param([string]$Title, [string]$Message)
     $inbox = Join-Path $PSScriptRoot '../_roles/KANBAN_MANAGER-INBOX.md'
-    [IO.File]::AppendAllText($inbox, "- $(Get-NzAlertTime) $($Title): $Message`n")
+    $line = "- $(Get-NzAlertTime) $($Title): $Message`n"
+    [IO.File]::AppendAllText($inbox, $line)
+    [IO.File]::AppendAllText(($inbox -replace '\.md$', '.log'), $line) # permanent log, as lib/inbox.mjs
 }
 function Get-NzAlertTime {
     node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { formatNZTime } = await import(pathToFileURL(process.argv[1])); console.log(formatNZTime())" (Join-Path $PSScriptRoot 'lib/nz-time.mjs')

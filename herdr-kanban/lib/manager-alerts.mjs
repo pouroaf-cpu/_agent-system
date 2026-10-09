@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { herdrLog } from './herdr.mjs'
 import { readBoard } from './cards.mjs'
 import { laneEnteredAt } from './card-history.mjs'
+import { postInbox } from './inbox.mjs'
 
 const COOLDOWN_MS = 4 * 60 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -50,8 +51,7 @@ export async function notifyManagerException({
 
   state.alerts[key] = { sentAt: now, body }
   writeState(file, state)
-  mkdirSync(dirname(inbox), { recursive: true })
-  appendFileSync(inbox, `- ${formatNZTime(now)} ${formatNZText(body)}\n`)
+  postInbox(inbox, `- ${formatNZTime(now)} ${formatNZText(body)}\n`)
   try {
     await send(title, formatNZText(body).slice(0, 1000))
     log?.(`manager alerted: ${title}`, 'error')

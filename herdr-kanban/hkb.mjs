@@ -33,6 +33,7 @@ import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './
 import { approvedManagedModel } from './lib/herdr.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
+import { postInbox } from './lib/inbox.mjs'
 import { appendHistory, writeCurrentFeedback, repairHandoffSections, repeatedFinding } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
@@ -105,8 +106,7 @@ function fail(msg) {
 function tellManager(line, toBoard = false) {
   const manager = !toBoard && projectSettings()?.manager
   const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
-  mkdirSync(dirname(inbox), { recursive: true })
-  appendFileSync(inbox, `- ${formatNZTime()} ${formatNZText(line)}\n`)
+  postInbox(inbox, `- ${formatNZTime()} ${formatNZText(line)}\n`)
   return manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
 }
 

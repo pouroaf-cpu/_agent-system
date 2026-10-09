@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
+import { postInbox } from './inbox.mjs'
 
 export function historyPath(tasksDir, id) {
   if (!isCardId(id)) throw new Error('Invalid history card ID')
@@ -270,8 +271,7 @@ export function askManager(tasksDir, card, note) {
     if (!project) return
     const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
     const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 600)
-    mkdirSync(dirname(inbox), { recursive: true })
-    appendFileSync(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
+    postInbox(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
 `)
   } catch { /* the question is still on the card; routing is best effort */ }
 }

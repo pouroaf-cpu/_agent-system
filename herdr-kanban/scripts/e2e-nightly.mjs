@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { formatNZTime } from '../lib/nz-time.mjs'
+import { postInbox } from '../lib/inbox.mjs'
 // Nightly Injectbuddy e2e run with no AI (operator, 2026-10-02): run every Playwright spec
 // against kanban-integration HEAD in a throwaway worktree, save the JSON report, and on
 // repeat failures add one line to the project chat's found inbox so it cards the fixes.
@@ -81,7 +82,7 @@ try {
   const line = `${formatNZTime()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   // 2026-10-05: first-night failures stay in the report/tally; only repeats reach chat.
-  if (repeated.length) appendFileSync(INBOX, `- FOUND Injectbuddy nightly ${line} Repeat failures: ${repeated.slice(0, 20).map(title => title.replace(/[\r\n]+/g, ' ')).join('; ')}\n`)
+  if (repeated.length) postInbox(INBOX, `- FOUND Injectbuddy nightly ${line} Repeat failures: ${repeated.slice(0, 20).map(title => title.replace(/[\r\n]+/g, ' ')).join('; ')}\n`)
   if (run.status !== 0) {
     console.error(parsed.errors?.map(e => e.message).join('\n') || `${stats.unexpected} Playwright tests failed; report: ${report}`)
     process.exitCode = 1
