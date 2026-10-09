@@ -10,19 +10,11 @@ function Update-BoardOutage {
     [IO.File]::WriteAllText($StatePath, (Get-Date -Format o))
     & $Send
 }
+# Watchdog alerts go to the Kanban Manager inbox, not Pushover (operator, 2026-10-09).
 function Send-Push {
     param([string]$Title, [string]$Message)
-    $token = [Environment]::GetEnvironmentVariable('PUSHOVER_APP_TOKEN', 'User')
-    $userKey = [Environment]::GetEnvironmentVariable('PUSHOVER_USER_KEY', 'User')
-    if (-not $token -or -not $userKey) { throw 'Pushover credentials are not configured' }
-    $response = Invoke-RestMethod -Uri 'https://api.pushover.net/1/messages.json' -Method Post -TimeoutSec 10 -Body @{
-        token = $token
-        user = $userKey
-        title = $Title
-        message = $Message
-        priority = 0
-    }
-    if ($response.status -ne 1) { throw 'Pushover did not accept the alert' }
+    $inbox = Join-Path $PSScriptRoot '../_roles/KANBAN_MANAGER-INBOX.md'
+    [IO.File]::AppendAllText($inbox, "- $(Get-NzAlertTime) $($Title): $Message`n")
 }
 function Get-NzAlertTime {
     node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { formatNZTime } = await import(pathToFileURL(process.argv[1])); console.log(formatNZTime())" (Join-Path $PSScriptRoot 'lib/nz-time.mjs')

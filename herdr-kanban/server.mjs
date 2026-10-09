@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
 import { stopRunawayTsservers, stopStaleE2eServers } from './lib/orphan-servers.mjs'
-import { alertOwnerCards, pushover } from './lib/owner-alerts.mjs'
+import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
@@ -141,7 +141,7 @@ function diskLow(now = Date.now()) {
     disk.low = true
     const message = `Kanban: drive ${drive} low on space (${gb.toFixed(1)} GB free); new agents paused`
     for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 4 GB is free`, 'error')
-    pushover(`Kanban: drive ${drive} low on space`, message).catch(err => console.error(`low-disk Pushover failed: ${err.message}`))
+    notifyManagerException({ boardRoot: HERE, key: 'low-disk', title: `Drive ${drive} low on space`, detail: message }).catch(err => console.error(`low-disk inbox alert failed: ${err.message}`))
   } else if (disk.low && gb > 4) {
     disk.low = false
     for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
