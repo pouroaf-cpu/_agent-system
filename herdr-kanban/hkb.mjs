@@ -26,7 +26,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { moveCard, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
@@ -84,7 +84,13 @@ function planCheck(card) {
   if (!cardFiles(card.path).length) fail(`no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`)
   const projectPath = dirname(tasksDir)
   const gitSettings = projectSettings()
-  return { planWorkspace: resolve(resolveGitSettings({ projectPath, gitSettings })?.integrationPath || projectPath, card.workspace || '.'), sharedFiles: gitSettings?.sharedFiles }
+  const integration = resolveGitSettings({ projectPath, gitSettings })?.integrationPath
+  const repoRoot = integration || projectPath
+  const planWorkspace = resolve(repoRoot, card.workspace || '.')
+  // IA98 (2026-10-09): the Planner drafted its check in the integration checkout; the board then held the card there for hours.
+  const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
+  if (dirty) fail(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
+  return { planWorkspace, sharedFiles: gitSettings?.sharedFiles }
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
