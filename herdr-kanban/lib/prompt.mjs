@@ -132,7 +132,9 @@ export function reviewerPrompt({ cards, projectPath, boardRoot, tasksDir, review
 
 // The card Planner's prompt (card-planner.mjs). PLANNER.md holds the ownership, failed-return and Owner rules; this gives the
 // cards, the files and the handoff (planner audit F7).
-export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine, amend }) {
+export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager = false, plannerAssignment, engine, amend, envFile }) {
+  // IA97 (2026-10-09): a Planner not told the envFile looked for .env files in the checkout and sent the card to Owner.
+  const env = envFile ? [`Approved dev environment file (gitignored, in no checkout): ${psLiteral(envFile)}. A Check that needs env or the test account loads it with node --env-file=${psLiteral(envFile)}; it exists, so .env files missing from the checkout are not an access blocker. Never copy or print its values.`] : []
   const cmd = hkb(boardRoot, tasksDir) + (plannerAssignment ? ` --planner-assignment ${plannerAssignment}` : '')
   const list = cards
     .map((c) => `${c.id} [${c.category || 'code'}] [${c.column}] (${briefing(tasksDir, c, 'planner')})`)
@@ -141,12 +143,14 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
   if (amend) return oneLine(
     `Amend mode: correct the existing plan for ${list}. Builder's issue: ${amend}`,
     shellRule(engine),
+    ...env,
     `Read the focused briefing for the existing plan, issue and authoritative card path. Edit only ## Files, the Check lines and ## Prerequisites in that card. Keep everything else unchanged, including the implementation plan, acceptance criteria and Difficulty. Do not re-plan, implement or delegate. Read only the exact source needed to verify the correction in ${psLiteral(projectPath)}; verify any corrected path or Check command before handoff. If the issue cannot be resolved within these edits, use ${cmd} issue ${cards[0].id} "[planning] precise broader blocker and evidence" instead of widening the amendment.`,
     `After editing, run exactly one ${cmd} move ${cards[0].id} planned command and stop immediately. If another card already fixed this, use ${cmd} covered ${cards[0].id} <card> "<check> -> <result>"; the covering card must be in Archive, Completed or Review. If a prerequisite genuinely needs a file or card that does not exist yet, use ${cmd} wait ${cards[0].id} "<file or card>" "<why>" and stop.`
   )
   return oneLine(
     cards.length ? `Plan these approved cards: ${list}.` : `No cards to plan.`,
     shellRule(engine),
+    ...env,
     // One combined cat of brief + role files overflows the output cap (planner audit F6).
     `Read the focused briefings, ${PLANNER} and ${overlays.join(', ')} ${isCodex(engine) ? 'one file per command' : 'with the Read tool, one file per call'}; never concatenate them in one shell command. Then read the card's Project constraints section (there is no separate safety file), only applicable required skills and the source needed to plan. Ponytail is already loaded by hook: do not open its SKILL.md, Projects/filemap.md, or any README.md/AGENTS.md unless this card names it (efficiency audit 2026-10-03: 11% of Codex input). Verify every named prerequisite file, route, selector, dependency and check exists in the stated workspace before calling the plan build-ready; record the exact path/route and observed result, or mark the plan investigation/blocked when it cannot be verified. Do not accept an unrelated finding as an automatic planning return.`,
     `Read ${DIFFICULTY_GUIDE}; its Difficulty rules replace any Trivial instructions in the shared role. Set **Difficulty:** tiny | easy | medium | hard on every planned card: tiny = mechanical one-file edit; easy = clear local fix with a focused check; medium = multiple files or interacting behavior; hard = architecture, security or uncertain cross-cutting work. Never lower the workflow's escalated Builder level.`,

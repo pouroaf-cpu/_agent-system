@@ -14,7 +14,7 @@ import { agentName, plannerPrompt } from './prompt.mjs'
 import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
-import { controlState, assertPromptAllowed } from './project-control.mjs'
+import { controlState, assertPromptAllowed, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
@@ -119,6 +119,8 @@ function amendment(tasksDir, card) {
     && !/\b(?:acceptance|criteria|architecture|implement\w*|behavio\w*|scope expansion|redesign|security)\b/i.test(s)) ? correction.note : null
 }
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
+const plannerEnvFile = project => { try { return projectEnvironment(project)?.path } catch { return undefined } }
+
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
@@ -218,7 +220,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: amendment(tasksDir, card) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: amendment(tasksDir, card), envFile: plannerEnvFile(project) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Prefer a runnable check script over fragile shell quoting. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Codex Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (!isHeadless(owner.paneId) && agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')

@@ -37,6 +37,8 @@ for (const lane of ['archive', 'completed', 'review']) test(`covered archives a 
   assert.ok(history.some(entry => entry.event === 'covered' && entry.coveringCard === 'I858'))
   for (const key of ['plannerIssues', 'plannerEscalation', 'waitFor', 'planCheck']) assert.equal(readWorkflow(dir)[card.id][key], null)
   for (const amend of [undefined, 'wrong path']) assert.match(plannerPrompt({ cards: [card], projectPath: dir, boardRoot: dir, tasksDir: dir, plannerAssignment: 'a1', amend }), /covered/)
+  // IA97: the Planner is told the approved envFile, in both modes.
+  for (const amend of [undefined, 'wrong path']) assert.match(plannerPrompt({ cards: [card], projectPath: dir, boardRoot: dir, tasksDir: dir, plannerAssignment: 'a1', amend, envFile: 'C:/x/.env.devtools.local' }), /--env-file='C:\/x\/\.env\.devtools\.local'/)
 })
 
 for (const covering of ['I858', 'I999']) test(`covered refuses an unfinished or missing covering card ${covering}`, t => {
