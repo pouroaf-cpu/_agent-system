@@ -73,11 +73,7 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('a plan accepted into Planned clears the escalation flag', () => {
-  const root = mkdtempSync(join(tmpdir(), 'planner-escalation-clear-'))
-  try {
-    const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), `# T-1 — escalated plan
+const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
 **Plan readiness:** build-ready
@@ -107,12 +103,33 @@ Stop rules: stop if src/app.mjs already exists.
 AC1 | src/app.mjs helper() | node --test test/app.test.mjs passes | return 0 and the check fails
 ## Prerequisites
 Existing Node runtime; no additional access.
-`)
+`
+
+test('a plan accepted into Planned clears the escalation flag', () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-escalation-clear-'))
+  try {
+    const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN)
     updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-5-5', at: 'x' } })
     const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
     const saved = readWorkflow(tasks)['T-1']
     assert.equal(saved.plannerIssues, null)
     assert.equal(saved.plannerEscalation, null)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a Planner handoff to Planned is refused once with the self-check, then accepted', () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-selfcheck-'))
+  try {
+    const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'))
+    const first = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
+    assert.equal(first.status, 1)
+    assert.match(first.stderr, /self-check before T-1 leaves planning/)
+    assert.equal(findCard(tasks, 'T-1').column, 'planning')
+    const second = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
+    assert.equal(second.status, 0, second.stderr)
+    assert.equal(findCard(tasks, 'T-1').column, 'planned')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
