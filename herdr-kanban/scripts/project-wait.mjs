@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Project chat waiter, modelled on km-wait.mjs. Re-arm after handling its one line.
-// Polling costs no tokens; integrated events never wake the chat.
+// Polling costs no tokens; integrated events never wake the chat. ASK/FOUND lines never wake it
+// either: each wake is a BOARD EVENT on the operator's phone (Remote Control), so they wait in the
+// inbox and the hourly re-arm reports only their count (operator via Injectbuddy work, 2026-10-09).
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -22,12 +24,11 @@ export async function settled(read, from, quietMs = 120e3, capMs = 600e3, tickMs
   return read().slice(from)
 }
 
+export const digest = (before, now, file) => now > before ? `INBOX ${now - before} new ASK/FOUND line(s) in ${file}: read and handle them` : 'RE-ARM'
+
 export function wakeDecision(before, now) {
   const added = now.cards.filter(c => !before.cards.includes(c))
   if (added.length) return `OWNER/POU ${added.join(', ')}`
-  if (now.inbox.length > before.inbox.length) return `INBOX ${now.inbox.slice(before.inbox.length).join(' | ')}`
-  const found = now.activity.slice(before.activity.length).find(line => !/\bevent=integrated\b/.test(line) && /\bFOUND\b|\bevent=found\b/.test(line))
-  if (found) return `FOUND ${found}`
   if (now.stuck != null && before.stuck != null && now.stuck > before.stuck) return `STUCK ${now.project}=${now.stuck}`
   return null
 }
@@ -53,19 +54,18 @@ async function main() {
       return p ? held || p.paused ? 0 : p.stuck || 0 : null
     } catch { return null } // board down: the watchdog writes that to the inbox
   }
-  const snapshot = stuck => ({ project, cards: cards(), inbox: lines(inbox), activity: lines(join(tasks, 'activity.log')), stuck })
-  const started = Date.now()
+  const snapshot = stuck => ({ project, cards: cards(), inbox: lines(inbox), stuck })
+  const started = Date.now(), inboxAtStart = lines(inbox).length
   let before = snapshot(null)
   before.stuck = await stuck()
   for (let tick = 0; ; tick++) {
     await new Promise(r => setTimeout(r, 10000))
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
     const wake = wakeDecision(before, now)
-    if (wake?.startsWith('INBOX ')) { console.log(`INBOX ${(await settled(() => lines(inbox), before.inbox.length)).join(' | ')}`); return }
     if (wake) { console.log(wake); return }
     if (now.stuck == null) now.stuck = before.stuck
     before = now // after a trim or a card leaving, its next arrival must still wake
-    if (Date.now() - started > LIFETIME_MS) { console.log('RE-ARM'); return }
+    if (Date.now() - started > LIFETIME_MS) { console.log(digest(inboxAtStart, lines(inbox).length, inbox)); return }
   }
 }
 
