@@ -599,13 +599,14 @@ function cardIds(ids, field) {
   return [...new Set(ids.map((b) => b.trim().toUpperCase()))]
 }
 
-// New blockers must be cards in this project (any lane, archive included), not the card itself, and must not close a loop.
+// New blockers must be cards in this project or on the board their prefix names (any lane, archive
+// included), not the card itself, and must not close a loop.
 function checkBlockers(board, id, ids, field) {
   ids = cardIds(ids, field)
   if (ids.includes(id)) throw new Error(`${id} cannot be blocked by itself`)
   const known = new Set(Object.values(board).flat().map((c) => c.id))
-  const unknown = ids.filter((b) => !known.has(b))
-  if (unknown.length) throw new Error(`${field} names no card in this project: ${unknown.join(', ')}`)
+  const unknown = ids.filter((b) => !known.has(b) && !Object.values(otherBoard(b)?.board || {}).flat().some((c) => c.id === b))
+  if (unknown.length) throw new Error(`${field} names no card in this project or its prefix's board: ${unknown.join(', ')}`)
   if (cycleFor({ id, blockedBy: ids }, board)) throw new Error(`Blocking ${id} on ${ids.join(', ')} would make a dependency cycle`)
   return ids
 }
@@ -862,23 +863,44 @@ export function convertLegacyCard(tasksDir, card, now = new Date()) {
   return parseCard(card.path, card.column)
 }
 
-// Blocked-by prerequisites not yet landed: Completed and integrated, or Archive.
+// Blocked by may name another project's card: IA97 (app) waits on web card I966 (operator
+// 2026-10-09). The id's prefix (board.config.json cardPrefixes) names its board; legacy T- ids
+// stay same-board. ponytail: reads that board per lookup and cross-board cycles are not detected.
+function otherBoard(id) {
+  if (process.env.KANBAN_TEST && !process.env.KANBAN_CONFIG) return null
+  const prefix = id.match(/^([A-Z]{1,3})\d+$/)?.[1]
+  if (!prefix) return null
+  try {
+    const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || new URL('../board.config.json', import.meta.url), 'utf8'))
+    const project = Object.entries(config.cardPrefixes || {}).find(([, p]) => p === prefix)?.[0]
+    const tasksDir = project && join(config.projectsRoot, project, 'TASKS')
+    if (!tasksDir || !existsSync(tasksDir)) return null
+    const registry = join(tasksDir, '.board-worktrees.json')
+    return { board: readBoard(tasksDir), integrated: existsSync(registry) ? JSON.parse(readFileSync(registry, 'utf8')) : {} }
+  } catch { return null }
+}
+
+// 'landed' (Completed/Review and integrated, or Archive), 'waiting' (a live card) or 'missing'.
+function blockerState(id, board, integrated) {
+  const on = (b) => Object.values(b).flat().some((c) => c.id === id)
+  if (!on(board)) ({ board, integrated } = otherBoard(id) || { board: { archive: [] }, integrated: {} })
+  const alive = Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key]).filter((c) => c.id === id)
+  const archived = board.archive.filter((c) => c.id === id)
+  if (!alive.length && archived.length === 1) return 'landed'
+  // Review now happens after integration, so an integrated card in Review has already landed.
+  if (alive.length === 1 && archived.length === 0 && ['completed', 'review'].includes(alive[0].column) && integrated[id]?.state === 'integrated') return 'landed'
+  return alive.length ? 'waiting' : 'missing'
+}
+
+// Blocked-by prerequisites not yet landed.
 export function unmetBlockers(card, board, integrated = {}) {
-  const live = Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key])
-  return (card.blockedBy || []).filter((id) => {
-    const alive = live.filter((c) => c.id === id)
-    const archived = board.archive.filter((c) => c.id === id)
-    if (!alive.length && archived.length === 1) return false
-    // Review now happens after integration, so an integrated card in Review has already landed.
-    return !(alive.length === 1 && archived.length === 0 && ['completed', 'review'].includes(alive[0].column) && integrated[id]?.state === 'integrated')
-  })
+  return (card.blockedBy || []).filter((id) => blockerState(id, board, integrated) !== 'landed')
 }
 // Unmet prerequisites that are still live cards: an allowed wait (TF44). A
-// prerequisite missing from the board can never land, so that is not a wait.
+// prerequisite missing from every board can never land, so that is not a wait.
 export function waitingOnPrerequisites(card, board, integrated = {}) {
-  const unmet = unmetBlockers(card, board, integrated)
-  const live = new Set(Object.keys(board).filter(key => key !== 'archive').flatMap(key => board[key].map(c => c.id)))
-  return unmet.length && unmet.every((id) => live.has(id)) ? unmet : []
+  const states = (card.blockedBy || []).map((id) => [id, blockerState(id, board, integrated)]).filter(([, s]) => s !== 'landed')
+  return states.length && states.every(([, s]) => s === 'waiting') ? states.map(([id]) => id) : []
 }
 
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
