@@ -24,6 +24,8 @@ it could not measure: a selector/locator timeout, zero measurements for a
 viewport/state (for example "phone 0"), or a target only rendered after an
 interaction the Check does not perform (for example opening a drawer). Give the
 exact Planner correction naming the missing selector/state/interaction.
+Compare your base run with the plan's ## Base run lines: FAIL if any AC did not fail
+the way its line says.
 Check every AC and every listed viewport/state before you hand off, even after one
 fails, and list every problem in the one FAIL (I974, 2026-10-09: three FAILs in 16 min,
 each naming one new problem; AC5 was unmeasured from the first plan).

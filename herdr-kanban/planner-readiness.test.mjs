@@ -27,6 +27,8 @@ Stop rules: stop if the target handler or revision differs from this evidence.
 - AC1: Enter activates the control.
 ## Outcome checks
 AC1 | src/app.mjs handleKeyDown(event) | node --test planner-readiness.test.mjs passes | remove the handler branch and the check fails
+## Base run
+AC1 FAIL: handleKeyDown is not exported
 ## Prerequisites
 Existing Node runtime; no additional access.
 `

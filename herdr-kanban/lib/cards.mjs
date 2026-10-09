@@ -129,6 +129,11 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     // selector (I427), a screenshot count the script never produced (I432), a zero-reference
     // AC that files outside ## Files made impossible (I445). Running the check once first catches them.
     if (readiness === 'build-ready' && !/^\*\*Base check:\*\*[ 	]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Base check:** line: run the Check once on the current integration checkout and record the command and what it printed (a regression check should fail there; a count, selector or file it relies on must exist). If it cannot run before the change (it tests a file this card creates), say why.')
+    // Each AC must show the Check reached its own assertion on base (operator 2026-10-09): I974
+    // took three plan-check FAILs for ACs whose Check timed out or never measured them.
+    const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
+    const unrun = criteria.filter(id => !new RegExp(String.raw`^[ \t]*(?:[-*][ \t]*)?${id}[ \t]+(?:FAIL|cannot run)[ \t]*:[ \t]*\S`, 'im').test(section('Base run')))
+    if (readiness === 'build-ready' && unrun.length) throw new Error(`Plan check failed: ## Base run needs one line per AC copied from the Check's output on the current integration checkout, showing it failed at that AC's own assertion: "AC1 FAIL: expected 1 Catch up card at 390, got 0". A timeout, a locator that never appeared or zero measurements is not a FAIL line: fix the Check. Only when the Check cannot run before the change (it tests a file this card creates) write "AC1 cannot run: <why>". Missing: ${unrun.join(', ')}`)
   }
 }
 

@@ -101,6 +101,8 @@ Stop rules: stop if src/app.mjs already exists.
 - AC1: helper() returns 1.
 ## Outcome checks
 AC1 | src/app.mjs helper() | node --test test/app.test.mjs passes | return 0 and the check fails
+## Base run
+AC1 FAIL: Cannot find module src/app.mjs
 ## Prerequisites
 Existing Node runtime; no additional access.
 `
@@ -123,11 +125,14 @@ test('a Planner handoff to Planned is refused once with the self-check, then acc
   const root = mkdtempSync(join(tmpdir(), 'planner-selfcheck-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'))
+    const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**')
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy.replace(/## Base run\n.*\n/, ''))
     const first = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
     assert.equal(first.status, 1)
     assert.match(first.stderr, /self-check before T-1 leaves planning/)
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
+    assert.match(handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned').stderr, /## Base run needs one line per AC.*Missing: AC1/)
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy)
     const second = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
     assert.equal(second.status, 0, second.stderr)
     assert.equal(findCard(tasks, 'T-1').column, 'planned')

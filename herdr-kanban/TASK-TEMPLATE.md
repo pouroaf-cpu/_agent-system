@@ -36,6 +36,9 @@
 ## Outcome checks
 <!-- Planner: one row per acceptance ID: AC1 | exact change/files | check command and expected result | negative check proving missing behaviour fails. -->
 
+## Base run
+<!-- Planner: one line per acceptance ID copied from the Check's output on the current integration checkout: AC1 FAIL: <the assertion it failed>. A timeout or zero measurements is not a FAIL: fix the Check. Only if the Check cannot run before the change: AC1 cannot run: <why>. -->
+
 ## Prerequisites
 <!-- Planner: exact workspace dependencies, approved environment availability and required tools/access. Never include secrets. -->
 

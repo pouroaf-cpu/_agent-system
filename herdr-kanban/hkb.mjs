@@ -367,7 +367,7 @@ try {
     fail(`self-check before ${current.id} leaves planning (not an error). Confirm each, fix the plan if one fails, then run the same handoff again:
   1. You ran the Check in this checkout at current HEAD, unchanged, and it fails for the reason this card fixes: not a syntax, import or setup error, and not passing already.
   2. Every file, path, line and identifier the plan names exists at current HEAD (re-read them now; other cards may have landed since you started).
-  3. The Check measures every Acceptance criterion and can reach it (sign-in state, env vars, dev server or webServer config it needs).
+  3. The Check measures every Acceptance criterion and can reach it (sign-in state, env vars, dev server or webServer config it needs); ## Base run has its output line for each AC, failing on that AC's own assertion.
   4. The Check finds the card by its ID (hkb show), never by a TASKS/<lane>/ path, and gives the same result on a second run.`)
   }
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
