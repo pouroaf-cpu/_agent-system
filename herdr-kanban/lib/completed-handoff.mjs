@@ -11,7 +11,7 @@ import { readDelivery } from './delivery-state.mjs'
 import { isHeadless } from './headless.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
-import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration } from './worktrees.mjs'
+import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, refreshExpoRouteTypes } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
 
 // The Builder's recorded check (## Evidence "Check:"), re-run in the card's
@@ -56,6 +56,7 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   if (up.status === 'conflict') return returnIntegrationConflict(tasksDir, card.id, up)
   const entry = readWorktrees(tasksDir)[card.id]
   if (entry.integrationChecked === up.commit) return null
+  refreshExpoRouteTypes(entry.workspacePath) // the rebase may bring routes other cards added
   const check = await io.runIntegrationCheck(command, entry.workspacePath, 300000)
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)

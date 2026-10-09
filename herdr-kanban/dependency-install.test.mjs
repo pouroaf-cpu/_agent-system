@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSyn
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
-import { dependencyInstallHold, startDependencyInstall, prepareWorktreeEnvironment } from './lib/worktrees.mjs'
+import { dependencyInstallHold, startDependencyInstall, prepareWorktreeEnvironment, refreshExpoRouteTypes } from './lib/worktrees.mjs'
 
 // Running installs are recorded beside the board config, so a restarted board can see them.
 const stateDir = mkdtempSync(join(tmpdir(), 'hkb-deps-state-'))
@@ -156,4 +156,24 @@ test('a card whose node_modules exists but is empty still waits for an install',
   mkdirSync(join(card, 'node_modules'), { recursive: true }) // the junction target was emptied
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { workspacePath: card } }))
   assert.ok(f.hold()?.startsWith(`installing dependencies in ${f.folder}`)) // may queue behind an earlier test's install
+})
+
+// IA97 2026-10-09: stale .expo/types made tsc reject /auth/login after the auth cards landed.
+test('an Expo typed-routes checkout gets router.d.ts regenerated from its route files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hkb-expo-types-'))
+  try {
+    const put = (path, text) => { mkdirSync(join(dir, path, '..'), { recursive: true }); writeFileSync(join(dir, path), text) }
+    put('app.json', JSON.stringify({ expo: { experiments: { typedRoutes: true } } }))
+    put('src/app/index.tsx', '')
+    put('.expo/types/router.d.ts', 'stale')
+    put('node_modules/expo/package.json', '{}')
+    put('node_modules/@expo/cli/package.json', '{}')
+    put('node_modules/@expo/router-server/build/typed-routes.js',
+      "exports.regenerateDeclarations = (out) => setTimeout(() => require('fs').writeFileSync(out + '/router.d.ts', 'routes from ' + process.env.EXPO_ROUTER_APP_ROOT), 10)")
+    assert.equal(refreshExpoRouteTypes(dir), true)
+    assert.equal(readFileSync(join(dir, '.expo/types/router.d.ts'), 'utf8'), `routes from ${join(dir, 'src/app')}`)
+    assert.match(readFileSync(join(dir, 'expo-env.d.ts'), 'utf8'), /expo\/types/)
+    put('app.json', '{"expo":{}}')
+    assert.equal(refreshExpoRouteTypes(dir), false, 'projects without typed routes are left alone')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

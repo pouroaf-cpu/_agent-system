@@ -263,6 +263,26 @@ function prepareDependencies(workspacePath, source) {
 
 export function prepareWorktreeEnvironment(entry) {
   prepareDependencies(entry.workspacePath, entry.integrationWorkspace)
+  refreshExpoRouteTypes(entry.workspacePath)
+  if (entry.integrationWorkspace) refreshExpoRouteTypes(entry.integrationWorkspace) // Planner base runs use it
+}
+
+// Expo typed routes live in gitignored .expo/types/router.d.ts, written only while Expo runs.
+// A checkout without it, or with one from before an auth card added /auth/login, fails tsc on
+// routes that exist (IA97, 2026-10-09). Regenerate it from the route files without starting Expo.
+const ROUTE_TYPES = `const cli = require.resolve('@expo/cli/package.json', { paths: [require.resolve('expo/package.json')] })
+require(require.resolve('@expo/router-server/build/typed-routes', { paths: [cli] })).regenerateDeclarations(process.argv[1], {})`
+export function refreshExpoRouteTypes(workspacePath) {
+  let app
+  try { app = JSON.parse(readFileSync(join(workspacePath, 'app.json'), 'utf8')) } catch { return false }
+  if (app?.expo?.experiments?.typedRoutes !== true) return false
+  const types = join(workspacePath, '.expo', 'types')
+  mkdirSync(types, { recursive: true })
+  if (!existsSync(join(workspacePath, 'expo-env.d.ts'))) writeFileSync(join(workspacePath, 'expo-env.d.ts'), '/// <reference types="expo/types" />\n')
+  const appRoot = ['src/app', 'app'].map(d => join(workspacePath, d)).find(d => existsSync(d))
+  if (!appRoot) return false
+  // ponytail: best effort; a failure leaves the old file and tsc reports it as before
+  return spawnSync(process.execPath, ['-e', ROUTE_TYPES, types], { cwd: workspacePath, env: { ...process.env, EXPO_ROUTER_APP_ROOT: appRoot }, timeout: 60000, stdio: 'ignore' }).status === 0
 }
 
 export function integratedDependencyHold(entry, tasksDir) {
@@ -537,7 +557,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     }
   }
   if (existing) {
-    prepareDependencies(existing.workspacePath, integrationWorkspace)
+    prepareWorktreeEnvironment({ workspacePath: existing.workspacePath, integrationWorkspace })
     const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], planRevision: revision, generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
     const previousAttempt = previousBuilderAttempt(tasksDir, id) && (semanticDirtyFiles(resumed.worktreePath).length > 0 || git(resumed.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== resumed.baseCommit)
     return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false, previousAttempt }
@@ -574,7 +594,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     createdAt: new Date().toISOString(),
   }
   updateEntry(tasksDir, id, entry)
-  prepareDependencies(workspacePath, integrationWorkspace)
+  prepareWorktreeEnvironment({ workspacePath, integrationWorkspace })
   return { git: true, workspacePath, cwd: workspacePath, entry, created: true }
 }
 
