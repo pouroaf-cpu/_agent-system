@@ -43,19 +43,33 @@ try {
   // 127.0.0.1, not localhost: the 05:37Z run's browser got ERR_CONNECTION_REFUSED on localhost.
   const base = `http://127.0.0.1:${PORT}`
   const serverLog = join(OUT, `${stamp}-server.log`)
-  server = spawn(process.execPath, [`--env-file=${ENV}`, 'node_modules/next/dist/bin/next', 'dev', '-H', '127.0.0.1', '-p', String(PORT)], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
-  for (const stream of [server.stdout, server.stderr]) stream.on('data', d => appendFileSync(serverLog, d))
   const logTail = () => { try { return readFileSync(serverLog, 'utf8').trim().split(/\r?\n/).slice(-5).join(' | ') } catch { return '(no server output)' } }
-  let up = false
-  for (let i = 0; i < 60 && !up && server.exitCode === null; i++) { // wait up to 3 min for the first page
-    try { up = (await fetch(base + '/')).status < 500 } catch {}
-    if (!up) await new Promise(r => setTimeout(r, 3000))
+  const startServer = async () => {
+    server = spawn(process.execPath, [`--env-file=${ENV}`, 'node_modules/next/dist/bin/next', 'dev', '-H', '127.0.0.1', '-p', String(PORT)], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+    for (const stream of [server.stdout, server.stderr]) stream.on('data', d => appendFileSync(serverLog, d))
+    let up = false
+    for (let i = 0; i < 60 && !up && server.exitCode === null; i++) { // wait up to 3 min for the first page
+      try { up = (await fetch(base + '/')).status < 500 } catch {}
+      if (!up) await new Promise(r => setTimeout(r, 3000))
+    }
+    if (!up) throw new Error(`dev server did not start: ${logTail()}`)
   }
-  if (!up) throw new Error(`dev server did not start: ${logTail()}`)
+  await startServer()
   // Compile every page once, one at a time, so no spec's goto waits on a first compile.
+  // 2026-10-09: next dev hung at 0% CPU compiling /peptide-tracker and Playwright then ran
+  // against it for hours. A page that hangs gets one fresh server; a second hang ends the run.
   const routes = staticAppRoutes(join(dir, 'app'))
+  let restarted = false
   for (const route of routes) {
-    try { await fetch(base + route, { signal: AbortSignal.timeout(120000) }) } catch {}
+    try { await fetch(base + route, { signal: AbortSignal.timeout(120000) }) } catch (err) {
+      if (err.name !== 'TimeoutError') continue
+      if (restarted) throw new Error(`dev server hung compiling ${route} after a restart: ${logTail()}`)
+      restarted = true
+      appendFileSync(serverLog, `\n[e2e-nightly] ${route} hung 120 s; restarting the dev server\n`)
+      spawnSync('taskkill', ['/pid', String(server.pid), '/t', '/f'])
+      await startServer()
+      try { await fetch(base + route, { signal: AbortSignal.timeout(120000) }) } catch { throw new Error(`dev server hung compiling ${route} after a restart: ${logTail()}`) }
+    }
   }
   const report = join(OUT, `${stamp}.json`)
   const run = spawnSync(process.execPath, ['node_modules/@playwright/test/cli.js', 'test', '--reporter=json', `--workers=${workers}`, `--repeat-each=${repeatEach}`, ...filters],
