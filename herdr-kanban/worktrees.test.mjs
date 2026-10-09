@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
 import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
@@ -77,6 +77,29 @@ test('a completed card commit is validated, integrated serially, and cleaned', (
     assert.equal(readWorktrees(f.tasks)['T-1'].state, 'integrated')
     assert.equal(existsSync(prepared.entry.worktreePath), false)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// I947 (2026-10-09): a plan-check `next dev` left in the checkout held it, the removal
+// failed and the server ran on as a 1.5 GB orphan.
+test('cleanup stops a dev server left running in the card checkout', { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture()
+  let server
+  try {
+    const card = f.addCard('T-1')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'card one\n')
+    git(prepared.workspacePath, 'add', 'app.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    mkdirSync(join(prepared.workspacePath, '.next'))
+    server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: prepared.workspacePath, stdio: 'ignore' })
+    const exited = new Promise((done) => server.once('exit', done))
+    await new Promise((done) => setTimeout(done, 500))
+    f.complete('T-1')
+    reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    await exited
+    assert.equal(readWorktrees(f.tasks)['T-1'].cleaned, true)
+    assert.equal(existsSync(prepared.entry.worktreePath), false)
+  } finally { server?.kill(); rmSync(f.root, { recursive: true, force: true }) }
 })
 
 test('exact overlapping card files are held while unrelated files are free', () => {

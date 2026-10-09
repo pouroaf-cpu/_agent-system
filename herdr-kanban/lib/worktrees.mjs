@@ -13,6 +13,7 @@ import { previousBuilderAttempt } from './card-history.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
 import { isTransient, nextRetry, retryHold, inBackoff, killTree } from './transient.mjs'
 import { fileURLToPath } from 'node:url'
+import { stopServersIn } from './orphan-servers.mjs'
 import { createHash } from 'node:crypto'
 
 const registryPath = (tasksDir) => join(tasksDir, '.board-worktrees.json')
@@ -662,6 +663,10 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
     finish()
     return
   }
+  // A dev server an agent left in the checkout outlives the card and holds the folder, so
+  // the removal fails and the server runs on as an orphan (I947 :3947, 1.5 GB, 2026-10-09).
+  // ponytail: only checkouts that ran Next or Expo are scanned (the scan costs ~2.5 s).
+  if (['.next', '.expo'].some((d) => existsSync(join(entry.worktreePath, d)))) stopServersIn(entry.worktreePath)
   const status = git(entry.worktreePath, ['status', '--porcelain=v1', '--untracked-files=all'], { allowFailure: true })
   if (status.status !== 0) {
     const listed = git(entry.repoRoot, ['worktree', 'list', '--porcelain']).stdout
