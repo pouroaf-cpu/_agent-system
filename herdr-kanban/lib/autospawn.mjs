@@ -575,6 +575,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
   }
   for (const a of spent) doneSince.delete(a.pane_id)
   for (const a of spent) inactiveSince.delete(a.pane_id)
+  const inUse = cardsInUse(agents, readUsage(tasksDir).runs, new Set(spent.map(a => a.pane_id)))
   for (const a of spent) {
     try { await recordUsageFinish({ tasksDir, paneId: a.pane_id, agent: a, status: 'complete', now: new Date(now) }) } catch {}
     const runs = Object.values(readUsage(tasksDir).runs).filter(run => run.paneId === a.pane_id)
@@ -592,12 +593,21 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
       const worktree = readWorktrees(tasksDir)[id]?.worktreePath
       let column = ''
       try { column = findCard(tasksDir, id).column } catch {}
-      if (!worktree || readBindings(tasksDir)[id] || column === 'working') continue
+      if (!worktree || readBindings(tasksDir)[id] || column === 'working' || inUse.has(id)) continue
       const pids = stopServersIn(worktree)
       if (pids.length) herdrLog(`${id}: stopped server(s) ${pids.join(', ')} left running in ${worktree}`)
     }
   }
   return spent.map((a) => a.pane_id)
+}
+
+// Cards another live agent is working on. Its supervisor and claude run with the card
+// checkout as cwd, so stopServersIn there kills it: IA93 (2026-10-09) the Planner's pane
+// closed after the plan checker started and took the checker down mid-run, which then
+// retired as "done without a complete handoff" and re-ran.
+export function cardsInUse(agents, runs, closing) {
+  const live = new Set(agents.filter(a => !closing.has(a.pane_id) && (a.agent_status !== 'done' || isSpawning(a.pane_id))).map(a => a.pane_id))
+  return new Set(Object.values(runs).filter(r => live.has(r.paneId)).flatMap(r => r.cardIds || []))
 }
 
 // Review runs on integrated code: an Auto-review card is surfaced in Review only
