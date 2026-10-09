@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard } from './lib/cards.mjs'
-import { dependencyInstallHold, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall } from './lib/worktrees.mjs'
+import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall } from './lib/worktrees.mjs'
 import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
@@ -82,6 +82,9 @@ test('dependency drift installs in the card workspace after detaching the juncti
   await tick(); settle.fail(new Error('ERESOLVE again')); await tick()
   assert.equal(dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: f.settings }), `dependency install failed twice in ${first.workspacePath}: ERESOLVE again`)
   assert.equal(calls, 2)
+  // The operator moving it out of Owner is the retry: the failures are forgotten (IA120).
+  forgetInstallFailures(f.tasks, card.id)
+  assert.doesNotMatch(String(dependencyInstallHold({ card, projectPath: f.integration, tasksDir: f.tasks, gitSettings: f.settings, install, free: () => 20 })), /failed twice/)
 })
 
 test('a spawn that finds drift keeps the card in Queue installing, never Owner', async t => {

@@ -57,7 +57,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, freeGb, integratedDependencyHold } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, freeGb, integratedDependencyHold, forgetInstallFailures } = await import('./lib/worktrees.mjs')
 const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
@@ -1207,6 +1207,7 @@ const handleRequest = async (req, res) => {
       // A person moving a Planning card with any Planner wait is the answer: lift the hold.
       const wait = before.column === 'planning' && readWorkflow(tasksDirOf(p))[card.id]?.waitFor
       if ((['pou', 'owner'].includes(before.column) || wait) && to !== 'archive') operatorRetry(tasksDirOf(p), card.id, to)
+      if (['pou', 'owner'].includes(before.column) && to !== 'archive') forgetInstallFailures(tasksDirOf(p), card.id)
       if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
       herdrLog(`${card.id} → ${to} (board)`)

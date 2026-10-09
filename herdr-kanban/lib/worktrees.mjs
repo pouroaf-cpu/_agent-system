@@ -379,6 +379,16 @@ function installedIn(folder, root) {
   return Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).every(name => existsSync(join(root, 'node_modules', name, 'package.json')))
 }
 
+// The operator moving a held card out of Owner/Pou is the retry: forget its failed installs, or
+// "failed twice" sent it straight back (IA120 2026-10-09, after the lockfile cause was fixed).
+export function forgetInstallFailures(tasksDir, id, folders = []) {
+  const entry = readWorktrees(tasksDir)[String(id).toUpperCase()]
+  for (const folder of [entry?.workspacePath, entry?.integrationWorkspace, ...folders].filter(Boolean)) {
+    const key = norm(folder)
+    if (!installs.get(key)?.running) installs.delete(key)
+  }
+}
+
 export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings, install = runInstall, free = freeGb, minFreeGb = 5, now = Date.now() }) {
   try {
     const opts = { tasksDir, install, free, minFreeGb, now }
