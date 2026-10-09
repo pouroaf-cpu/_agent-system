@@ -18,16 +18,21 @@ export function ownerReason(text) {
   return text.slice(at).replace(/\*\*Needs you\*\*[^\n]*\n+/, '').replace(/^Needs you:\s*/, '').split(/\n\s*\n/)[0].replace(/\s+/g, ' ').trim().slice(0, 400)
 }
 
-export async function pushover(title, message, env = process.env) {
+// priority 2 = Pushover emergency: repeats every 60 s until acknowledged (max 30 min) and, with
+// Critical Alerts on in the iOS app, sounds through mute and Focus. Only for questions the operator
+// must answer (operator, 2026-10-09); board problems stay at 0.
+export async function pushover(title, message, env = process.env, priority = 0) {
   const token = env.PUSHOVER_APP_TOKEN, user = env.PUSHOVER_USER_KEY
   if (!token || !user) throw new Error('Pushover credentials are not configured')
   const res = await fetch('https://api.pushover.net/1/messages.json', {
-    method: 'POST', body: new URLSearchParams({ token, user, title, message: formatNZText(message), priority: '0' }), signal: AbortSignal.timeout(30000),
+    method: 'POST', body: new URLSearchParams({ token, user, title, message: formatNZText(message), priority: String(priority), ...(priority === 2 ? { retry: '60', expire: '1800' } : {}) }), signal: AbortSignal.timeout(30000),
   })
   if ((await res.json().catch(() => ({})))?.status !== 1) throw new Error(`Pushover did not accept the alert (HTTP ${res.status})`)
 }
 
-export async function alertOwnerCards({ project, tasksDir, send = pushover }) {
+export const critical = (title, message) => pushover(title, message, undefined, 2)
+
+export async function alertOwnerCards({ project, tasksDir, send = critical }) {
   const path = join(tasksDir, STATE)
   const first = !existsSync(path)
   const alerted = first ? {} : JSON.parse(readFileSync(path, 'utf8'))

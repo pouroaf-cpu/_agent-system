@@ -7,7 +7,6 @@ import { formatNZTime, formatNZText } from './nz-time.mjs'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { herdrLog } from './herdr.mjs'
-import { pushover } from './owner-alerts.mjs'
 import { readBoard } from './cards.mjs'
 import { laneEnteredAt } from './card-history.mjs'
 
@@ -38,7 +37,7 @@ export async function notifyManagerException({
   detail,
   now = Date.now(),
   cooldownMs = COOLDOWN_MS,
-  send = pushover,
+  send = async () => {}, // inbox only: no board Pushovers to the operator (2026-10-09)
   inbox = join(boardRoot, '..', '_roles', 'KANBAN_MANAGER-INBOX.md'),
   log = herdrLog,
 }) {

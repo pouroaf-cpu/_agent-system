@@ -3,7 +3,6 @@ import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:f
 import { join } from 'node:path'
 import { renameSync } from './fs-retry.mjs'
 import { historyFailures } from './metrics.mjs'
-import { pushover } from './owner-alerts.mjs'
 import { failedTests, readTestRuns } from './test-runs.mjs'
 
 export const ALERT_THRESHOLDS = {
@@ -21,7 +20,9 @@ function runFailures(run) {
   return run.failures || []
 }
 
-export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), inboxPath = INBOX, send = pushover, append = appendFileSync }) {
+// Board problems go to the Kanban Manager's inbox only; the operator's phone gets questions, not
+// board alerts (operator, 2026-10-09).
+export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), inboxPath = INBOX, send = async () => {}, append = appendFileSync }) {
   const limits = ALERT_THRESHOLDS
   const events = await historyFailures(tasksDir, now - limits.cardWindowMs, now)
   const triggers = []

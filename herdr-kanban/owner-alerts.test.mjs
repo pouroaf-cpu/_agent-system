@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
+import { alertOwnerCards, ownerReason, pushover } from './lib/owner-alerts.mjs'
 
 test('each card that lands in Pou alerts once; first run summarises; re-entry alerts again', async t => {
   const root = mkdtempSync(join(tmpdir(), 'owner-alerts-')), tasks = join(root, 'TASKS')
@@ -26,4 +26,16 @@ test('each card that lands in Pou alerts once; first run summarises; re-entry al
 
 test('ownerReason picks the latest plain question', () => {
   assert.equal(ownerReason('x\n**Needs you**\n\nFive failures. Choose.\n\nmore'), 'Five failures. Choose.')
+})
+
+// Operator 2026-10-09: questions for the operator go as emergency (critical) alerts, which Pushover
+// rejects without retry and expire.
+test('a critical alert sends emergency priority with retry and expire', async t => {
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => { sent.push(Object.fromEntries(body)); return { status: 200, json: async () => ({ status: 1 }) } })
+  const env = { PUSHOVER_APP_TOKEN: 't', PUSHOVER_USER_KEY: 'u' }
+  await pushover('q', 'm', env, 2)
+  await pushover('board', 'm', env)
+  assert.deepEqual([sent[0].priority, sent[0].retry, sent[0].expire], ['2', '60', '1800'])
+  assert.deepEqual([sent[1].priority, sent[1].retry], ['0', undefined])
 })
