@@ -239,6 +239,9 @@ try {
   if (approvalWait) target = 'owner'
   if (reviewClaim || current.column === 'review') assertReviewHandoff(reviewRoot, tasksDir, current.id, reviewClaim)
   if (reviewClaim && !['pass', 'rework', 'owner', 'audit', 'issue'].includes(verb)) fail('Reviewer claim permits only scoped review handoffs')
+  // Review runs on integrated code: an agent's `hkb review` sent build-ready I960 from Planned
+  // straight to Review (2026-10-09), where it sat 3 h with no build ('integration receipt required').
+  if (['review', 'move'].includes(verb) && target === 'review' && ['planning', 'planned', 'queue'].includes(current.column)) fail(`${current.id} is in ${current.column} and has not been built; Review needs integrated code. Plan checker: hkb plancheck. Planner: hkb move ${current.id} planned.`)
   previousColumn = current.column
   let auditIntake = false
   if (verb === 'audit' || (current.audit && verb === 'owner' && /audit report ready/i.test(note))) {

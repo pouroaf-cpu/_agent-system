@@ -149,3 +149,15 @@ test('hkb found sends an out-of-scope finding to the Kanban Manager inbox and le
     assert.equal(findCard(tasks, 'T-1').column, 'working')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+// I960 (2026-10-09): an agent's `hkb review` sent a build-ready card from Planned to Review,
+// where it sat 3 h with no build because Review needs an integration receipt.
+test('an unbuilt card cannot be handed to Review', t => {
+  const tasks = board(t, 'backlog', 'T-1', PLAN) // the Planned lane's folder
+  for (const args of [['review', 'T-1'], ['move', 'T-1', 'review']]) {
+    const r = hkb(tasks, ...args)
+    assert.notEqual(r.status, 0)
+    assert.match(r.stderr, /has not been built/)
+  }
+  assert.equal(findCard(tasks, 'T-1').column, 'planned')
+})
