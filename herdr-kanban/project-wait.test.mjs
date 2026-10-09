@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wakeDecision, digest } from './scripts/project-wait.mjs'
+import { wakeDecision, digest, stuckCards } from './scripts/project-wait.mjs'
 
 test('project waiter wakes only for Owner/Pou and stuck; ASK/FOUND wait for the hourly digest', () => {
   const before = { project: 'Injectbuddy', cards: [], inbox: [], stuck: 1 }
@@ -12,6 +12,7 @@ test('project waiter wakes only for Owner/Pou and stuck; ASK/FOUND wait for the 
     assert.equal(wakeDecision({ ...before, cards: [card] }, { ...before, cards: [card] }), null)
   }
   assert.equal(wakeDecision(before, { ...before, stuck: 2 }), 'STUCK Injectbuddy=2')
+  assert.equal(stuckCards([{ id: 'I980', lane: 'planned', minutes: 72, reason: 'Plan check pending' }, { id: 'I9', lane: 'queue', minutes: 61 }]), 'I980 planned 72m: Plan check pending; I9 queue 61m: no reason given')
   assert.equal(wakeDecision(before, { ...before, stuck: 0 }), null)
   assert.equal(wakeDecision(before, { ...before, stuck: null }), null)
   assert.equal(digest(3, 3, 'x.md'), 'RE-ARM')

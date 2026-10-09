@@ -26,6 +26,17 @@ export async function settled(read, from, quietMs = 120e3, capMs = 600e3, tickMs
 
 export const digest = (before, now, file) => now > before ? `INBOX ${now - before} new ASK/FOUND line(s) in ${file}: read and handle them` : 'RE-ARM'
 
+// A STUCK wake names each card, its lane, how long and why, so the chat starts on the card
+// instead of looking it up (operator, 2026-10-10: "STUCK Injectbuddy=1" alone was useless).
+export const stuckCards = cards => cards.map(c => `${c.id} ${c.lane} ${c.minutes}m: ${c.reason || 'no reason given'}`).join('; ')
+export async function stuckDetail(projects) {
+  try {
+    const { cards } = await (await fetch('http://127.0.0.1:7777/api/stuck?minutes=60', { signal: AbortSignal.timeout(30000) })).json()
+    const listed = stuckCards(cards.filter(c => projects.includes(c.project)))
+    return listed ? ` (${listed})` : ''
+  } catch { return '' }
+}
+
 export function wakeDecision(before, now) {
   const added = now.cards.filter(c => !before.cards.includes(c))
   if (added.length) return `OWNER/POU ${added.join(', ')}`
@@ -62,7 +73,7 @@ async function main() {
     await new Promise(r => setTimeout(r, 10000))
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
     const wake = wakeDecision(before, now)
-    if (wake) { console.log(wake); return }
+    if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
     if (now.stuck == null) now.stuck = before.stuck
     before = now // after a trim or a card leaving, its next arrival must still wake
     if (Date.now() - started > LIFETIME_MS) { console.log(digest(inboxAtStart, lines(inbox).length, inbox)); return }

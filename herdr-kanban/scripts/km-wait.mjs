@@ -9,7 +9,7 @@
 // Re-run it after every wake.
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { settled } from './project-wait.mjs'
+import { settled, stuckDetail } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -53,7 +53,7 @@ for (let tick = 0; ; tick++) {
       for (const p of Object.keys(rising)) if (!worse.includes(p)) delete rising[p]
       for (const p of worse) rising[p] = (rising[p] || 0) + 1
       const confirmed = worse.filter(p => rising[p] >= 4)
-      if (confirmed.length) done(`STUCK ${confirmed.map(p => `${p}=${now[p]}`).join(', ')}`)
+      if (confirmed.length) done(`STUCK ${confirmed.map(p => `${p}=${now[p]}`).join(', ')}${await stuckDetail(confirmed)}`)
       if (!worse.length) stuckBefore = now
     }
   }
