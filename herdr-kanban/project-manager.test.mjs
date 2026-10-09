@@ -168,6 +168,9 @@ test('summary has lane counts, the oldest card, owner ids and the stuck count', 
   assert.deepEqual(s.quotaBlocks, {})
   assert.equal(s.integrationAheadOfMaster, null) // not a Git project
   assert.ok(!('release' in s))
+  const text = await (await fetch(base + '/api/summary?format=text')).text()
+  assert.match(text, new RegExp(`board off.*
+.*Proj: paused · owner 1, planning 2 · Owner ${old.id} · 1 stuck · 1 waiting · oldest ${old.id} owner`))
 })
 
 test('summary and board share card, file, decision and slot waits, separate from stuck', async () => {

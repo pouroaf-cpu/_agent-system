@@ -422,11 +422,37 @@ function projectSummary(project) {
     owner: board.owner.map(c => c.id),
     pou: board.pou.map(c => c.id),
     stuck: cards.filter(c => isStuck(c, 60)).length,
+    agents: cards.filter(c => c.agent).length,
     waiting: cards.filter(c => c.on).length,
     waitingCards: cards.filter(c => c.on).map(c => ({ id: c.id, lane: c.lane, on: c.on })),
     quotaBlocks: activeQuota(HERE),
     integrationAheadOfMaster: integrationAheadOfMaster(project),
   }
+}
+
+// One short line per project for chats (operator, 2026-10-10): the board assembles the
+// status so a chat reads ?format=text instead of the full JSON.
+function summaryText(summaries) {
+  const max = config.maxConcurrentAgents, hours = m => m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`
+  const idle = [], lines = [`${formatNZTime()} board ${max > 0 ? `on, ${max} slots` : 'off (night or paused)'}, ${summaries.reduce((n, s) => n + s.agents, 0)} agents`]
+  for (const s of summaries) {
+    if (!Object.values(s.lanes).some(Boolean)) { idle.push(s.project + (s.paused ? ' (paused)' : '')); continue }
+    const parts = [Object.entries(s.lanes).filter(([, n]) => n).map(([lane, n]) => `${lane} ${n}`).join(', ')]
+    if (s.paused) parts.unshift('paused')
+    if (s.agents) parts.push(`${s.agents} agent${s.agents > 1 ? 's' : ''}`)
+    if (s.pou.length) parts.push(`Pou ${s.pou.join(' ')}`)
+    if (s.owner.length) parts.push(`Owner ${s.owner.join(' ')}`)
+    if (s.stuck) parts.push(`${s.stuck} stuck`)
+    const decisions = s.waitingCards.filter(c => c.on === 'decision').map(c => c.id)
+    if (s.waiting) parts.push(`${s.waiting} waiting${decisions.length ? ` (decision: ${decisions.join(' ')})` : ''}`)
+    if (s.oldestCard) parts.push(`oldest ${s.oldestCard.id} ${s.oldestCard.lane} ${hours(s.oldestCard.minutes)}`)
+    if (s.release) parts.push('release')
+    lines.push(`${s.project}: ${parts.join(' · ')}`)
+  }
+  if (idle.length) lines.push(`Empty: ${idle.join(', ')}`)
+  const quota = Object.entries(summaries[0]?.quotaBlocks ?? {}).map(([engine, q]) => `${engine} until ${formatNZTime(q.until)}`)
+  if (quota.length) lines.push(`Quota held: ${quota.join(', ')}`)
+  return lines.join('\n') + '\n'
 }
 
 // --- the spawner -----------------------------------------------------------
@@ -1362,6 +1388,10 @@ const handleRequest = async (req, res) => {
       const only = url.searchParams.get('project')
       if (only && !config.projects.includes(only)) throw new Error('Unknown project')
       const projects = (only ? [only] : config.projects).filter(p => existsSync(tasksDirOf(p)))
+      if (url.pathname === '/api/summary' && url.searchParams.get('format') === 'text') {
+        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+        return res.end(summaryText(projects.map(projectSummary)))
+      }
       if (url.pathname === '/api/summary') return json(res, 200, { ok: true, projects: projects.map(projectSummary) })
       const minutes = Number(url.searchParams.get('minutes') ?? 60)
       if (!Number.isFinite(minutes) || minutes < 0) throw new Error('minutes must be a number of minutes, 0 or more')
