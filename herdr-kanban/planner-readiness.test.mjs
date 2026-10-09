@@ -64,6 +64,7 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
   try {
     mkdirSync(join(tasks, 'planning'), { recursive: true })
     const path = join(tasks, 'planning', 'I556-approved-job.md')
+    mkdirSync(join(tasks, '.evidence', 'I556'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'I556', 'base-run.log'), 'AC1 FAIL: handleKeyDown is not exported')
     const plan = `# I556 — lane check\n**Workflow:** card-owned\n${realistic}`
       .replaceAll('` —', '` (new) —')
       .replace('Changes:', '**Callers checked:** none\n**Base check:** regression fails on base\nChanges:')
@@ -112,7 +113,7 @@ console.log('Planner readiness validation passed')
 
 // Plan check at Planner handoff: Files must exist (unless marked new) and callers must be listed.
 {
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
@@ -136,7 +137,23 @@ console.log('Planner readiness validation passed')
     const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     let result = hkb()
     assert.notEqual(result.status, 0); assert.match(result.stderr, /src\/missing\.mjs does not exist/)
-    writeFileSync(card, `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')}\n## Current feedback\nNeeds you: an old question from Owner\nHistory entry: x\n`)
+    const ready = `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')}\n## Current feedback\nNeeds you: an old question from Owner\nHistory entry: x\n`
+    // Base run lines must come from a saved run of the current Check (I976/IA97, 2026-10-10).
+    const evidence = join(tasks, '.evidence', 'T-1'), log = join(evidence, 'base-run.log')
+    writeFileSync(card, ready)
+    assert.match(hkb().stderr, /no saved base run at .*base-run\.log/)
+    mkdirSync(evidence, { recursive: true }); writeFileSync(log, 'AC1 FAIL: something else\n')
+    assert.match(hkb().stderr, /## Base run AC1 not found in .*base-run\.log/)
+    writeFileSync(log, '\x1b[31mAC1 FAIL:\x1b[0m  handleKeyDown is not exported\n')
+    const later = new Date(Date.now() + 5000)
+    writeFileSync(join(evidence, 'check.mjs'), '// edited'); utimesSync(join(evidence, 'check.mjs'), later, later)
+    assert.match(hkb().stderr, /check\.mjs changed after base-run\.log/)
+    utimesSync(log, new Date(later.getTime() + 1000), new Date(later.getTime() + 1000))
+    writeFileSync(card, ready.replace('AC1 FAIL: handleKeyDown is not exported', 'AC1 FAIL: TypeError: x is not a function'))
+    assert.match(hkb().stderr, /AC1 is a crash or timeout.*AC1 cannot run/)
+    writeFileSync(card, ready.replace('## Prerequisites', '## Prerequisites\n- run node TASKS/.evidence/T-1/check.mjs'))
+    assert.match(hkb().stderr, /TASKS\/\.evidence\/T-1\/check\.mjs is a relative path.*Write it as .*\/TASKS\/\.evidence\/T-1\/check\.mjs/)
+    writeFileSync(card, ready)
     result = hkb()
     assert.equal(result.status, 0, result.stderr)
     // The build-ready plan answers the old Owner question (Injectbuddy I165, I178).

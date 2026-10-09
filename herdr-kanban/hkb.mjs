@@ -21,9 +21,9 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 // `owner` is a decision, credential, asset or judgement call only the human can
 // supply — no amount of agent effort will resolve it.
 
-import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
@@ -91,6 +91,30 @@ function planCheck(card) {
   const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
   if (dirty) fail(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
   return { planWorkspace, sharedFiles: gitSettings?.sharedFiles }
+}
+
+// Plan checks since 2026-10-09: 18 FAIL, 15 PASS. Most Base run lines came from an older Check
+// (I976/I979/IA100 crashed on base) or a relative TASKS/.evidence path card checkouts lack (IA97/IA98).
+function baseRunCheck(card) {
+  const text = readFileSync(card.path, 'utf8')
+  const section = (name) => text.match(new RegExp(`^## ${name}[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))?.[1] || ''
+  const slash = (p) => p.replaceAll('\\', '/')
+  const rel = ['Files', 'Prerequisites', 'Implementation plan'].map(section).join('\n').match(/(?<![\w:/.\\-])TASKS[\\/]\.evidence[\\/][^\s`'")]*/)?.[0]
+  if (rel) fail(`${rel} is a relative path, but card checkouts have no TASKS/ folder, so the Builder and plan check cannot find it. Write it as ${slash(join(tasksDir, rel.slice(6)))} everywhere in the plan.`)
+  const lines = [...section('Base run').matchAll(/^[ \t]*(?:[-*][ \t]*)?(AC\d+)[ \t]+FAIL[ \t]*:[ \t]*(.+)$/gim)]
+  if (!lines.length) return
+  const dir = join(tasksDir, '.evidence', card.id), logPath = join(dir, 'base-run.log')
+  const how = `Run the Check on the integration checkout again and save all it prints: <check> 2>&1 | tee ${slash(logPath)} (PowerShell: <check> *>&1 | Tee-Object ${slash(logPath)}), then copy each ## Base run line from that file.`
+  const crashed = lines.find(([, , said]) => /timeout \d+ ?ms exceeded|TypeError|ReferenceError|SyntaxError|Cannot find module|is not a function|is not defined/i.test(said))
+  if (crashed) fail(`## Base run ${crashed[1]} is a crash or timeout, not that AC's own assertion. Fix the Check so it measures ${crashed[1]}; if it tests a file this card creates, write '${crashed[1]} cannot run: <why>'. ${how}`)
+  const saved = statSync(logPath, { throwIfNoEntry: false })
+  if (!saved) fail(`${card.id} has no saved base run at ${slash(logPath)}. ${how}`)
+  const newer = readdirSync(dir).find(f => /\.(m?js|cjs|ts|ps1|py|sh)$/i.test(f) && statSync(join(dir, f)).mtimeMs > saved.mtimeMs)
+  if (newer) fail(`${newer} changed after base-run.log was saved, so the Base run lines may not be from this Check. ${how}`)
+  const raw = readFileSync(logPath), flat = (s) => s.replace(/\x1b\[[0-9;]*m|[`*]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+  const log = flat(raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8'))
+  const missing = lines.filter(([, , said]) => !log.includes(flat(said).slice(0, 60))).map(m => m[1])
+  if (missing.length) fail(`## Base run ${missing.join(', ')} not found in ${slash(logPath)}. ${how}`)
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
@@ -376,6 +400,8 @@ try {
   3. The Check measures every Acceptance criterion and can reach it (sign-in state, env vars, dev server or webServer config it needs); ## Base run has its output line for each AC, failing on that AC's own assertion.
   4. The Check finds the card by its ID (hkb show), never by a TASKS/<lane>/ path, and gives the same result on a second run.`)
   }
+  // After the self-check and plan text, so a wrong path is named before the saved base run is asked for.
+  if (check.planWorkspace && current.cardOwned) { validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }); baseRunCheck(current) }
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (verb === 'covered') {

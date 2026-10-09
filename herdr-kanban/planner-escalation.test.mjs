@@ -73,6 +73,8 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+// Planner handoffs need a saved base run holding each Base run line.
+const saveBaseRun = (tasks) => { mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 FAIL: helper() returned 0, expected 1') }
 const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
@@ -102,7 +104,7 @@ Stop rules: stop if src/app.mjs already exists.
 ## Outcome checks
 AC1 | src/app.mjs helper() | node --test test/app.test.mjs passes | return 0 and the check fails
 ## Base run
-AC1 FAIL: Cannot find module src/app.mjs
+AC1 FAIL: helper() returned 0, expected 1
 ## Prerequisites
 Existing Node runtime; no additional access.
 `
@@ -111,7 +113,7 @@ test('a plan accepted into Planned clears the escalation flag', () => {
   const root = mkdtempSync(join(tmpdir(), 'planner-escalation-clear-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN)
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN); saveBaseRun(tasks)
     updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-5-5', at: 'x' } })
     const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
@@ -132,7 +134,7 @@ test('a Planner handoff to Planned is refused once with the self-check, then acc
     assert.match(first.stderr, /self-check before T-1 leaves planning/)
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
     assert.match(handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned').stderr, /## Base run needs one line per AC.*Missing: AC1/)
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy)
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy); saveBaseRun(tasks)
     const second = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
     assert.equal(second.status, 0, second.stderr)
     assert.equal(findCard(tasks, 'T-1').column, 'planned')
