@@ -737,8 +737,10 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
 
 export async function autoPlanCheck({ mission, project, tasksDir, reviewRoot, inventory, spawn = spawnReviewer, ...options }) {
   holdContexts.set(project, { tasksDir, projectPath: options.projectPath, gitSettings: options.gitSettings })
-  planHolds.set(project, {})
-  if (!readBoard(tasksDir).planned.some(needsPlanCheck)) return null
+  // Replace the holds only once this pass has computed them: clearing them first left a window
+  // (the awaits below) where the stall watchdog saw a file-held Planned card with no hold and
+  // sent it to Owner (Injectbuddy I957, 2026-10-09).
+  if (!readBoard(tasksDir).planned.some(needsPlanCheck)) { planHolds.set(project, {}); return null }
   const claims = syncReviewClaims(reviewRoot, await inventory())
   const board = readBoard(tasksDir)
   const held = {}
