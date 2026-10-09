@@ -698,6 +698,8 @@ export function needsPlanCheck(card) {
   return /\bcheck(?: command)?\s*:?/i.test(plan)
 }
 
+export const PLAN_ISSUES = ['wrong-path', 'stale-plan', 'check-broken', 'check-unreachable', 'check-passes-on-base', 'check-flaky', 'other']
+
 export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict, evidence }) {
   const card = findCard(tasksDir, cardId)
   const claim = reviewClaimFor(reviewRoot, tasksDir, card.id)
@@ -719,9 +721,12 @@ export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict
     return result
   }
   const reason = `Plan check: ${evidence.trim()}`
+  // Each FAIL is tagged so repeat plan mistakes can be tallied and fixed at the Planner
+  // (scripts/plan-check-issues.mjs; operator 2026-10-09). An unknown tag still fails the plan.
+  const issue = verdict === 'FAIL' ? (PLAN_ISSUES.find((t) => evidence.trim().toLowerCase().startsWith(`${t}:`)) || 'other') : undefined
   // Planned -> Planning is a Planner correction, never a failed Builder attempt.
   const moved = moveCard(tasksDir, card.id, verdict === 'PASS' ? 'queue' : 'planning', { intake: true })
-  appendHistory(tasksDir, card.id, { event: 'plan-check', stage: 'plancheck', verdict, reason, claimId })
+  appendHistory(tasksDir, card.id, { event: 'plan-check', stage: 'plancheck', verdict, reason, claimId, ...(issue ? { issue } : {}) })
   updateWorkflow(tasksDir, card.id, { planCheck: { verdict, reason, claimId, at: new Date().toISOString() }, operational: null, startFailure: null,
     ...(verdict === 'FAIL' ? { correction: { category: 'planning', note: reason } } : {}) })
   if (verdict === 'FAIL') {
