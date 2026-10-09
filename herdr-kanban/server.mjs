@@ -1622,6 +1622,16 @@ async function startPollers() {
     if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
     const stale = stopStaleE2eServers()
     if (stale.length) herdrLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
+    // A cleanup deferred at integration was only retried while the card sat in Completed or
+    // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
+    for (const project of config.projects) {
+      try {
+        const tasksDir = tasksDirOf(project), board = readBoard(tasksDir)
+        const live = new Set([...board.completed, ...board.review].map(c => c.id))
+        const onlyIds = Object.values(readWorktrees(tasksDir)).filter(e => e.state === 'integrated' && !e.cleaned && !live.has(e.cardId)).map(e => e.cardId)
+        if (onlyIds.length) logIntegrationResults(project, reconcileCompletedWorktrees({ tasksDir, onlyIds }))
+      } catch (err) { herdrLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
+    }
   }, 10 * 60000)
 }
 

@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -100,6 +100,25 @@ test('cleanup stops a dev server left running in the card checkout', { skip: pro
     assert.equal(readWorktrees(f.tasks)['T-1'].cleaned, true)
     assert.equal(existsSync(prepared.entry.worktreePath), false)
   } finally { server?.kill(); rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('an integrated checkout Git removed except a held build cache is cleaned later', () => {
+  const f = fixture()
+  try {
+    const card = f.addCard('T-1')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'card one\n')
+    git(prepared.workspacePath, 'add', 'app.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    f.complete('T-1')
+    reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    // What a server holding .next leaves: Git metadata gone, the cache still on disk.
+    mkdirSync(join(prepared.entry.worktreePath, '.next', 'server'), { recursive: true })
+    writeFileSync(join(prepared.entry.worktreePath, '.next', 'server', 'manifest.json'), '{}')
+    updateWorktree(f.tasks, 'T-1', { cleaned: false })
+    assert.deepEqual(reconcileCompletedWorktrees({ tasksDir: f.tasks, onlyIds: ['T-1'] }).map(r => r.status), ['cleaned'])
+    assert.equal(existsSync(prepared.entry.worktreePath), false)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
 test('exact overlapping card files are held while unrelated files are free', () => {

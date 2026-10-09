@@ -677,6 +677,16 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
     // left by Windows is recoverable after the finished session releases it.
     // A tree of empty folders holds nothing (Tradeflow T-35 after a forced remove;
     // Injectbuddy I238 before integration).
+    // A build cache or install a running server held is regenerable once the commit is
+    // integrated (I947, I183 kept .next; IA107 kept part of node_modules).
+    if (integrated) {
+      for (const name of ['.next', 'node_modules']) {
+        const path = join(entry.worktreePath, name)
+        if (!existsSync(path)) continue
+        if (lstatSync(path).isSymbolicLink()) unlinkSync(path)
+        else rmSync(path, { recursive: true, force: true, maxRetries: 3 })
+      }
+    }
     if (!onlyEmptyDirs(entry.worktreePath)) throw new Error('Residual worktree files require inspection; preserved')
     removeEmptyResidue(entry.worktreePath)
     finishRegisteredRemoval(entry, integrated)
