@@ -1,5 +1,5 @@
 import { formatNZTime, formatNZText } from './nz-time.mjs'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -15,6 +15,23 @@ export function appendHistory(tasksDir, id, event) {
   const entry = { ...event, id: randomUUID(), at: new Date().toISOString(), run: event.run || process.env.HERDR_AGENT_SESSION || null, agent: event.agent || process.env.HERDR_AGENT_NAME || 'board' }
   appendFileSync(path, JSON.stringify(entry) + '\n')
   return entry
+}
+// The card an earlier `hkb found` in the last 3 days came from when this finding quotes the
+// same code snippet. I967, I968 and I983 each sent the same 'rounded-lgborder' typo to the
+// manager's phone within 20 min (2026-10-09).
+export function repeatedFinding(tasksDir, finding, now = Date.now()) {
+  const quotes = [...finding.matchAll(/['`]([^'`\n]{8,})['`]/g)].map(m => m[1])
+  const dir = join(tasksDir, '.history')
+  if (!quotes.length || !existsSync(dir)) return null
+  for (const file of readdirSync(dir)) {
+    if (statSync(join(dir, file)).mtimeMs < now - 3 * 864e5) continue
+    for (const line of readFileSync(join(dir, file), 'utf8').split('\n')) {
+      if (!line.includes('"event":"found"')) continue
+      const e = JSON.parse(line)
+      if (Date.parse(e.at) >= now - 3 * 864e5 && e.to !== 'duplicate' && quotes.some(q => e.note?.includes(q))) return file.replace(/\.jsonl$/, '')
+    }
+  }
+  return null
 }
 // T-147: a Builder rewrote its whole card and dropped Files, plan and criteria.
 // A handoff must keep every required section that had content in the board's last

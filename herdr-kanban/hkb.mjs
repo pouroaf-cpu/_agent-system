@@ -33,7 +33,7 @@ import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './
 import { approvedManagedModel } from './lib/herdr.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
-import { appendHistory, writeCurrentFeedback, repairHandoffSections } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback, repairHandoffSections, repeatedFinding } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -122,6 +122,12 @@ if (verb === 'found') {
   if (!id || !finding) fail('found needs the card and the finding with its evidence: hkb found [--board] T-02 "e2e/x.spec.ts fails on base too: ..."')
   const card = findCard(tasksDir, id)
   const project = basename(dirname(tasksDir))
+  const earlier = repeatedFinding(tasksDir, finding)
+  if (earlier) {
+    appendHistory(tasksDir, card.id, { event: 'found', note: finding, to: 'duplicate', of: earlier })
+    console.log(`hkb: ${earlier} already reported this finding; not sent again. Carry on with your card`)
+    process.exit(0)
+  }
   const to = tellManager(`FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}`, toBoard)
   appendHistory(tasksDir, card.id, { event: 'found', note: finding, to })
   activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: `${finding} (to ${to})` })
