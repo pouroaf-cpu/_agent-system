@@ -4,7 +4,7 @@
 import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
 import { isHeadless } from './headless.mjs'
 import { backendFor } from './agent-backend.mjs'
-import { workerPrompt, paneLabel, agentName, isCodex } from './prompt.mjs'
+import { workerPrompt, paneLabel, agentName, isCodex, TEST_DATA_RULE } from './prompt.mjs'
 import { readBindings, unbind } from './bindings.mjs'
 import { readBoard, findCard, moveCard, columnByKey, needsBrowser } from './cards.mjs'
 import { appendHistory, writeCurrentFeedback } from './card-history.mjs'
@@ -343,7 +343,7 @@ export async function spawnForCard({
   // being sent. --wait makes herdr confirm the agent actually started working.
   try {
     const environment = gitSettings?.envFile
-      ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Signed-in check scripts (DEVTOOLS_TEST_EMAIL) load only .env.devtools.local from the project folder, never together with this envFile: both define the test account and the last --env-file wins. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing.`
+      ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Signed-in check scripts (DEVTOOLS_TEST_EMAIL) load only .env.devtools.local from the project folder, never together with this envFile: both define the test account and the last --env-file wins. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing. ${TEST_DATA_RULE}`
       : ''
     await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, previousAttempt: prepared.previousAttempt, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
   } catch (err) {

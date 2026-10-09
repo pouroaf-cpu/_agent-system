@@ -10,7 +10,7 @@ import { createCard, findCard, moveCard } from './lib/cards.mjs'
 import { readCardPlanners, saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { appendHistory, historyPath } from './lib/card-history.mjs'
-import { plannerPrompt } from './lib/prompt.mjs'
+import { plannerPrompt, planCheckerPrompt, reviewerPrompt } from './lib/prompt.mjs'
 
 function fixture(t, lane = 'archive') {
   const dir = mkdtempSync(join(tmpdir(), 'planner-covered-'))
@@ -39,6 +39,8 @@ for (const lane of ['archive', 'completed', 'review']) test(`covered archives a 
   for (const amend of [undefined, 'wrong path']) assert.match(plannerPrompt({ cards: [card], projectPath: dir, boardRoot: dir, tasksDir: dir, plannerAssignment: 'a1', amend }), /covered/)
   // IA97: the Planner is told the approved envFile, in both modes.
   for (const amend of [undefined, 'wrong path']) assert.match(plannerPrompt({ cards: [card], projectPath: dir, boardRoot: dir, tasksDir: dir, plannerAssignment: 'a1', amend, envFile: 'C:/x/.env.devtools.local' }), /--env-file='C:\/x\/\.env\.devtools\.local'/)
+  // Operator 2026-10-10: Planners, checkers and Reviewers may change test-account data without asking.
+  for (const prompt of [plannerPrompt, planCheckerPrompt, reviewerPrompt]) assert.match(prompt({ cards: [card], projectPath: dir, boardRoot: dir, tasksDir: dir, plannerAssignment: 'a1', envFile: 'C:/x/.env' }), /may add, edit and delete the dev\/test account/)
 })
 
 for (const covering of ['I858', 'I999']) test(`covered refuses an unfinished or missing covering card ${covering}`, t => {
