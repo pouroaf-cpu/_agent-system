@@ -168,6 +168,13 @@ console.log('Planner readiness validation passed')
     const { findCard } = await import('./lib/cards.mjs')
     const planned = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
     assert.doesNotMatch(planned, /^Needs you:/m); assert.match(planned, /^Resolved:/m)
+    // A re-plan also answers a Builder's [planning] kick-back (I994, 2026-10-10).
+    rmSync(findCard(tasks, 'T-1').path)
+    writeFileSync(card, ready.replace('Needs you: an old question from Owner', 'Kicked back: [planning] the check cannot pass as written'))
+    result = hkb()
+    assert.equal(result.status, 0, result.stderr)
+    const replanned = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
+    assert.doesNotMatch(replanned, /^Kicked back:/m); assert.match(replanned, /^Resolved: .*run the Check yourself/m)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
 

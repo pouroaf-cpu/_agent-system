@@ -455,6 +455,12 @@ else if (HEADING[verb]) {
 else if (previousColumn === 'planning' && ['planned', 'queue'].includes(target) && /^## Current feedback\r?\nNeeds you:/m.test(readFileSync(card.path, 'utf8'))) {
   writeCurrentFeedback(tasksDir, card, 'Resolved', 'a Planner made this card build-ready, so the earlier question no longer applies.\n')
 }
+// The same for a Builder's [planning] kick-back the Planner has now answered: left as the
+// current feedback, I994's next Builder re-raised the already-fixed blocker from the old
+// builder-run.log in 43 seconds without running the corrected Check (2026-10-10).
+else if (previousColumn === 'planning' && ['planned', 'queue'].includes(target) && /^## Current feedback\r?\nKicked back: \[planning\]/m.test(readFileSync(card.path, 'utf8'))) {
+  writeCurrentFeedback(tasksDir, card, 'Resolved', 'a Planner re-planned this card after the last [planning] kick-back. That blocker, any earlier Builder result under ## Evidence and any builder-run.log in the evidence folder are history. The plan and Check above are current: run the Check yourself before reporting a blocker.\n')
+}
 
 const binding = readBindings(tasksDir)[card.id]
 appendHistory(tasksDir, card.id, { event: 'handoff', stage: previousColumn, outcome: verb, note, run: binding?.agent_session, agent: binding?.name, text: readFileSync(card.path, 'utf8') })
