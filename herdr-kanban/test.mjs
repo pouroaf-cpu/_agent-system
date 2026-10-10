@@ -2435,8 +2435,10 @@ test('a Codex agent whose card does not browse starts without browser MCPs', () 
 })
 
 test('Claude board agents start with only the used built-ins, no skills, and MCPs only for browser cards', () => {
-  const lean = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
+  const lean = agentStartArgs({ name: 'b-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
   assert.equal(lean[lean.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop')
+  const planner = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
+  assert.equal(planner[planner.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop,Agent', 'the plan pre-check needs a subagent')
   assert.ok(lean.includes('--disable-slash-commands') && lean.includes('--strict-mcp-config'))
   assert.ok(!lean.includes('--mcp-config'), 'no MCP servers at all for a non-browser card')
   const browsing = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude' })
