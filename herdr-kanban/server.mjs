@@ -1234,7 +1234,10 @@ const handleRequest = async (req, res) => {
       const tasksDir = tasksDirOf(p), current = findCard(tasksDir, id)
       const lockBlockers = ['working', 'review', 'completed'].includes(current.column) && !!(readBindings(tasksDir)[current.id] || reviewClaimFor(REVIEW_ROOT, tasksDir, current.id))
       const { card, changes } = updateCard(tasksDir, id, { priority, addBlockedBy, removeBlockedBy, note }, { lockBlockers })
-      activity(p, card.id, 'update', `${changes.join('; ')} (API)`)
+      const waitFor = readWorkflow(tasksDir)[card.id]?.waitFor
+      const decisionWaitLifted = !!note && card.column === 'planning' && waitFor?.decision === true && waitFor.board !== true
+      if (decisionWaitLifted) operatorRetry(tasksDir, card.id, 'planning')
+      activity(p, card.id, 'update', `${changes.join('; ')}${decisionWaitLifted ? ' ; decision wait lifted' : ''} (API)`)
       json(res, 200, { ok: true, card, changes })
       broadcastBoard(p)
     } catch (err) {

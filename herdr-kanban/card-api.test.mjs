@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { createCard, findCard, moveCard } from './lib/cards.mjs'
 import { bind } from './lib/bindings.mjs'
 import { historyPath } from './lib/card-history.mjs'
+import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 
 let root, tasks, child, base
 before(async () => {
@@ -93,6 +94,26 @@ test('card-update changes priority, blockers and appends a dated note', async ()
   // A glob inside a path is not bold (Injectbuddy chat, 2026-09-26).
   r = await post('/api/card-update', { id: c.id, note: { heading: 'Decision', text: 'Never hand-edit public/legacy/** pages; change the generator.' } })
   assert.equal(r.status, 200)
+})
+
+test('card-update notes lift Planner decision waits but preserve board waits', async () => {
+  const decision = createCard(tasks, { title: 'Decision', brief: 'x', prefix: 'P' })
+  const board = createCard(tasks, { title: 'Board', brief: 'x', prefix: 'P' })
+  moveCard(tasks, decision.id, 'planning')
+  moveCard(tasks, board.id, 'planning')
+  updateWorkflow(tasks, decision.id, { waitFor: { cards: [], files: [], decision: true } })
+  updateWorkflow(tasks, board.id, { waitFor: { cards: [], files: [], decision: true, board: true } })
+
+  let r = await post('/api/card-update', { id: decision.id, priority: 5 })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(readWorkflow(tasks)[decision.id].waitFor.decision, true)
+  r = await post('/api/card-update', { id: decision.id, note: { heading: 'Decision', text: 'Proceed.' } })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(readWorkflow(tasks)[decision.id].waitFor, null)
+
+  r = await post('/api/card-update', { id: board.id, note: { heading: 'Decision', text: 'Proceed.' } })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(readWorkflow(tasks)[board.id].waitFor.board, true)
 })
 
 test('card-update rejects cycles, self-reference and archived cards', async () => {
