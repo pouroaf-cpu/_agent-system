@@ -128,6 +128,12 @@ console.log('Planner readiness validation passed')
     assert.throws(() => validatePlan(newFile.replace('Changes:', '**Callers checked:**\nChanges:'), { workspace: root }), /Callers checked/, 'an empty line is not a check')
     assert.throws(() => validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\nChanges:'), { workspace: root }), /Base check/)
     validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:'), { workspace: root })
+    // I990: a no-regression AC passes on base; it is copied as a guard line, a bare PASS is not.
+    const guarded = newFile.replace('Changes:', '**Callers checked:** none\n**Base check:** 1 failing as expected\nChanges:')
+      .replace('- AC1: Enter activates the control.', '- AC1: Enter activates the control.\n- AC2: Desktop layout is unchanged.')
+      .replace('remove the handler branch and the check fails', 'remove the handler branch and the check fails\nAC2 | none | desktop check passes | hide the section and the check fails')
+    validatePlan(guarded.replace('## Prerequisites', 'AC2 PASS (guard): desktop section visible\n## Prerequisites'), { workspace: root })
+    assert.throws(() => validatePlan(guarded.replace('## Prerequisites', 'AC2 PASS: desktop section visible\n## Prerequisites'), { workspace: root }), /Missing: AC2/)
     validatePlan(realistic) // no workspace = not a handoff; cards already queued are never re-checked
 
     // hkb applies the check when a Planner hands off from Planning.
@@ -151,6 +157,8 @@ console.log('Planner readiness validation passed')
     utimesSync(log, new Date(later.getTime() + 1000), new Date(later.getTime() + 1000))
     writeFileSync(card, ready.replace('AC1 FAIL: handleKeyDown is not exported', 'AC1 FAIL: TypeError: x is not a function'))
     assert.match(hkb().stderr, /AC1 is a crash or timeout.*AC1 cannot run/)
+    writeFileSync(card, ready.replace('AC1 FAIL: handleKeyDown is not exported', 'AC1 PASS (guard): desktop unchanged'))
+    assert.match(hkb().stderr, /## Base run AC1 not found in .*base-run\.log/, 'a guard line must come from the saved run too')
     writeFileSync(card, ready.replace('## Prerequisites', '## Prerequisites\n- run node TASKS/.evidence/T-1/check.mjs'))
     assert.match(hkb().stderr, /TASKS\/\.evidence\/T-1\/check\.mjs is a relative path.*Write it as .*\/TASKS\/\.evidence\/T-1\/check\.mjs/)
     writeFileSync(card, ready)

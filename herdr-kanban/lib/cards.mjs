@@ -132,8 +132,8 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     // Each AC must show the Check reached its own assertion on base (operator 2026-10-09): I974
     // took three plan-check FAILs for ACs whose Check timed out or never measured them.
     const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
-    const unrun = criteria.filter(id => !new RegExp(String.raw`^[ \t]*(?:[-*][ \t]*)?${id}[ \t]+(?:FAIL|cannot run)[ \t]*:[ \t]*\S`, 'im').test(section('Base run')))
-    if (readiness === 'build-ready' && unrun.length) throw new Error(`Plan check failed: ## Base run needs one line per AC copied from the Check's output on the current integration checkout, showing it failed at that AC's own assertion: "AC1 FAIL: expected 1 Catch up card at 390, got 0". A timeout, a locator that never appeared or zero measurements is not a FAIL line: fix the Check. Only when the Check cannot run before the change (it tests a file this card creates) write "AC1 cannot run: <why>". Missing: ${unrun.join(', ')}`)
+    const unrun = criteria.filter(id => !new RegExp(String.raw`^[ \t]*(?:[-*][ \t]*)?${id}[ \t]+(?:FAIL|cannot run|PASS \(guard\))[ \t]*:[ \t]*\S`, 'im').test(section('Base run')))
+    if (readiness === 'build-ready' && unrun.length) throw new Error(`Plan check failed: ## Base run needs one line per AC copied from the Check's output on the current integration checkout, showing it failed at that AC's own assertion: "AC1 FAIL: expected 1 Catch up card at 390, got 0". A timeout, a locator that never appeared or zero measurements is not a FAIL line: fix the Check. Only when the Check cannot run before the change (it tests a file this card creates) write "AC1 cannot run: <why>". An AC that only guards behaviour this card leaves unchanged passes on base: "AC3 PASS (guard): <its output line>". Missing: ${unrun.join(', ')}`)
   }
 }
 

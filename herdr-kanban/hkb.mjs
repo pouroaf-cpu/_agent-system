@@ -101,7 +101,7 @@ function baseRunCheck(card) {
   const slash = (p) => p.replaceAll('\\', '/')
   const rel = ['Files', 'Prerequisites', 'Implementation plan'].map(section).join('\n').match(/(?<![\w:/.\\-])TASKS[\\/]\.evidence[\\/][^\s`'")]*/)?.[0]
   if (rel) fail(`${rel} is a relative path, but card checkouts have no TASKS/ folder, so the Builder and plan check cannot find it. Write it as ${slash(join(tasksDir, rel.slice(6)))} everywhere in the plan.`)
-  const lines = [...section('Base run').matchAll(/^[ \t]*(?:[-*][ \t]*)?(AC\d+)[ \t]+FAIL[ \t]*:[ \t]*(.+)$/gim)]
+  const lines = [...section('Base run').matchAll(/^[ \t]*(?:[-*][ \t]*)?(AC\d+)[ \t]+(?:FAIL|PASS \(guard\))[ \t]*:[ \t]*(.+)$/gim)]
   if (!lines.length) return
   const dir = join(tasksDir, '.evidence', card.id), logPath = join(dir, 'base-run.log')
   const how = `Run the Check on the integration checkout again and save all it prints: <check> 2>&1 | tee ${slash(logPath)} (PowerShell: <check> *>&1 | Tee-Object ${slash(logPath)}), then copy each ## Base run line from that file.`
