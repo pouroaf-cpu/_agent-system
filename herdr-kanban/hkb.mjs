@@ -320,11 +320,16 @@ try {
   // wait, not a failed plan (TF44): the card stays in Planning until they land.
   // A product/operator decision no Planner can make: the card waits in Planning for the
   // manager's answer, uncounted and unescalated; moving the card (/api/move) clears it.
-  decisionWait = verb === 'issue' && !approvalWait && current.column === 'planning' && failureCategory(note) === 'decision'
+  // [board] is the same wait for a conflict with the board's own tooling (plan check, gate,
+  // Base run, hkb refusal): it still parks the card, but it is the Kanban Manager's problem,
+  // not the operator's, so it is flagged there instead of paging the operator (2026-10-10).
+  const decisionCategory = verb === 'issue' && !approvalWait && current.column === 'planning' ? failureCategory(note) : null
+  decisionWait = decisionCategory === 'decision' || decisionCategory === 'board'
   if (decisionWait) {
     target = 'planning'
-    updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, why: note, since: new Date().toISOString() } })
+    updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, ...(decisionCategory === 'board' ? { board: true } : {}), why: note, since: new Date().toISOString() } })
     appendHistory(tasksDir, current.id, { event: 'planner-decision-wait', stage: 'planning', note })
+    if (decisionCategory === 'board') tellManager(`BOARD ${basename(dirname(tasksDir))} ${current.id} (planning): ${note.replace(/\s+/g, ' ')}`, true)
   }
   prerequisiteWait = verb === 'issue' && !approvalWait && !decisionWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
   if (prerequisiteWait) {

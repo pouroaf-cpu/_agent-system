@@ -54,3 +54,18 @@ test('a card waiting in Planning for a decision alerts once with its question', 
   assert.match(sent[0].title, /P T-1 needs you/); assert.match(sent[0].message, /Which dose unit\?/)
   assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [], 'no repeat')
 })
+
+// Operator 2026-10-10: I989/I991 were [board] plan-check conflicts, not product questions; they
+// paged the operator anyway because owner-alerts only checked waitFor.decision. hkb.mjs now also
+// sets waitFor.board for that category, so it must never reach `send`.
+test('a card waiting in Planning for a board/process conflict never pages the operator', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'owner-alerts-')), tasks = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  writeFileSync(join(tasks, 'planning', 'T-1.md'), '# T-1 — card T-1\n')
+  writeFileSync(join(tasks, '.owner-alerted.json'), '{}')
+  updateWorkflow(tasks, 'T-1', { waitFor: { cards: [], files: [], decision: true, board: true, why: 'plan check demands an AC3 FAIL base line' } })
+  const sent = [], send = async (title, message) => { sent.push({ title, message }) }
+  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [])
+  assert.equal(sent.length, 0)
+})

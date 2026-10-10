@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -112,6 +112,35 @@ test('hkb issue [decision] from Planning holds the card for the manager, uncount
     assert.equal(readWorkflow(dir)[card.id].waitFor, null)
     assert.deepEqual((await run())?.cards, [card.id])
     assert.equal(starts, 1)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// A board/process conflict (plan check, gate, Base run) is the Kanban Manager's problem, not the
+// operator's or the project manager's: it parks the card like [decision] but flags the Kanban
+// Manager inbox directly, bypassing any registered project manager (operator, 2026-10-10).
+test('hkb issue [board] from Planning holds the card and flags the Kanban Manager, not the project manager', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-board-'))
+  const dir = join(root, 'Proj', 'TASKS')
+  try {
+    mkdirSync(dir, { recursive: true })
+    const config = join(root, 'board.config.json'), projectInbox = join(root, 'project-inbox.md'), kmInbox = join(root, 'km-inbox.md')
+    writeFileSync(config, JSON.stringify({ projectsRoot: root, projects: ['Proj'], projectSettings: { Proj: { manager: { chat: 'Proj work', inbox: projectInbox } } } }))
+    const card = createCard(dir, { title: 'Pick a layout', brief: 'x' })
+    const owners = readCardPlanners(dir)
+    owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
+    saveCardPlanners(dir, owners)
+    const r = spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[board] plan check demands an AC3 FAIL base line, but AC3 is a guard that passes by design'],
+      { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: kmInbox } })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(findCard(dir, card.id).column, 'planning')
+    const saved = readWorkflow(dir)[card.id]
+    assert.equal(saved.waitFor.decision, true)
+    assert.equal(saved.waitFor.board, true)
+    // The board conflict goes to the Kanban Manager's own inbox, never the project's.
+    assert.match(readFileSync(kmInbox, 'utf8'), new RegExp(`BOARD Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`))
+    assert.equal(existsSync(projectInbox) && readFileSync(projectInbox, 'utf8').includes('BOARD'), false)
+    // The Needs-you ask still reaches the project manager chat, as any decision wait does.
+    assert.match(readFileSync(projectInbox, 'utf8'), new RegExp(`ASK Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

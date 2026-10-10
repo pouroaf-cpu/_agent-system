@@ -40,8 +40,10 @@ export async function alertOwnerCards({ project, tasksDir, send = critical }) {
   const alerted = first ? {} : JSON.parse(readFileSync(path, 'utf8'))
   // A card held in Planning for a decision (hkb issue, captured agent question) is a question
   // for the operator too; only Pou alerted, so those sat silent (operator, 2026-10-10).
-  const board = readBoard(tasksDir), workflow = readWorkflow(tasksDir)
-  const owner = [...board.pou, ...board.planning.filter(c => workflow[c.id]?.waitFor?.decision)]
+  // A [board] wait is a conflict with the board's own tooling, not a product question: it goes
+  // to the Kanban Manager (hkb.mjs tellManager) and never pages the operator (operator, 2026-10-09).
+  const boardData = readBoard(tasksDir), workflow = readWorkflow(tasksDir)
+  const owner = [...boardData.pou, ...boardData.planning.filter(c => workflow[c.id]?.waitFor?.decision && !workflow[c.id]?.waitFor?.board)]
   const fresh = owner.filter(c => !alerted[c.id])
   const next = Object.fromEntries(owner.map(c => [c.id, alerted[c.id] || new Date().toISOString()]))
   const changed = fresh.length || Object.keys(alerted).some(id => !next[id])
