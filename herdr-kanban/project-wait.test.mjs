@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wakeDecision, digest, stuckCards, isAsk, movable } from './scripts/project-wait.mjs'
+import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff } from './scripts/project-wait.mjs'
 
 test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly digest', () => {
   const before = { project: 'Injectbuddy', cards: [], inbox: [], stuck: 1 }
@@ -37,4 +37,11 @@ test('the 15-minute check counts only cards the manager can move', () => {
   const cards = [{ id: 'A', lane: 'planning' }, { id: 'B', lane: 'pou' }, { id: 'C', lane: 'completed' }, { id: 'D', lane: 'owner' }]
   assert.deepEqual(movable(cards).map(c => c.id), ['A', 'D'])
   assert.deepEqual(movable([]), [])
+})
+
+test('night stop or a paused project mutes stuck and CHECK', () => {
+  assert.equal(boardOff({ maxConcurrentAgents: 0 }, { paused: false }), true)
+  assert.equal(boardOff({ maxConcurrentAgents: 8 }, { paused: true }), true)
+  assert.equal(boardOff({ maxConcurrentAgents: 8 }, { paused: false }), false)
+  assert.equal(boardOff({ maxConcurrentAgents: 8 }, undefined), false)
 })

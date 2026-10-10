@@ -43,6 +43,9 @@ export async function stuckDetail(projects) {
 // waits for a release, so neither counts (operator, 2026-10-10: "things are moving too slow").
 export const CHECK_MS = 15 * 60e3
 export const movable = cards => cards.filter(c => c.lane !== 'pou' && c.lane !== 'completed')
+// Night stop (cap 0) or a paused project: no agent starts, so no card is stuck or could move.
+// CHECK skipped this and woke the Injectbuddy chat every 15 min through the night stop (2026-10-10).
+export const boardOff = (config, p) => config.maxConcurrentAgents === 0 || !!p?.paused
 export const isAsk = line => / ASK \S+ \S+ \(/.test(line)
 async function checkCards(project) {
   try {
@@ -72,12 +75,13 @@ async function main() {
     const dir = join(tasks, lane)
     return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.md') && f !== 'README.md').map(f => `${project}/${lane}/${f}`) : []
   })
+  let off = false
   const stuck = async () => {
     try {
       const { projects } = await (await fetch('http://127.0.0.1:7777/api/summary', { signal: AbortSignal.timeout(30000) })).json()
-      const held = JSON.parse(readFileSync(new URL('../board.config.json', import.meta.url), 'utf8')).maxConcurrentAgents === 0
       const p = projects.find(p => p.project === project)
-      return p ? held || p.paused ? 0 : p.stuck || 0 : null
+      off = boardOff(JSON.parse(readFileSync(new URL('../board.config.json', import.meta.url), 'utf8')), p)
+      return p ? off ? 0 : p.stuck || 0 : null
     } catch { return null } // board down: the watchdog writes that to the inbox
   }
   const snapshot = stuck => ({ project, cards: cards(), inbox: lines(inbox), stuck })
@@ -99,7 +103,7 @@ async function main() {
     }
     if (Date.now() >= nextCheck) {
       nextCheck = Date.now() + CHECK_MS
-      const check = await checkCards(project)
+      const check = off ? null : await checkCards(project)
       if (check) { console.log(check); return }
     }
     if (now.stuck == null) now.stuck = before.stuck
