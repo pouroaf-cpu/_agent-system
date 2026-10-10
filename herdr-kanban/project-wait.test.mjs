@@ -1,6 +1,24 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff } from './scripts/project-wait.mjs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails } from './scripts/project-wait.mjs'
+
+test('planFails returns recent plan-check FAIL lines from recently changed history files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'km-planfails-'))
+  const history = join(root, 'Project', 'TASKS', '.history')
+  mkdirSync(history, { recursive: true })
+  const since = Date.now() - 5000
+  writeFileSync(join(history, 'I123.jsonl'), [
+    JSON.stringify({ event: 'plan-check', verdict: 'FAIL', at: new Date().toISOString(), reason: 'Plan check: stale-plan:  two  spaces\ncollapsed' }),
+    JSON.stringify({ event: 'plan-check', verdict: 'PASS', at: new Date().toISOString(), reason: 'not rejected' }),
+    JSON.stringify({ event: 'plan-check', verdict: 'FAIL', at: new Date(since - 1000).toISOString(), reason: 'old rejection' }),
+    '{broken json'
+  ].join('\n'))
+  try { assert.deepEqual(planFails(root, since), ['Project I123: stale-plan: two spaces collapsed']) }
+  finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly digest', () => {
   const before = { project: 'Injectbuddy', cards: [], inbox: [], stuck: 1 }

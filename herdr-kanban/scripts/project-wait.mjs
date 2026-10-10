@@ -4,12 +4,34 @@
 // either: each wake is a BOARD EVENT on the operator's phone (Remote Control), so they wait in the
 // inbox and the hourly re-arm reports only their count (operator via Injectbuddy work, 2026-10-09).
 // ASK lines do wake it: a Planner question sat unanswered for up to an hour (operator, 2026-10-10).
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
+
+export function planFails(root, sinceMs) {
+  const fails = []
+  try {
+    for (const project of readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory())) {
+      const dir = join(root, project.name, 'TASKS', '.history')
+      if (!existsSync(dir)) continue
+      for (const file of readdirSync(dir).filter(f => f.endsWith('.jsonl'))) {
+        const path = join(dir, file)
+        if (statSync(path).mtimeMs <= sinceMs) continue
+        for (const line of lines(path)) {
+          let event
+          try { event = JSON.parse(line) } catch { continue }
+          if (event.event !== 'plan-check' || event.verdict !== 'FAIL' || !(Date.parse(event.at) > sinceMs)) continue
+          const reason = (event.reason || '').replace(/^Plan check: /, '').replace(/\s+/g, ' ').trim().slice(0, 300)
+          fails.push(`${project.name} ${file.replace(/\.jsonl$/, '')}: ${reason}`)
+        }
+      }
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error }
+  return fails
+}
 
 // Planners file ASK/FOUND lines in bursts (7 in 8 min on 2026-10-09 20:01) and each wake was
 // its own BOARD EVENT on the operator's phone: wait for 2 quiet minutes (10 at most) and send

@@ -4,12 +4,13 @@
 //   OWNER/POU <file>  a card landed in Owner or Pou
 //   INBOX <line>      KANBAN_MANAGER-INBOX.md got a line (alerts, FOUND --board)
 //   STUCK <project>   a project's stuck count went up and stayed up three minutes
+//   PLANFAIL <line>   plan-check rejected a card (operator, 2026-10-11: "monitor every card, I want to know if the plans are rejected")
 //   RE-ARM            58 min passed quietly (a lifetime cap, so an orphan cannot outlive
 //                     its chat the way `tail -F` did under Monitor)
 // Re-run it after every wake.
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { settled, stuckDetail } from './project-wait.mjs'
+import { planFails, settled, stuckDetail } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -36,9 +37,16 @@ const seen = new Set(cards())
 let lines = inboxLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
+let planSince = started
 
 for (let tick = 0; ; tick++) {
   await new Promise(r => setTimeout(r, 10000))
+  if (tick % 3 === 2) {
+    const since = planSince
+    planSince = Date.now()
+    const failed = planFails(ROOT, since)
+    if (failed.length) done(`PLANFAIL ${failed.join('\n')}`)
+  }
   const added = cards().filter(c => !seen.has(c))
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
   const inbox = inboxLines()
