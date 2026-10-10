@@ -54,8 +54,8 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
   }
   validatePlan(realistic.replace('Deliver the agreed keyboard behavior.', 'Reported stale path: TASKS/planning/I556-approved-job.md.'))
 
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
-  const { join } = await import('node:path')
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { join, resolve } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
   const { fileURLToPath } = await import('node:url')
@@ -70,6 +70,10 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
       .replace('Changes:', '**Callers checked:** none\n**Base check:** regression fails on base\nChanges:')
     const move = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'I556', 'planned'], { encoding: 'utf8' })
     writeFileSync(path, plan.replace('Check: node --test test/keyboard.test.mjs', `Check: node inspect.mjs "${path}"`))
+    const show = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'show', 'I556'], { encoding: 'utf8' })
+    const planningText = readFileSync(path, 'utf8'), planningShow = show()
+    assert.equal(planningShow.status, 0, planningShow.stderr)
+    assert.equal(planningShow.stdout, `${resolve(path)}\n${planningText}`)
     const refused = move()
     assert.notEqual(refused.status, 0)
     assert.match(refused.stderr, /card files move between lanes.*hkb show <id>/i)
@@ -78,6 +82,9 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
     const accepted = move()
     assert.equal(accepted.status, 0, accepted.stderr)
     assert.equal(findCard(tasks, 'I556').column, 'planned')
+    const plannedPath = findCard(tasks, 'I556').path, plannedText = readFileSync(plannedPath, 'utf8'), plannedShow = show()
+    assert.equal(plannedShow.status, 0, plannedShow.stderr)
+    assert.equal(plannedShow.stdout, `${resolve(plannedPath)}\n${plannedText}`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 // TF121: an escaped pipe inside a cell is still one cell; a short row names its AC.

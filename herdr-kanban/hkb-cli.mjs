@@ -57,6 +57,16 @@ if (args[0] === '--planner-assignment') { plannerAssignment = args[1]; args.spli
 const [verb, cardId, ...rest] = args
 const note = rest.join(' ').trim()
 
+if (verb === 'show') {
+  if (!cardId) fail('missing card id, e.g. hkb show T-02')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const card = findCard(tasksDir, cardId)
+    process.stdout.write(`${resolve(card.path)}\n${readFileSync(card.path, 'utf8')}`)
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
 if (reviewClaim && verb !== 'plancheck' && reviewClaimFor(reviewRoot, tasksDir, cardId)?.role === 'plancheck') fail('Plan checker permits only plancheck handoffs')
 
 if (verb === 'plancheck') {
@@ -198,7 +208,7 @@ if (verb === 'wait') {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move> <card-id> [note|column]\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 
