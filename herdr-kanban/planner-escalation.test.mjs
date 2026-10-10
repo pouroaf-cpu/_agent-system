@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -75,6 +75,8 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
 
 // Planner handoffs need a saved base run holding each Base run line.
 const saveBaseRun = (tasks) => { mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 FAIL: helper() returned 0, expected 1') }
+// The plan pre-check verdict a Planner saves; dated a minute ahead so it is newer than the files written after it.
+const savePlanSelfCheck = (tasks, text = 'no problems\nVERDICT: PASS\n', at = Date.now() + 60000) => { const f = join(tasks, '.evidence', 'T-1', 'plan-self-check.md'); mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(f, text); utimesSync(f, new Date(at), new Date(at)) }
 const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
@@ -123,20 +125,27 @@ test('a plan accepted into Planned clears the escalation flag', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('a Planner handoff to Planned is refused once with the self-check, then accepted', () => {
+test('a Planner handoff to Planned needs a fresh PASS from the plan pre-check', () => {
   const root = mkdtempSync(join(tmpdir(), 'planner-selfcheck-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**')
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy.replace(/## Base run\n.*\n/, ''))
-    const first = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
-    assert.equal(first.status, 1)
-    assert.match(first.stderr, /self-check before T-1 leaves planning/)
+    const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'), card = join(tasks, 'planning', 'T-1.md'), slash = (p) => p.replaceAll('\\', '/')
+    const move = () => handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
+    writeFileSync(card, easy.replace(/## Base run\n.*\n/, ''))
+    assert.match(move().stderr, /## Base run needs one line per AC.*Missing: AC1/, 'the deterministic refusal comes first')
+    writeFileSync(card, easy); saveBaseRun(tasks)
+    const none = move()
+    assert.equal(none.status, 1)
+    assert.match(none.stderr, /plan pre-check before T-1 leaves planning \(not an error\)/)
+    assert.ok(none.stderr.includes(slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))) && none.stderr.includes(slash(card)), none.stderr)
+    savePlanSelfCheck(tasks, 'a problem\n')
+    assert.match(move().stderr, /does not end with VERDICT: PASS/)
+    savePlanSelfCheck(tasks, 'VERDICT: PASS\n', Date.now() - 60000)
+    assert.match(move().stderr, /plan-self-check.md is older than T-1.md/)
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
-    assert.match(handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned').stderr, /## Base run needs one line per AC.*Missing: AC1/)
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), easy); saveBaseRun(tasks)
-    const second = handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
-    assert.equal(second.status, 0, second.stderr)
+    savePlanSelfCheck(tasks)
+    const ok = move()
+    assert.equal(ok.status, 0, ok.stderr)
     assert.equal(findCard(tasks, 'T-1').column, 'planned')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

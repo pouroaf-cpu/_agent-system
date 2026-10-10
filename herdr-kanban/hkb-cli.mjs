@@ -40,6 +40,7 @@ import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
 import { CARD_ID } from './lib/ids.mjs'
+import { PLAN_CHECK_RULE, PLAN_FAIL_TAGS } from './lib/prompt.mjs'
 
 const args = process.argv.slice(2)
 let tasksDir = join(process.cwd(), 'TASKS')
@@ -405,19 +406,30 @@ try {
     }
   }
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
-  // Planner self-check (operator 2026-10-09): 124 of 145 plan-check FAILs were plans the Planner
-  // could have caught (stale vs HEAD, a check that never reaches its assertion). The first
-  // handoff of each assignment is refused once with the board's checklist; the re-run passes.
-  if (plannerAssignment && ['planned', 'queue'].includes(target) && readWorkflow(tasksDir)[current.id]?.selfCheck !== plannerAssignment) {
-    updateWorkflow(tasksDir, current.id, { selfCheck: plannerAssignment })
-    fail(`self-check before ${current.id} leaves planning (not an error). Confirm each, fix the plan if one fails, then run the same handoff again:
-  1. You ran the Check in this checkout at current HEAD, unchanged, and it fails for the reason this card fixes: not a syntax, import or setup error, and not passing already.
-  2. Every file, path, line and identifier the plan names exists at current HEAD (re-read them now; other cards may have landed since you started).
-  3. The Check measures every Acceptance criterion and can reach it (sign-in state, env vars, dev server or webServer config it needs); ## Base run has its output line for each AC, failing on that AC's own assertion.
-  4. The Check finds the card by its ID (hkb show), never by a TASKS/<lane>/ path, and gives the same result on a second run.`)
-  }
-  // After the self-check and plan text, so a wrong path is named before the saved base run is asked for.
+  // After the plan text check, so a wrong path is named before the saved base run is asked for.
   if (check.planWorkspace && current.cardOwned) { validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }); baseRunCheck(current) }
+  // Planner pre-check (operator 2026-10-11): 108 plan-check FAILs in 3 days (check-unreachable 39,
+  // untagged 23, check-broken 19, stale-plan 13, check-passes-on-base 8) each bounced the card back to a
+  // new Planner. The old 4-item self-checklist was self-graded and covered a fraction of PLAN-CHECKER.md,
+  // so the handoff now needs a fresh-context subagent verdict on the plan, newer than the plan and its check files.
+  // ponytail: the Planner writes plan-self-check.md itself, so a Planner can claim a PASS it did not get. If plan-check FAILs per card stay high (scripts/plan-check-issues.mjs), have hkb or a PostToolUse hook on the Agent tool write the verdict instead.
+  if (plannerAssignment && ['planned', 'queue'].includes(target)) {
+    const slash = (p) => p.replaceAll('\\', '/'), dir = join(tasksDir, '.evidence', current.id), file = join(dir, 'plan-self-check.md')
+    const saved = statSync(file, { throwIfNoEntry: false })
+    const inputs = [current.path, ...(existsSync(dir) ? readdirSync(dir).filter(f => f === 'base-run.log' || /\.(m?js|cjs|ts|ps1|py|sh)$/i.test(f)).map(f => join(dir, f)) : [])]
+    const envFile = projectSettings()?.envFile
+    const older = saved && inputs.find(f => statSync(f).mtimeMs > saved.mtimeMs)
+    const passed = saved && readFileSync(file, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop() === 'VERDICT: PASS'
+    if (!passed || older) {
+      const prompt = `Read ${slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))}. Apply every rule in it to the plan in card ${slash(current.path)}, in the checkout ${slash(check.planWorkspace)} (unchanged base; edit nothing, run no hkb command, start any server on a free port and stop it after). ${envFile ? `Approved dev environment file: ${slash(envFile)}; use it only for the card's setup/Check and never copy or print its values. ` : ''}${PLAN_CHECK_RULE} You hand off nothing: reply with every problem you find, each on its own line with its AC and a tag (${PLAN_FAIL_TAGS}), or, if there are none, the single line VERDICT: PASS.`
+      fail(`plan pre-check before ${current.id} leaves planning (not an error).${!saved ? '' : older ? ` plan-self-check.md is older than ${basename(older)}.` : ' plan-self-check.md does not end with VERDICT: PASS.'} The board checks every plan against its plan-check rules; do it now, before the handoff, so the card does not bounce back:
+  1. Start ONE subagent with the Agent tool: model haiku, run_in_background false (wait for its reply). If you have no subagent tool, do this pass yourself as a separate start-to-end pass after re-reading the rules file.
+  2. Give it this prompt: ${prompt}
+  3. Fix every problem it lists in the plan (check scripts only with the Write or Edit tool; if a script changed, run the Check again and save base-run.log again). Then start a NEW subagent with the same prompt. Repeat until it replies VERDICT: PASS.
+  4. Write that last reply to ${slash(file)}, ending with the line VERDICT: PASS, and run the same handoff again. Changing the card, a check script or base-run.log after that makes the file stale.
+  5. If the plan cannot be made to pass, use the normal route instead: hkb issue ${current.id} "[planning] <unmet prerequisite and evidence>"`)
+    }
+  }
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (verb === 'covered') {
