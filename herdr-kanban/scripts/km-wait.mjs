@@ -8,14 +8,16 @@
 //   RE-ARM            58 min passed quietly (a lifetime cap, so an orphan cannot outlive
 //                     its chat the way `tail -F` did under Monitor)
 // Re-run it after every wake.
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { planFails, settled, stuckDetail } from './project-wait.mjs'
+import { planFails, planSinceFrom, settled, stuckDetail } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
 const BOARD = 'http://127.0.0.1:7777/api/summary'
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
+const PLAN_SINCE = process.env.KM_PLAN_SINCE || join(tmpdir(), 'km-wait-plan-since')
 
 const cards = () => readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isDirectory()).flatMap(d =>
   ['owner', 'pou'].flatMap(lane => {
@@ -37,13 +39,16 @@ const seen = new Set(cards())
 let lines = inboxLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
-let planSince = started
+let savedPlanSince
+try { savedPlanSince = readFileSync(PLAN_SINCE, 'utf8') } catch {}
+let planSince = planSinceFrom(savedPlanSince, started)
 
 for (let tick = 0; ; tick++) {
   await new Promise(r => setTimeout(r, 10000))
   if (tick % 3 === 2) {
     const since = planSince
     planSince = Date.now()
+    try { writeFileSync(PLAN_SINCE, String(planSince)) } catch {} // an unwritable cursor must not stop the other wakes
     const failed = planFails(ROOT, since)
     if (failed.length) done(`PLANFAIL ${failed.join('\n')}`)
   }

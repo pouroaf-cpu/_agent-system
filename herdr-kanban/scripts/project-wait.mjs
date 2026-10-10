@@ -11,6 +11,12 @@ import { pathToFileURL } from 'node:url'
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
 
+export function planSinceFrom(savedText, now) {
+  const saved = Number(savedText)
+  if (!savedText?.trim() || !Number.isFinite(saved) || saved > now) return now
+  return Math.max(saved, now - 2 * 60 * 60e3)
+}
+
 export function planFails(root, sinceMs) {
   const fails = []
   try {

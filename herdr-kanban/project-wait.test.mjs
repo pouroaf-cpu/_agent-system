@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails } from './scripts/project-wait.mjs'
+import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom } from './scripts/project-wait.mjs'
 
 test('planFails returns recent plan-check FAIL lines from recently changed history files', () => {
   const root = mkdtempSync(join(tmpdir(), 'km-planfails-'))
@@ -18,6 +18,16 @@ test('planFails returns recent plan-check FAIL lines from recently changed histo
   ].join('\n'))
   try { assert.deepEqual(planFails(root, since), ['Project I123: stale-plan: two spaces collapsed']) }
   finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('planSinceFrom uses a saved cursor within a two-hour window', () => {
+  const now = 10_000_000
+  const twoHours = 2 * 60 * 60e3
+  assert.equal(planSinceFrom(String(now - 1000), now), now - 1000)
+  assert.equal(planSinceFrom(undefined, now), now)
+  assert.equal(planSinceFrom('garbage', now), now)
+  assert.equal(planSinceFrom(String(now - twoHours - 1), now), now - twoHours)
+  assert.equal(planSinceFrom(String(now + 1), now), now)
 })
 
 test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly digest', () => {
