@@ -13,7 +13,7 @@ test('Builder actual Codex context is isolated; incidental notes cannot request 
   assert.equal(failureCategory('[incidental] existing unrelated issue'), 'incidental')
   assert.equal(failureDestination('incidental', 'working'), 'working')
   assert.equal(failureDestination('planning', 'working'), 'planning')
-  assert.match(readFileSync(new URL('./hkb.mjs', import.meta.url), 'utf8'), /category === 'incidental'\) fail/)
+  assert.match(readFileSync(new URL('./hkb-cli.mjs', import.meta.url), 'utf8'), /category === 'incidental'\) fail/)
 })
 
 test('successful transport with staged paste sends only Enter, not a duplicate prompt', async () => {
