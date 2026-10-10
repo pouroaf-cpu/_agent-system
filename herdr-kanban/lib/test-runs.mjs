@@ -90,6 +90,12 @@ export function startTestRun({ project, tasksDir, boardDir }) {
 // True if anything answers HTTP at url (any status): next dev's parent outlives its dead child server.
 export const serverAnswers = (url, ms = 30000) => fetch(url, { signal: AbortSignal.timeout(ms) }).then(() => true, () => false)
 
+// Totals of a run row from Playwright's stats. A dead-server run still gets its totals plus an error (2026-10-11).
+export function runSummary(stats, repeatEach, error) {
+  const seconds = Math.round(stats.duration / 1000)
+  return { passed: stats.expected, failed: stats.unexpected, flaky: stats.flaky, skipped: stats.skipped, seconds, secondsPerPass: seconds / repeatEach, ...(error && { error }) }
+}
+
 // Failed test names, "file › title [project]", from Playwright's JSON report.
 // 2026-10-06: dotenv prints '◇ injected env' banner lines to stdout before Playwright's JSON.
 export function parseReport(stdout) {
@@ -174,8 +180,7 @@ export function pageHistory(runs) {
   return [...pages].sort(([a], [b]) => a.localeCompare(b)).map(([route, types]) => ({ route, types: Object.fromEntries(types) }))
 }
 
-// Static Next app routes ("/", "/calendar", ...) from app/**/page.*, for warming the dev server:
-// a page's first compile can outlast Playwright's goto (ERR_ABORTED on /calendar, 2026-10-02).
+// Static Next app routes ("/", "/calendar", ...) from app/**/page.*, for the per-page results and tally.
 // Route groups "(x)" drop out of the URL; dynamic "[x]" and private "_x" folders are skipped.
 export function staticAppRoutes(appDir) {
   return readdirSync(appDir, { recursive: true, withFileTypes: true })

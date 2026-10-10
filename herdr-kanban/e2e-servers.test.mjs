@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stopStaleE2eServers } from './lib/orphan-servers.mjs'
+import { runSummary } from './lib/test-runs.mjs'
+
+test('2026-10-11: a run whose server died keeps its totals and gets an error; a healthy run has none', () => {
+  const stats = { expected: 527, unexpected: 135, flaky: 2, skipped: 9, duration: 960400 }
+  assert.deepEqual(runSummary(stats, 3, 'server died during the run: boom'), { passed: 527, failed: 135, flaky: 2, skipped: 9, seconds: 960, secondsPerPass: 320, error: 'server died during the run: boom' })
+  assert.equal('error' in runSummary(stats, 3, ''), false)
+})
 
 test('abandoned claude-e2e dev servers over 4 h old are stopped; young ones and board servers are kept', () => {
   const now = Date.now(), killed = []

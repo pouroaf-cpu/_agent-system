@@ -725,10 +725,11 @@ function renderTestRuns() {
   if (tests.running) line('Running since ' + when(tests.running.started) + ' on ' + tests.running.head + '…').className = 'audit-status';
   const last = tests.runs[0];
   if (!last) line('No runs yet.');
-  else if (last.error) { line('Last run ' + when(last.finished) + ': did not finish.').className = 'audit-status test-fail'; line(last.error); }
+  else if (last.passed === undefined) { line('Last run ' + when(last.finished) + ': did not finish.').className = 'audit-status test-fail'; line(last.error); }
   else {
     line('Last run ' + when(last.finished) + ' on ' + last.head + ' (' + Math.round(last.seconds / 60) + ' min)');
-    line(last.passed + ' passed, ' + last.failed + ' failed, ' + last.flaky + ' flaky').className = 'audit-status' + (last.failed ? ' test-fail' : ' test-pass');
+    line(last.passed + ' passed, ' + last.failed + ' failed, ' + last.flaky + ' flaky').className = 'audit-status' + (last.failed || last.error ? ' test-fail' : ' test-pass');
+    if (last.error) line(last.error); // 2026-10-11: a server fault mid-run still shows its totals
     if (last.failures?.length) {
       const list = document.createElement('ul'); list.className = 'test-failures';
       for (const name of last.failures.slice(0, 10)) { const li = document.createElement('li'); li.textContent = name; list.append(li); }
@@ -741,7 +742,7 @@ function renderTestRuns() {
   run.textContent = busy ? 'Run in progress' : 'Run tests now'; run.disabled = Boolean(busy);
   run.addEventListener('click', () => runTestsNow(run));
   card.append(run);
-  for (const old of tests.runs.slice(1, 6)) line(when(old.finished) + ': ' + (old.error ? 'did not finish' : old.passed + ' passed, ' + old.failed + ' failed'));
+  for (const old of tests.runs.slice(1, 6)) line(when(old.finished) + ': ' + (old.passed === undefined ? 'did not finish' : old.passed + ' passed, ' + old.failed + ' failed' + (old.error ? ' (server fault)' : '')));
   el.screenBody.append(card);
   renderTestRequest();
   renderPageHistory();
