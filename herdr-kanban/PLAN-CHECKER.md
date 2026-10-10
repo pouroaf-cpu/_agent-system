@@ -13,7 +13,7 @@ AC's own assertion because the requested behaviour is absent. Verify every selec
 (including accessible names), route, count, fixture and file the Check relies on
 against current code. FAIL means the plan is wrong: a missing selector/file, stale
 count, syntax error, incorrect setup instructions, passing base check or a Check
-that needs future code.
+that needs future code (other than a test file this card creates, below).
 
 An AC assertion failing on the unchanged base is the expected result: that is PASS.
 Never FAIL a plan because the requested behaviour is still missing, and never ask
@@ -28,6 +28,10 @@ Compare your base run with the plan's ## Base run lines: FAIL if any AC did not 
 the way its line says. An `ACn PASS (guard):` line is right only for an AC that guards
 behaviour the card leaves unchanged (desktop unchanged, other types unchanged); FAIL it on an
 AC the card changes.
+An `ACn cannot run: <why>` line is right only when that AC's Check is a test file this
+card creates, marked (new) in ## Files: confirm the file is absent on the base, then trace
+the AC as below instead of running it. Never FAIL that as check-broken (PLANNER.md allows
+the line; I1012, IA53, IA54, IA92 and IA96 were FAILed for it, 2026-10-11).
 Check every AC and every listed viewport/state before you hand off, even after one
 fails, and list every problem in the one FAIL (I974, 2026-10-09: three FAILs in 16 min,
 each naming one new problem; AC5 was unmeasured from the first plan).
