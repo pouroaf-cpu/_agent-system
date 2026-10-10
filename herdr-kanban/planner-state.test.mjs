@@ -111,6 +111,13 @@ test('explicit recovered Planner gets new identity, retains counters and stops b
     const owner = readCardPlanners(f.tasksDir)['T-1']
     assertPlannerHandoff(f.tasksDir, 'T-1', owner.assignmentId)
     assert.throws(() => assertPlannerHandoff(f.tasksDir, 'T-1', 'old'), /stale callback/)
+    // I1000: a handoff without the flag passes only from the assigned pane, and says what is missing.
+    assert.throws(() => assertPlannerHandoff(f.tasksDir, 'T-1'), /needs --planner-assignment/)
+    process.env.BOARD_AGENT_ID = 'retired-pane'
+    assert.throws(() => assertPlannerHandoff(f.tasksDir, 'T-1'), /needs --planner-assignment/)
+    process.env.BOARD_AGENT_ID = owner.paneId
+    assertPlannerHandoff(f.tasksDir, 'T-1')
+    delete process.env.BOARD_AGENT_ID
     moveCard(f.tasksDir, 'T-1', 'planned')
   } }
   const options = { project: 'Proof', projectPath: join(f.root, 'Proof'), tasksDir: f.tasksDir, boardRoot: f.root, config: f.config, agents: [], io: { runCardPlanner: o => runCardPlanner({ ...o, io: plannerIO }), autoSpawn: () => { builds++ } } }

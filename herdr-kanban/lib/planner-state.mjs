@@ -40,7 +40,13 @@ export function assertPlannerAssignment(dir, id, owner) {
 }
 export function assertPlannerHandoff(dir, id, token) {
   const owner = readCardPlanners(dir)[id]
-  if (owner?.assignmentId && (owner.lifecycle !== 'active' || token !== owner.assignmentId)) throw conflict()
+  if (!owner?.assignmentId) return
+  // A Planner that rebuilt its handoff without --planner-assignment is still the assigned one when
+  // it runs in the assigned pane; a retired Planner's pane id no longer matches (I1000, 2026-10-10:
+  // a Haiku Planner dropped the flag after 65 turns, read the refusal as "replaced" and gave up).
+  if (!token && owner.paneId && [process.env.BOARD_AGENT_ID, process.env.HERDR_PANE_ID].includes(owner.paneId)) token = owner.assignmentId
+  if (owner.lifecycle === 'active' && !token) throw Object.assign(conflict(), { message: 'Planner handoff needs --planner-assignment <id>: run the exact handoff command from your prompt (it starts with --planner-assignment), not a rebuilt one' })
+  if (owner.lifecycle !== 'active' || token !== owner.assignmentId) throw conflict()
 }
 export function assertPlannerPaneAllowed(project, paneId) {
   const path = process.env.KANBAN_CONFIG || fileURLToPath(new URL('../board.config.json', import.meta.url))
