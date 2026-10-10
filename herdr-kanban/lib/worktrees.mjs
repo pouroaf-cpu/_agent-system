@@ -46,7 +46,7 @@ function updateEntry(tasksDir, id, patch) {
 }
 
 function git(cwd, args, { allowFailure = false, encoding = 'utf8', env = {} } = {}) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { cwd, encoding, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...env } })
+  const result = spawnSync('git', ['-c', 'core.longpaths=true', '-C', cwd, ...args], { cwd, encoding, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...env } })
   if (result.error) throw new Error(`git ${args[0]} failed in ${cwd}: ${result.error.message}`)
   if (!allowFailure && result.status !== 0) {
     throw new Error(`git ${args[0]} failed in ${cwd}: ${String(result.stderr || result.stdout || `exit ${result.status}`).trim()}`)
@@ -730,7 +730,10 @@ function removeCleanWorktree(tasksDir, entry, { integrated = false } = {}) {
   }
   const dependencies = join(entry.workspacePath, 'node_modules')
   // Remove only our junction, never its shared target, before Git removes the checkout.
-  if (existsSync(dependencies) && lstatSync(dependencies).isSymbolicLink()) unlinkSync(dependencies)
+  if (existsSync(dependencies)) {
+    if (lstatSync(dependencies).isSymbolicLink()) unlinkSync(dependencies)
+    else rmSync(dependencies, { recursive: true, force: true })
+  }
   if (leftovers.length) removeRegistered(entry, ['worktree', 'remove', '--force', entry.worktreePath])
   else {
     refreshClean(entry.worktreePath)

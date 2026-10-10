@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, cleanupPreparedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree } from './lib/worktrees.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -100,6 +100,27 @@ test('cleanup stops a dev server left running in the card checkout', { skip: pro
     assert.equal(readWorktrees(f.tasks)['T-1'].cleaned, true)
     assert.equal(existsSync(prepared.entry.worktreePath), false)
   } finally { server?.kill(); rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('cleanup removes a real dependency directory and an ignored file beyond Windows path limits', { skip: process.platform !== 'win32' }, () => {
+  const f = fixture()
+  try {
+    writeFileSync(join(f.integration, '.gitignore'), 'ignored/\nnode_modules/\n')
+    git(f.integration, 'add', '.gitignore')
+    git(f.integration, 'commit', '-m', 'ignore generated files')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1'), gitSettings: f.settings })
+    const longFile = join(prepared.workspacePath, 'ignored', ...Array.from({ length: 4 }, (_, i) => `${i}-${'x'.repeat(68)}`), 'ignored.txt')
+    assert.ok(longFile.length > 260)
+    mkdirSync(join(longFile, '..'), { recursive: true })
+    writeFileSync(longFile, 'ignored build output')
+    const dependencyFile = join(prepared.workspacePath, 'node_modules', 'package', 'index.js')
+    mkdirSync(join(dependencyFile, '..'), { recursive: true })
+    writeFileSync(dependencyFile, 'installed package')
+
+    assert.equal(cleanupPreparedWorktree({ tasksDir: f.tasks, prepared }), true)
+    assert.equal(existsSync(prepared.entry.worktreePath), false)
+    assert.equal(existsSync(dependencyFile), false)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
 test('an integrated checkout Git removed except a held build cache is cleaned later', () => {
