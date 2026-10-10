@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent log</title>
+  <link rel="stylesheet" href="/board.css">
+  <style>
+    html, body { height: auto; min-height: 100%; }
+    body { display: block; overflow: auto; }
+    main { width: min(100%, 1000px); margin: 0 auto; padding: 20px 16px 48px; }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+    h1 { flex: 1 1 100%; margin: 0 0 4px; font-size: 20px; overflow-wrap: anywhere; }
+    .follow { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; }
+    #entries { display: grid; gap: 8px; }
+    details.entry { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    summary { display: flex; gap: 10px; align-items: baseline; min-width: 0; padding: 10px 12px; cursor: pointer; }
+    .time { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .label { flex: 0 0 auto; font-weight: 700; }
+    .preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sent .label { color: var(--active); }
+    .received .label { color: var(--ok); }
+    .received.error .label, .error pre { color: var(--problem); }
+    .thinking { color: var(--muted); }
+    .error .label { color: var(--problem); }
+    pre { max-width: 100%; margin: 0; padding: 0 12px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    #status { color: var(--muted); margin: 0 0 12px; }
+    @media (max-width: 520px) {
+      main { padding: 14px 10px 32px; }
+      header { gap: 6px; }
+      header .btn { padding: 0 10px; }
+      summary { flex-wrap: wrap; gap: 4px 8px; }
+      .preview { flex: 1 1 100%; white-space: normal; overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1 id="heading">Agent log</h1>
+      <button id="collapse" class="btn" type="button">Collapse all</button>
+      <button id="expand" class="btn" type="button">Expand all</button>
+      <label class="follow"><input id="follow" type="checkbox" checked> Follow</label>
+    </header>
+    <p id="status" role="status">Connecting…</p>
+    <section id="entries" aria-label="Agent activity"></section>
+  </main>
+  <script src="/nz-time.js"></script>
+  <script>
+    const id = new URLSearchParams(location.search).get('id') || '';
+    const entries = document.getElementById('entries');
+    const status = document.getElementById('status');
+    const follow = document.getElementById('follow');
+    let offset = 0, firstLoad = true;
+    const labels = { sent: 'SENT →', received: 'RECEIVED ←', agent: 'AGENT', thinking: 'THINKING', error: 'ERROR', info: 'INFO' };
+    function appendEntry(item, receivedAt) {
+      const detail = document.createElement('details');
+      detail.className = 'entry ' + item.kind + (item.kind === 'received' && item.text.startsWith('← ERROR') ? ' error' : '');
+      detail.open = item.kind === 'agent' || item.kind === 'error';
+      const summary = document.createElement('summary');
+      const time = document.createElement('span');
+      time.className = 'time';
+      const timestamp = item.at || (!firstLoad ? receivedAt : null);
+      time.textContent = timestamp ? formatNZTime(timestamp, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }) : '';
+      const label = document.createElement('span');
+      label.className = 'label'; label.textContent = labels[item.kind] || 'INFO';
+      const preview = document.createElement('span');
+      preview.className = 'preview'; preview.textContent = String(item.text).split('\n', 1)[0].slice(0, 160);
+      summary.append(time, label, preview);
+      const body = document.createElement('pre'); body.textContent = item.text;
+      detail.append(summary, body); entries.append(detail);
+    }
+    async function poll(initial = false) {
+      if (!id) { status.textContent = 'No agent id was provided.'; return; }
+      try {
+        const response = await fetch('/api/agent-log?id=' + encodeURIComponent(id) + '&offset=' + offset);
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Could not read agent log');
+        document.title = data.name + ' · Agent log';
+        document.getElementById('heading').textContent = data.name;
+        const receivedAt = new Date().toISOString();
+        for (const item of data.entries) appendEntry(item, receivedAt);
+        const moved = data.offset !== offset;
+        offset = data.offset;
+        status.textContent = entries.childElementCount ? '' : 'Waiting for agent activity…';
+        if (follow.checked && data.entries.length) window.scrollTo(0, document.documentElement.scrollHeight);
+        if (initial && moved) return poll(true);
+        firstLoad = false;
+      } catch (error) { status.textContent = error.message; }
+    }
+    document.getElementById('collapse').addEventListener('click', () => { for (const entry of entries.children) entry.open = false; });
+    document.getElementById('expand').addEventListener('click', () => { for (const entry of entries.children) entry.open = true; });
+    poll(true);
+    setInterval(() => poll(), 1000);
+  </script>
+</body>
+</html>

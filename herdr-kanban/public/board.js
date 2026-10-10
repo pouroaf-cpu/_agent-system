@@ -2216,6 +2216,10 @@ function visibleAgents() {
   return agents;
 }
 async function openAgent(agent) {
+  if (String(agent.pane_id).startsWith('headless-')) {
+    window.open('/agent-log.html?id=' + encodeURIComponent(agent.pane_id), '_blank');
+    return;
+  }
   try {
     const response = await fetch('/api/agent-open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: PROJECT, paneId: agent.pane_id }) });
     const result = await response.json();

@@ -2,7 +2,7 @@ import { formatNZTime, formatNZClock } from './lib/nz-time.mjs'
 // Local kanban board over the filesystem. Phase 1+2: read, serve, move.
 
 import { createServer } from 'node:http'
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch, openSync, readSync, closeSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
 import { renameSync } from './lib/fs-retry.mjs'
@@ -27,6 +27,8 @@ import { readAuditReports, resolveAuditReport, editorArguments } from './lib/aud
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment } from './lib/quota.mjs'
 import { startProjectPolling } from './lib/project-polling.mjs'
+import { getHeadlessAgent } from './lib/headless.mjs'
+import { eventEntries, readTimes, fillTimes } from './scripts/agent-view.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const AUDITS_ROOT = normalize(join(HERE, '..', '_audits') + '/')
@@ -950,6 +952,35 @@ const handleRequest = async (req, res) => {
   const project = url.searchParams.get('project') ?? config.projects[0]
 
   if (badMutationOrigin(req)) return json(res, 403, { ok: false, error: 'invalid origin' })
+
+  if (req.method === 'GET' && url.pathname === '/api/agent-log') {
+    const id = url.searchParams.get('id')
+    const offset = url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : 0
+    if (!Number.isSafeInteger(offset) || offset < 0) return json(res, 400, { ok: false, error: 'offset must be a non-negative byte offset' })
+    let row
+    try { row = getHeadlessAgent(id) } catch { return json(res, 404, { ok: false, error: 'Unknown headless agent' }) }
+    try {
+      const size = existsSync(row.log) ? statSync(row.log).size : 0
+      const start = offset > size ? 0 : offset
+      const fd = existsSync(row.log) ? openSync(row.log, 'r') : null
+      let buffer = Buffer.alloc(0)
+      try {
+        if (fd !== null && start < size) {
+          const chunk = Buffer.alloc(Math.min(1024 * 1024, size - start))
+          buffer = chunk.subarray(0, readSync(fd, chunk, 0, chunk.length, start))
+        }
+      } finally { if (fd !== null) closeSync(fd) }
+      const newline = buffer.lastIndexOf(10)
+      const complete = newline < 0 ? Buffer.alloc(0) : buffer.subarray(0, newline + 1)
+      const times = readTimes(row.log), entries = []
+      let from = start
+      for (const line of complete.toString('utf8').split('\n')) {
+        if (line.trim()) { const found = eventEntries(line); fillTimes(found, times, from); entries.push(...found) }
+        from += Buffer.byteLength(line) + 1
+      }
+      return json(res, 200, { ok: true, name: row.name, offset: start + complete.length, entries })
+    } catch (err) { return json(res, 500, { ok: false, error: err.message }) }
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/metrics') {
     if (!config.projects.includes(project)) return json(res, 400, { ok: false, error: 'Unknown project' })

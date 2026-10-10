@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events'
 import { createHeadless, launchArgs } from './lib/headless.mjs'
 import { PaneProcessTrees } from './lib/process-tree.mjs'
 import { backendFor, validateAgentBackend } from './lib/agent-backend.mjs'
-import { formatEvent, followLog } from './scripts/agent-view.mjs'
+import { eventEntries, formatEvent, followLog, timeAt, fillTimes, readTimes, terminalLine } from './scripts/agent-view.mjs'
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function until(fn) { for (let n = 0; n < 150; n++) { const result = await fn(); if (result) return result; await wait(50) } throw new Error('Timed out') }
@@ -143,5 +143,66 @@ test('viewer renders messages, tools, commands, results and unknown events; foll
     await until(() => output.length === 2)
     assert.deepEqual(output, ['Hello 🐈', 'raw stderr'])
     await wait(300); assert.equal(output.length, 2)
+  } finally { stop(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('event entries classify Claude and Codex activity while preserving terminal formatting', () => {
+  const timestamp = '2026-10-11T01:02:03.000Z'
+  const assistant = JSON.stringify({ type: 'assistant', timestamp, message: { content: [
+    { type: 'text', text: 'Checking the task' }, { type: 'tool_use', name: 'Read', input: { file_path: 'app.mjs' } }
+  ] } })
+  assert.deepEqual(eventEntries(assistant).map(({ kind, text, at }) => ({ kind, text, at })), [
+    { kind: 'agent', text: 'Checking the task', at: timestamp },
+    { kind: 'sent', text: '→ Read {"file_path":"app.mjs"}', at: timestamp }
+  ])
+  assert.equal(formatEvent(assistant), 'Checking the task\n→ Read {"file_path":"app.mjs"}')
+
+  const user = JSON.stringify({ type: 'user', timestamp, message: { content: [{ type: 'tool_result', content: 'all good' }] } })
+  assert.deepEqual(eventEntries(user).map(({ kind, text, at }) => ({ kind, text, at })), [
+    { kind: 'received', text: '← all good', at: timestamp }
+  ])
+  assert.equal(formatEvent(user), '← all good')
+
+  const started = JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'node test.mjs' } })
+  const completed = JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'node test.mjs', exit_code: 0, aggregated_output: 'passed' } })
+  assert.equal(eventEntries(started)[0].kind, 'sent'); assert.equal(eventEntries(started)[0].at, null)
+  assert.equal(eventEntries(completed)[0].kind, 'received'); assert.equal(eventEntries(completed)[0].at, null)
+  assert.equal(formatEvent(started), '→ command_execution node test.mjs')
+  assert.equal(formatEvent(completed), '← command_execution node test.mjs [0] passed')
+
+  assert.deepEqual(eventEntries('stderr').map(({ kind, text, at }) => ({ kind, text, at })), [{ kind: 'info', text: 'stderr', at: null }])
+  assert.equal(formatEvent('stderr'), 'stderr')
+})
+
+test('log growth times date lines that carry none; terminal lines are coloured by kind with NZ time', () => {
+  const index = [{ at: 1000, size: 50 }, { at: 2000, size: 120 }]
+  assert.equal(timeAt(index, 0), 1000); assert.equal(timeAt(index, 49), 1000)
+  assert.equal(timeAt(index, 50), 2000); assert.equal(timeAt(index, 119), 2000)
+  assert.equal(timeAt(index, 120), null); assert.equal(timeAt([], 0), null)
+  const entries = [{ kind: 'sent', text: 'a', at: null }, { kind: 'sent', text: 'b', at: 'own' }]
+  fillTimes(entries, index, 60)
+  assert.deepEqual(entries.map(e => e.at), [new Date(2000).toISOString(), 'own'])
+  const root = mkdtempSync(join(tmpdir(), 'times-')), file = join(root, 'a.log')
+  try {
+    assert.deepEqual(readTimes(file), [])
+    writeFileSync(file + '.times', '1000 50\nbroken\n2000 120\n')
+    assert.deepEqual(readTimes(file), index)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+  const at = '2026-10-11T01:02:03.000Z' // NZDT, UTC+13
+  assert.equal(terminalLine({ kind: 'sent', text: '→ Read x', at }, true), '\x1b[2m14:02:03\x1b[0m \x1b[36m→ Read x\x1b[0m')
+  assert.equal(terminalLine({ kind: 'received', text: '← ok', at: null }, true), '\x1b[32m← ok\x1b[0m')
+  assert.equal(terminalLine({ kind: 'sent', text: '→ Read x', at }), '14:02:03 → Read x')
+})
+
+test('followLog dates a Codex line from the .times file by its start offset', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'viewer-times-')), file = join(root, 'agent.log'), output = []
+  const first = '{"type":"item.completed","item":{"type":"agent_message","text":"one"}}\n'
+  writeFileSync(file, first + '{"type":"item.completed","item":{"type":"agent_message","text":"two"}}\n')
+  writeFileSync(file + '.times', `1000 ${first.length}\n2000 ${first.length * 2}\n`)
+  const stop = followLog(file, line => output.push(line))
+  try {
+    await until(() => output.length === 2)
+    const nz = ms => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Pacific/Auckland', hour12: false })
+    assert.deepEqual(output, [`${nz(1000)} one`, `${nz(2000)} two`])
   } finally { stop(); rmSync(root, { recursive: true, force: true }) }
 })

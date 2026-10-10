@@ -72,6 +72,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
     return row
   }
   return {
+    getAgent(id) { return get(id) },
     async tabCreate({ cwd, label, session }) {
       const id = `headless-${randomUUID()}`
       bindings.withBoardLock(root, () => {
@@ -158,5 +159,6 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
 }
 export const headless = createHeadless()
 export const { tabCreate, agentStart, agentPrompt, agentList, paneRead, paneClose, focusAgent } = headless
+export const getHeadlessAgent = id => headless.getAgent(id)
 export const waitForPrompt = async () => true
 export const agentWorkspaceOr = async () => null
