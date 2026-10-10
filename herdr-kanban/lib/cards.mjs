@@ -536,6 +536,10 @@ export function hasBuilderPass(card) {
   } catch { return false }
 }
 
+// A builder's scripted section replace can drop the newline before the next heading
+// ("Blocker: none## Evidence"), hiding that section from done (Injectbuddy I996, 2026-10-10).
+export const unglueHeadings = text => text.replace(/([^\r\n])(## (?:Implementation|Evidence|Reviewer evidence)\b)/g, '$1\n\n$2')
+
 // Builders also write "- Stage: builder, Outcome: PASS, Files: ..." on one line and
 // "Outcome: PASS: <note>"; read those the same (Injectbuddy I556 stalled on the format).
 export const BUILDER_FIELDS = ['Stage', 'Outcome', 'Files', 'Check', 'Result', 'Evidence', 'Blocker']

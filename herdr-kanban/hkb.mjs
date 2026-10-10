@@ -23,7 +23,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
@@ -378,7 +378,8 @@ try {
     if (commitError) fail(`done refused: ${commitError}. Fix it in your worktree (exactly one commit, card-listed files only; restore build-regenerated or out-of-scope files), then run hkb done again.`)
   }
   if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
-    const text = readFileSync(current.path, 'utf8')
+    const raw = readFileSync(current.path, 'utf8'), text = unglueHeadings(raw)
+    if (text !== raw) writeFileSync(current.path, text)
     const sections = []
     for (const heading of ['Implementation', 'Evidence']) {
       const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
