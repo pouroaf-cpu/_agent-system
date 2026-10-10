@@ -32,6 +32,17 @@ An `ACn cannot run: <why>` line is right only when that AC's Check is a test fil
 card creates, marked (new) in ## Files: confirm the file is absent on the base, then trace
 the AC as below instead of running it. Never FAIL that as check-broken (PLANNER.md allows
 the line; I1012, IA53, IA54, IA92 and IA96 were FAILed for it, 2026-10-11).
+A moved HEAD is not a fault. Other cards integrate while this one waits, so the plan's
+`Inspected current state` HEAD is often behind the checkout. When the files the card names
+are unchanged since the plan's HEAD (`git diff --stat <plan HEAD> HEAD -- <card files>` is
+empty) and your base run still fails each AC the way the plan says, PASS and write the new
+HEAD in the evidence. FAIL stale-plan only for a fact the Builder relies on that is now
+wrong: a changed card file, count, line number, selector or route.
+Never FAIL for the wording of a Base run line alone. If your own run shows that AC fails on
+the base for the right reason, or cannot pass because it tests a file this card creates,
+the plan is right: PASS and put the corrected line in the evidence (I1011, 2026-10-11: a
+correct plan was sent back for a HEAD line and one Base run sentence, costing a third
+Planner run and a second full check).
 Check every AC and every listed viewport/state before you hand off, even after one
 fails, and list every problem in the one FAIL (I974, 2026-10-09: three FAILs in 16 min,
 each naming one new problem; AC5 was unmeasured from the first plan).
