@@ -539,6 +539,7 @@ export function hasBuilderPass(card) {
 // A builder's scripted section replace can drop the newline before the next heading
 // ("Blocker: none## Evidence"), hiding that section from done (Injectbuddy I996, 2026-10-10).
 export const unglueHeadings = text => text.replace(/([^\r\n])(## (?:Implementation|Evidence|Reviewer evidence)\b)/g, '$1\n\n$2')
+export const emptySectionError = (verb, heading, text) => `${verb} requires a current ${heading} result; the first ## ${heading} section on the card is empty (only the placeholder comment). Replace the comment under that existing heading with the result${(text.match(new RegExp(`^## ${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'gm'))?.length ?? 0) > 1 ? `; a result under a later ## ${heading} heading is not read and must be moved under the first one` : ''}. Full logs belong in linked evidence files`
 
 // Builders also write "- Stage: builder, Outcome: PASS, Files: ..." on one line and
 // "Outcome: PASS: <note>"; read those the same (Injectbuddy I556 stalled on the format).

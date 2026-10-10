@@ -23,7 +23,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
@@ -393,7 +393,7 @@ try {
     const sections = []
     for (const heading of ['Implementation', 'Evidence']) {
       const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
-      if (!content) fail(`${verb} requires a current ${heading} result; full logs belong in linked evidence files`)
+      if (!content) fail(emptySectionError(verb, heading, text))
       sections.push(content)
     }
     if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
