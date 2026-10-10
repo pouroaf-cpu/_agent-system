@@ -12,6 +12,7 @@ import { readBoard } from './cards.mjs'
 import { readWorkflow } from './workflow-state.mjs'
 
 const STATE = '.owner-alerted.json'
+export const MANAGER_GRACE = 60 * 60 * 1000
 
 // The plain question the board wrote for the operator, if any.
 export function ownerReason(text) {
@@ -42,8 +43,12 @@ export async function alertOwnerCards({ project, tasksDir, send = critical }) {
   // for the operator too; only Pou alerted, so those sat silent (operator, 2026-10-10).
   // A [board] wait is a conflict with the board's own tooling, not a product question: it goes
   // to the Kanban Manager (hkb.mjs tellManager) and never pages the operator (operator, 2026-10-09).
+  // The project's manager chat gets the hold first (inbox ASK) and asks the operator itself if it
+  // must; the board pages only once the hold has sat MANAGER_GRACE unanswered. I994 paged the
+  // operator at once with a process question its manager never asked (operator, 2026-10-10).
   const boardData = readBoard(tasksDir), workflow = readWorkflow(tasksDir)
-  const owner = [...boardData.pou, ...boardData.planning.filter(c => workflow[c.id]?.waitFor?.decision && !workflow[c.id]?.waitFor?.board)]
+  const managerHadItsChance = (w) => Date.now() - Date.parse(w.since || 0) >= MANAGER_GRACE
+  const owner = [...boardData.pou, ...boardData.planning.filter(c => { const w = workflow[c.id]?.waitFor; return w?.decision && !w.board && managerHadItsChance(w) })]
   const fresh = owner.filter(c => !alerted[c.id])
   const next = Object.fromEntries(owner.map(c => [c.id, alerted[c.id] || new Date().toISOString()]))
   const changed = fresh.length || Object.keys(alerted).some(id => !next[id])
