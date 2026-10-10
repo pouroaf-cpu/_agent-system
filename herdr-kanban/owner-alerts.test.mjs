@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { alertOwnerCards, ownerReason, pushover } from './lib/owner-alerts.mjs'
+import { updateWorkflow } from './lib/workflow-state.mjs'
 
 test('each card that lands in Pou alerts once; first run summarises; re-entry alerts again', async t => {
   const root = mkdtempSync(join(tmpdir(), 'owner-alerts-')), tasks = join(root, 'TASKS')
@@ -38,4 +39,18 @@ test('a critical alert sends emergency priority with retry and expire', async t 
   await pushover('board', 'm', env)
   assert.deepEqual([sent[0].priority, sent[0].retry, sent[0].expire], ['2', '60', '1800'])
   assert.deepEqual([sent[1].priority, sent[1].retry], ['0', undefined])
+})
+
+// Operator 2026-10-10: a card held in Planning for a decision never alerted; only Pou did.
+test('a card waiting in Planning for a decision alerts once with its question', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'owner-alerts-')), tasks = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  for (const id of ['T-1', 'T-2']) writeFileSync(join(tasks, 'planning', `${id}.md`), `# ${id} — card ${id}\n`)
+  writeFileSync(join(tasks, '.owner-alerted.json'), '{}')
+  updateWorkflow(tasks, 'T-1', { waitFor: { cards: [], files: [], decision: true, why: 'Which dose unit?' } })
+  const sent = [], send = async (title, message) => { sent.push({ title, message }) }
+  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), ['T-1'])
+  assert.match(sent[0].title, /P T-1 needs you/); assert.match(sent[0].message, /Which dose unit\?/)
+  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [], 'no repeat')
 })
