@@ -10,6 +10,11 @@ function Update-BoardOutage {
     [IO.File]::WriteAllText($StatePath, (Get-Date -Format o))
     & $Send
 }
+function Get-BoardFailureStatus {
+    param([scriptblock]$Request, [scriptblock]$ListenerCheck)
+    if (-not (& $ListenerCheck)) { return 'Gone' }
+    try { & $Request; return 'Slow' } catch { return 'Down' }
+}
 # Watchdog alerts go to the Kanban Manager inbox, not Pushover (operator, 2026-10-09).
 function Send-Push {
     param([string]$Title, [string]$Message)

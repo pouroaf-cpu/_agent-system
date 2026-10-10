@@ -22,7 +22,7 @@ echo {"id":"cli:agent:list","error":{"code":"server_not_running"}} 1>&2
 exit /b 1
 `
 
-async function fixture(t) {
+async function fixture(t, extraAlertFunctions = '') {
   const root = mkdtempSync(join(tmpdir(), 'watchdog-herdr-')), bin = join(root, 'bin')
   const server = createServer((req, res) => res.end('{}'))
   await new Promise(done => server.listen(0, '127.0.0.1', done))
@@ -36,7 +36,7 @@ async function fixture(t) {
 function Send-Push { param([string]$Title, [string]$Message) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
 function Get-LanAddress { $env:TEST_LAN_ADDRESS }
 function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
-`)
+${extraAlertFunctions}`)
   writeFileSync(join(root, 'board.config.json'), JSON.stringify({ port: server.address().port }))
   writeFileSync(join(root, 'kanban.ps1'), `Add-Content (Join-Path $PSScriptRoot 'kanban-calls.txt') 'kanban'`)
   writeFileSync(join(root, 'restart-kanban.ps1'), `param([switch]$Lan)\nAdd-Content (Join-Path $PSScriptRoot 'restarts.txt') "restart Lan=$Lan"`)
@@ -48,6 +48,24 @@ function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscusto
   const lines = name => read(name).split(/\r?\n/).filter(Boolean)
   return { root, bin, run, read, lines }
 }
+
+test('board timeout with a live listener and successful retry sends no alert', async t => {
+  const { root, bin, run, read, lines } = await fixture(t, `
+$script:boardRequestCount = 0
+function Invoke-WebRequest {
+  param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+  $script:boardRequestCount++
+  if ($script:boardRequestCount -eq 1) { throw 'fixture first request timed out' }
+}
+`)
+  writeFileSync(join(bin, 'up'), '')
+  const result = await run()
+  assert.equal(result.code, 0, result.out + read('watchdog.log'))
+  assert.deepEqual(lines('pushes.txt'), [])
+  assert.equal(existsSync(join(root, '.watchdog-outage')), false, 'a recovered blip does not leave outage state')
+  assert.match(read('watchdog.log'), /DOWN - checking recovery/)
+  assert.match(read('watchdog.log'), /SLOW - retry passed/)
+})
 
 test('herdr down: the watchdog starts the default session and logs it instead of failing on herdr stderr', async t => {
   const { bin, run, read, lines } = await fixture(t)

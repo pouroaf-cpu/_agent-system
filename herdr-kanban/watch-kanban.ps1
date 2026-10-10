@@ -12,18 +12,35 @@ try {
         Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
         $healthy = $true
     } catch { }
-    try {
-        Update-BoardOutage -Healthy $healthy -StatePath $state -Send { Send-BoardDownPush }
-    } catch {
-        "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
-    }
-    if (-not $healthy) {
-        "$(Get-Date -Format o) DOWN - checking recovery" | Out-File -Append -Encoding utf8 $log
-        $alive = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-        if (-not $alive) { & (Join-Path $root 'kanban.ps1') -Silent }
-        Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+    if ($healthy) {
         Update-BoardOutage -Healthy $true -StatePath $state -Send { }
-    } elseif (Test-Path (Join-Path $root '.lan-on')) {
+    } else {
+        "$(Get-Date -Format o) DOWN - checking recovery" | Out-File -Append -Encoding utf8 $log
+        $recovery = Get-BoardFailureStatus -Request {
+            Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+        } -ListenerCheck { Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue }
+        if ($recovery -eq 'Gone') {
+            try {
+                Update-BoardOutage -Healthy $false -StatePath $state -Send { Send-BoardDownPush }
+            } catch {
+                "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
+            }
+            & (Join-Path $root 'kanban.ps1') -Silent
+            Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+            Update-BoardOutage -Healthy $true -StatePath $state -Send { }
+        } elseif ($recovery -eq 'Slow') {
+            "$(Get-Date -Format o) SLOW - retry passed" | Out-File -Append -Encoding utf8 $log
+            Update-BoardOutage -Healthy $true -StatePath $state -Send { }
+        } else {
+            try {
+                Update-BoardOutage -Healthy $false -StatePath $state -Send { Send-BoardDownPush }
+            } catch {
+                "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
+            }
+            throw 'Board did not answer after retry'
+        }
+    }
+    if ($healthy -and (Test-Path (Join-Path $root '.lan-on'))) {
         # The phone listener is bound to the address the board started with; DHCP moves it.
         $lan = Get-LanAddress
         $lanUp = $false
