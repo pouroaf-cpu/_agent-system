@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFile } from 'node:child_process'
 import { resolve } from 'node:path'
 
 // Agents start servers (`next dev`, `next start`) for their checks and sometimes leave
@@ -74,4 +74,34 @@ function nodeProcesses({ cwd = false } = {}) {
   try { rows = [JSON.parse(r.stdout || '[]')].flat() } catch {}
   // Kernel/user times are in 100 ns units.
   return rows.map(p => ({ pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }))
+}
+
+// A Playwright WebKit check leaves WebKitNetworkProcess.exe behind when its browser is killed
+// rather than closed: 8 of them, ~250 MB of commit each, were up to 7 h old when the PC ran out
+// of virtual memory and the board died (2026-10-10 22:43). One whose parent is gone, or whose
+// parent's pid now belongs to a younger process, has no browser left to serve. minAgeMs leaves a
+// browser that is still starting or closing alone.
+export function stopOrphanWebKit({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcesses, kill = killTree } = {}) {
+  const all = list(), byPid = new Map(all.map(p => [p.pid, p]))
+  const orphan = p => { const parent = byPid.get(p.ppid); return !parent || parent.created > p.created }
+  const hits = all.filter(p => /^WebKit\w*\.exe$/i.test(p.name) && p.created && now - p.created > minAgeMs && orphan(p))
+  for (const p of hits) try { kill(p.pid) } catch {}
+  return hits.map(p => p.pid)
+}
+
+const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } | ConvertTo-Json -Compress`
+
+function allProcesses() {
+  if (process.platform !== 'win32') return []
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', LIST_ALL], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 })
+  try { return [JSON.parse(r.stdout || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', created: Number(p.Created) || 0 })) } catch { return [] }
+}
+
+// Free commit (RAM + pagefile), the limit Windows kills at; os.freemem() is RAM only.
+// Rejects when it cannot be read.
+export function freeCommitGb() {
+  return new Promise((done, fail) => execFile('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory'], { timeout: 20000, windowsHide: true }, (err, out) => {
+    const kb = Number(String(out).trim())
+    err || !kb ? fail(err || new Error('free commit unreadable')) : done(kb / 1024 / 1024)
+  }))
 }

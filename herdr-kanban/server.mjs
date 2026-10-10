@@ -9,7 +9,7 @@ import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
-import { stopRunawayTsservers, stopStaleE2eServers } from './lib/orphan-servers.mjs'
+import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, freeCommitGb } from './lib/orphan-servers.mjs'
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
@@ -147,6 +147,25 @@ function diskLow(now = Date.now()) {
     for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
   }
   return disk.low
+}
+
+// Low-memory pause, shared by every project: free commit (RAM + pagefile) is read every minute.
+// Under 4 GB free no new agents start; above 6 GB they resume. Windows kills whichever process
+// next fails to allocate, and that was the board itself three times in two days (2026-10-09 22:33,
+// 2026-10-10 19:33 and 22:48). Running agents are left alone.
+const memory = { low: false }
+function checkMemory() {
+  freeCommitGb().then(gb => {
+    if (!memory.low && gb < 4) {
+      memory.low = true
+      const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
+      for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
+      notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
+    } else if (memory.low && gb > 6) {
+      memory.low = false
+      for (const project of config.projects) activity(project, '-', 'resume', `PC has ${gb.toFixed(1)} GB of commit free; new agents resumed`)
+    }
+  }).catch(() => {})
 }
 
 function archiveNoReview(project, tasksDir) {
@@ -551,7 +570,7 @@ async function pollProject(project) {
       if (Date.now() - (emptyPolls.get(project) ?? -Infinity) < 60000) return
       emptyPolls.set(project, Date.now())
     } else emptyPolls.delete(project)
-    const lowDisk = diskLow()
+    const lowDisk = diskLow() || memory.low
     if (activeCardRun(project)) {
       if (!lowDisk) await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
       broadcastBoard(project)
@@ -1634,6 +1653,8 @@ async function startPollers() {
   console.log(`herdr: ${(await isRunning()) ? 'up' : 'down'}`)
   cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
   setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
+  checkMemory()
+  setInterval(checkMemory, 60000)
 
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.
@@ -1653,6 +1674,8 @@ async function startPollers() {
     if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
     const stale = stopStaleE2eServers()
     if (stale.length) herdrLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
+    const webkit = stopOrphanWebKit()
+    if (webkit.length) herdrLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
     // A cleanup deferred at integration was only retried while the card sat in Completed or
     // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
     for (const project of config.projects) {
