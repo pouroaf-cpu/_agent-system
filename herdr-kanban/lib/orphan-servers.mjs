@@ -81,12 +81,21 @@ function nodeProcesses({ cwd = false } = {}) {
 // of virtual memory and the board died (2026-10-10 22:43). One whose parent is gone, or whose
 // parent's pid now belongs to a younger process, has no browser left to serve. minAgeMs leaves a
 // browser that is still starting or closing alone.
-export function stopOrphanWebKit({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcesses, kill = killTree } = {}) {
+// Returns only the pids that are gone afterwards, so the log never claims a stop that did not happen.
+export function stopOrphanWebKit({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcesses, kill = cimTerminate } = {}) {
   const all = list(), byPid = new Map(all.map(p => [p.pid, p]))
   const orphan = p => { const parent = byPid.get(p.ppid); return !parent || parent.created > p.created }
-  const hits = all.filter(p => /^WebKit\w*\.exe$/i.test(p.name) && p.created && now - p.created > minAgeMs && orphan(p))
-  for (const p of hits) try { kill(p.pid) } catch {}
-  return hits.map(p => p.pid)
+  const hits = all.filter(p => /^WebKit\w*\.exe$/i.test(p.name) && p.created && now - p.created > minAgeMs && orphan(p)).map(p => p.pid)
+  if (!hits.length) return []
+  try { kill(hits) } catch {}
+  const left = new Set(list().map(p => p.pid))
+  return hits.filter(pid => !left.has(pid))
+}
+
+// taskkill and Stop-Process both answered "no running instance" for these orphans while they still
+// held their commit; the CIM Terminate call ended them (2026-10-10).
+function cimTerminate(pids) {
+  spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "${pids.map(pid => `ProcessId=${Number(pid)}`).join(' or ')}" | Invoke-CimMethod -MethodName Terminate | Out-Null`], { stdio: 'ignore', timeout: 20000, windowsHide: true })
 }
 
 const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } | ConvertTo-Json -Compress`

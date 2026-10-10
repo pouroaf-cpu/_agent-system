@@ -37,7 +37,7 @@ test('a relative-path next server is found by its working directory; other workt
 
 test('a WebKit process whose browser is gone is stopped; a live run, a fresh one and other programs are not (board down 2026-10-10)', () => {
   const now = 1e12, old = now - 3600e3
-  const list = () => [
+  let procs = [
     { pid: 1, ppid: 900, name: 'WebKitNetworkProcess.exe', created: old },
     { pid: 2, ppid: 50, name: 'WebKitWebProcess.exe', created: old },
     { pid: 50, ppid: 900, name: 'Playwright.exe', created: old - 1000 },
@@ -46,7 +46,8 @@ test('a WebKit process whose browser is gone is stopped; a live run, a fresh one
     { pid: 4, ppid: 901, name: 'WebKitNetworkProcess.exe', created: now - 60e3 },
     { pid: 5, ppid: 902, name: 'chrome.exe', created: old },
   ]
-  const killed = []
-  assert.deepEqual(stopOrphanWebKit({ now, list, kill: pid => killed.push(pid) }), [1, 3])
+  const list = () => procs, killed = []
+  // pid 3 survives the kill, so it is not reported as stopped.
+  assert.deepEqual(stopOrphanWebKit({ now, list, kill: pids => { killed.push(...pids); procs = procs.filter(p => p.pid !== 1) } }), [1])
   assert.deepEqual(killed, [1, 3])
 })
