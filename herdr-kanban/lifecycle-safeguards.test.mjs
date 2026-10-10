@@ -10,7 +10,7 @@ import { syncReviewClaims } from './lib/review-claims.mjs'
 import { routeBuilderNoHandoff } from './lib/autospawn.mjs'
 import { workerPrompt, plannerPrompt } from './lib/prompt.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
-import { readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
+import { operationalHold, readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { runCardPlanner, drainIssues } from './lib/card-planner.mjs'
 
 test('Builder fallback routes Working to Planning and preserves assignment/worktree evidence', t => {
@@ -54,6 +54,26 @@ test('Builder that filed hkb issue then exited is kicked back with its own note,
     rmSync(join(tasks, 'planning'), { recursive: true, force: true })
   }
   assert.notEqual(prints[0], prints[1], 'two different causes are not "the same failure"')
+})
+
+test('Builder issue exit clears its operational hold so Planner correction can start (I1002, IA138)', async t => {
+  const { appendHistory } = await import('./lib/card-history.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-operational-issue-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  writeFileSync(join(working, 'T-1.md'), '# T-1 — issue\n**Workflow:** card-owned\n')
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'p', started: new Date(Date.now() - 60000).toISOString() } } }))
+  const card = findCard(tasks, 'T-1')
+  recordOperationalFailure(tasks, card, 'operational prerequisite missing', root)
+  assert.equal(operationalHold(tasks, card, root), 'operational prerequisite missing')
+  appendHistory(tasks, 'T-1', { event: 'failure', stage: 'working', category: 'operational', note: '[operational] Signed-in /account/ route must load' })
+
+  const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Builder exited after filing issue' })
+
+  assert.equal(moved.column, 'planning')
+  assert.equal(readWorkflow(tasks)['T-1'].operational, null)
+  assert.equal(operationalHold(tasks, moved, root), null)
 })
 
 test('Builder fallback holds a question in Planning for the operator instead of requeueing', t => {
