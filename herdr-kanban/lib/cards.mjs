@@ -737,6 +737,11 @@ function readColumn(tasksDir, col) {
 // marker is the operator's act — edit or move the card and the sweep sees it again.
 export const isParked = (card) => /\*\*Parked\*\*/.test(readFileSync(card.path, 'utf8'))
 
+// A card whose latest note is "Operator hold" is held on purpose (the Kanban Manager parks it in
+// Owner for the operator): waiting, not stuck. Any later note ends the hold (IA49, 2026-10-10).
+export const isOperatorHold = (card) =>
+  [...readFileSync(card.path, 'utf8').matchAll(/^\*\*([A-Za-z][A-Za-z0-9 '-]*)\*\* \d{4}-\d\d-\d\dT/gm)].at(-1)?.[1] === 'Operator hold'
+
 // Full board snapshot: { planning: [...], planned: [...], ..., archive: [...] }
 export function readBoard(tasksDir) {
   const board = {}

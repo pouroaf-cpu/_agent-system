@@ -7,7 +7,7 @@ import { formatNZTime, formatNZText } from './nz-time.mjs'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { herdrLog } from './herdr.mjs'
-import { readBoard } from './cards.mjs'
+import { readBoard, isOperatorHold } from './cards.mjs'
 import { laneEnteredAt } from './card-history.mjs'
 import { postInbox } from './inbox.mjs'
 
@@ -78,7 +78,7 @@ export function resolveManagerException(boardRoot, key) {
 export function ownerAgeing(tasksDir, { now = Date.now(), hours = 4, burst = 3 } = {}) {
   const board = readBoard(tasksDir)
   const age = card => now - (laneEnteredAt(tasksDir, card.id, 'owner') ?? card.mtime)
-  const old = board.owner.filter(c => age(c) >= hours * HOUR)
+  const old = board.owner.filter(c => age(c) >= hours * HOUR && !isOperatorHold(c))
   const recent = board.owner.filter(c => age(c) < HOUR)
   if (!old.length && recent.length < burst) return null
   const owner = new Set(board.owner.map(c => c.id))

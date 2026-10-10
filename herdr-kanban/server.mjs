@@ -40,7 +40,7 @@ const { validateAgentBackend } = await import('./lib/agent-backend.mjs')
 const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
-const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard } = await import('./lib/cards.mjs')
+const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
@@ -383,9 +383,10 @@ function cardWaits(project, now = Date.now(), snapshot) {
     // watchdog does; Injectbuddy I694 read "stuck" behind I693's Builder, 2026-10-03).
     const holder = filesBusyHolder(holds[card.id])
     const fileWait = live.has(holder)
-    const decisionWait = !!wait?.decision
+    const held = card.column === 'owner' && isOperatorHold(card)
+    const decisionWait = !!wait?.decision || held
     const on = quota[card.id] ? `usage limit until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
-      : fileWait ? `files held by ${holder}` : decisionWait ? 'decision'
+      : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'decision')
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
