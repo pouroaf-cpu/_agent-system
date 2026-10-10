@@ -94,7 +94,7 @@ async function main() {
     if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
     if (newAsks().length) {
       const added = await settled(newAsks, 0)
-      console.log(`ASK ${added.length} new question(s) in ${inbox}: answer each now, or ask the operator (ask-operator.mjs) if only they can`)
+      console.log(`ASK ${added.length} new question(s) in ${inbox}: answer each now, or ask the operator in chat if only they can`)
       return
     }
     if (Date.now() >= nextCheck) {

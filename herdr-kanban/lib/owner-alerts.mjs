@@ -9,10 +9,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
 import { readBoard } from './cards.mjs'
-import { readWorkflow } from './workflow-state.mjs'
 
 const STATE = '.owner-alerted.json'
-export const MANAGER_GRACE = 60 * 60 * 1000
 
 // The plain question the board wrote for the operator, if any.
 export function ownerReason(text) {
@@ -39,16 +37,11 @@ export async function alertOwnerCards({ project, tasksDir, send = critical }) {
   const path = join(tasksDir, STATE)
   const first = !existsSync(path)
   const alerted = first ? {} : JSON.parse(readFileSync(path, 'utf8'))
-  // A card held in Planning for a decision (hkb issue, captured agent question) is a question
-  // for the operator too; only Pou alerted, so those sat silent (operator, 2026-10-10).
-  // A [board] wait is a conflict with the board's own tooling, not a product question: it goes
-  // to the Kanban Manager (hkb.mjs tellManager) and never pages the operator (operator, 2026-10-09).
-  // The project's manager chat gets the hold first (inbox ASK) and asks the operator itself if it
-  // must; the board pages only once the hold has sat MANAGER_GRACE unanswered. I994 paged the
-  // operator at once with a process question its manager never asked (operator, 2026-10-10).
-  const boardData = readBoard(tasksDir), workflow = readWorkflow(tasksDir)
-  const managerHadItsChance = (w) => Date.now() - Date.parse(w.since || 0) >= MANAGER_GRACE
-  const owner = [...boardData.pou, ...boardData.planning.filter(c => { const w = workflow[c.id]?.waitFor; return w?.decision && !w.board && managerHadItsChance(w) })]
+  // Only Pou pages. A Planning decision hold goes to the project's manager chat (inbox ASK, which
+  // wakes it at once); the manager asks the operator in chat and pages only when asking again
+  // unanswered (ask-operator.mjs --again). The board paging holds itself sent the operator
+  // questions nobody had asked (I994; operator, 2026-10-10: "only when I haven't answered").
+  const owner = readBoard(tasksDir).pou
   const fresh = owner.filter(c => !alerted[c.id])
   const next = Object.fromEntries(owner.map(c => [c.id, alerted[c.id] || new Date().toISOString()]))
   const changed = fresh.length || Object.keys(alerted).some(id => !next[id])
@@ -58,7 +51,7 @@ export async function alertOwnerCards({ project, tasksDir, send = critical }) {
     await send(`${project}: ${fresh.length} cards need you`, fresh.map(c => `${c.id} ${c.title}`).join('\n').slice(0, 1000))
   } else {
     for (const c of fresh) {
-      const reason = ownerReason(readFileSync(c.path, 'utf8')) || String(workflow[c.id]?.waitFor?.why || '').slice(0, 400)
+      const reason = ownerReason(readFileSync(c.path, 'utf8'))
       await send(`${project} ${c.id} needs you`, formatNZText(`${c.title}${reason ? `\n\n${reason}` : ''}`).slice(0, 1000))
     }
   }

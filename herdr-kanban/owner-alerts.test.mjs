@@ -41,21 +41,18 @@ test('a critical alert sends emergency priority with retry and expire', async t 
   assert.deepEqual([sent[1].priority, sent[1].retry], ['0', undefined])
 })
 
-// Operator 2026-10-10: a card held in Planning for a decision never alerted; only Pou did.
-test('a card waiting in Planning for a decision alerts once with its question', async t => {
+// Operator 2026-10-10: decision holds go to the manager chat; only a question the manager asked
+// again unanswered pages (ask-operator.mjs --again). The board never pages a hold itself.
+test('a card waiting in Planning for a decision never pages, however long it waits', async t => {
   const root = mkdtempSync(join(tmpdir(), 'owner-alerts-')), tasks = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(tasks, 'planning'), { recursive: true })
-  for (const id of ['T-1', 'T-2']) writeFileSync(join(tasks, 'planning', `${id}.md`), `# ${id} — card ${id}\n`)
+  writeFileSync(join(tasks, 'planning', 'T-1.md'), '# T-1 — card T-1\n')
   writeFileSync(join(tasks, '.owner-alerted.json'), '{}')
-  // I994: a fresh hold is the manager chat's first; it pages only after MANAGER_GRACE unanswered.
-  updateWorkflow(tasks, 'T-1', { waitFor: { cards: [], files: [], decision: true, why: 'Which dose unit?', since: new Date().toISOString() } })
+  updateWorkflow(tasks, 'T-1', { waitFor: { cards: [], files: [], decision: true, why: 'Which dose unit?', since: new Date(Date.now() - 5 * 3600e3).toISOString() } })
   const sent = [], send = async (title, message) => { sent.push({ title, message }) }
-  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [], 'manager gets it first')
-  updateWorkflow(tasks, 'T-1', { waitFor: { cards: [], files: [], decision: true, why: 'Which dose unit?', since: new Date(Date.now() - 61 * 60000).toISOString() } })
-  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), ['T-1'])
-  assert.match(sent[0].title, /P T-1 needs you/); assert.match(sent[0].message, /Which dose unit\?/)
-  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [], 'no repeat')
+  assert.deepEqual(await alertOwnerCards({ project: 'P', tasksDir: tasks, send }), [])
+  assert.equal(sent.length, 0)
 })
 
 // Operator 2026-10-10: I989/I991 were [board] plan-check conflicts, not product questions; they
