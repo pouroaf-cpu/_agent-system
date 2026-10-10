@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Project chat waiter, modelled on km-wait.mjs. Re-arm after handling its one line.
-// Polling costs no tokens; integrated events never wake the chat. ASK/FOUND lines never wake it
+// Polling costs no tokens; integrated events never wake the chat. FOUND lines never wake it
 // either: each wake is a BOARD EVENT on the operator's phone (Remote Control), so they wait in the
 // inbox and the hourly re-arm reports only their count (operator via Injectbuddy work, 2026-10-09).
+// ASK lines do wake it: a Planner question sat unanswered for up to an hour (operator, 2026-10-10).
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -37,6 +38,20 @@ export async function stuckDetail(projects) {
   } catch { return '' }
 }
 
+// Every 15 min, only while the project has cards that could move (no agent on them, not waiting on
+// a decision, card, file or slot): the manager checks them. Pou is the operator's and Completed
+// waits for a release, so neither counts (operator, 2026-10-10: "things are moving too slow").
+export const CHECK_MS = 15 * 60e3
+export const movable = cards => cards.filter(c => c.lane !== 'pou' && c.lane !== 'completed')
+export const isAsk = line => / ASK \S+ \S+ \(/.test(line)
+async function checkCards(project) {
+  try {
+    const { cards } = await (await fetch(`http://127.0.0.1:7777/api/stuck?minutes=15&project=${encodeURIComponent(project)}`, { signal: AbortSignal.timeout(30000) })).json()
+    const list = movable(cards)
+    return list.length ? `CHECK ${project}: ${list.length} card(s) could move, push each on (answer, approve, retry or card a fix): ${stuckCards(list)}` : null
+  } catch { return null }
+}
+
 export function wakeDecision(before, now) {
   const added = now.cards.filter(c => !before.cards.includes(c))
   if (added.length) return `OWNER/POU ${added.join(', ')}`
@@ -67,6 +82,9 @@ async function main() {
   }
   const snapshot = stuck => ({ project, cards: cards(), inbox: lines(inbox), stuck })
   const started = Date.now(), inboxAtStart = lines(inbox).length
+  // Compare lines, not counts: the chat trims handled lines while this waits.
+  const seenAsks = new Set(lines(inbox).filter(isAsk)), newAsks = () => lines(inbox).filter(l => isAsk(l) && !seenAsks.has(l))
+  let nextCheck = started + CHECK_MS
   let before = snapshot(null)
   before.stuck = await stuck()
   for (let tick = 0; ; tick++) {
@@ -74,6 +92,16 @@ async function main() {
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
     const wake = wakeDecision(before, now)
     if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
+    if (newAsks().length) {
+      const added = await settled(newAsks, 0)
+      console.log(`ASK ${added.length} new question(s) in ${inbox}: answer each now, or ask the operator (ask-operator.mjs) if only they can`)
+      return
+    }
+    if (Date.now() >= nextCheck) {
+      nextCheck = Date.now() + CHECK_MS
+      const check = await checkCards(project)
+      if (check) { console.log(check); return }
+    }
     if (now.stuck == null) now.stuck = before.stuck
     before = now // after a trim or a card leaving, its next arrival must still wake
     if (Date.now() - started > LIFETIME_MS) { console.log(digest(inboxAtStart, lines(inbox).length, inbox)); return }

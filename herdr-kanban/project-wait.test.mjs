@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wakeDecision, digest, stuckCards } from './scripts/project-wait.mjs'
+import { wakeDecision, digest, stuckCards, isAsk, movable } from './scripts/project-wait.mjs'
 
-test('project waiter wakes only for Owner/Pou and stuck; ASK/FOUND wait for the hourly digest', () => {
+test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly digest', () => {
   const before = { project: 'Injectbuddy', cards: [], inbox: [], stuck: 1 }
   assert.equal(wakeDecision(before, { ...before }), null)
   assert.equal(wakeDecision(before, { ...before, inbox: ['ASK Injectbuddy I1: choose', 'FOUND Injectbuddy I1: problem'] }), null)
@@ -26,4 +26,15 @@ test('an inbox burst settles into one wake with every line', async () => {
   setTimeout(() => inbox.push('b'), 15)
   setTimeout(() => inbox.push('c'), 35)
   assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+})
+
+test('ASK lines wake the manager; FOUND lines do not count as questions', () => {
+  assert.ok(isAsk('- 10 Oct, 5:28 pm ASK Injectbuddy I994 (planning): Approve the investigation?'))
+  assert.ok(!isAsk('- 10 Oct, 5:28 pm FOUND Injectbuddy I994 (planning): ASK the vendor later'))
+})
+
+test('the 15-minute check counts only cards the manager can move', () => {
+  const cards = [{ id: 'A', lane: 'planning' }, { id: 'B', lane: 'pou' }, { id: 'C', lane: 'completed' }, { id: 'D', lane: 'owner' }]
+  assert.deepEqual(movable(cards).map(c => c.id), ['A', 'D'])
+  assert.deepEqual(movable([]), [])
 })
