@@ -31,6 +31,12 @@ AC the card changes.
 Check every AC and every listed viewport/state before you hand off, even after one
 fails, and list every problem in the one FAIL (I974, 2026-10-09: three FAILs in 16 min,
 each naming one new problem; AC5 was unmeasured from the first plan).
+A base run cannot show a Check that a correct build would also fail, so trace it: for
+each AC, walk the Check's steps and expected values against the plan's own steps and the
+data the Check seeds, and FAIL (check-unreachable) when the planned build could not pass
+it. Look for a step that needs a row an earlier step removed, and for an exact count that
+ignores other seeds or fixtures sharing the same key (I998, 2026-10-10: FAIL 2 passed an
+AC2 count that FAIL 3 then failed; both problems were in the Check from the start).
 Do not repair the Check or implementation. Record the command, observed output,
 exact failing assertion and dependency verification in the verdict evidence.
 
