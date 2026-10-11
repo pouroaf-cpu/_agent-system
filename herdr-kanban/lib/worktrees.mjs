@@ -264,6 +264,7 @@ function prepareDependencies(workspacePath, source) {
 export function prepareWorktreeEnvironment(entry) {
   prepareDependencies(entry.workspacePath, entry.integrationWorkspace)
   refreshExpoRouteTypes(entry.workspacePath)
+  refreshNextRouteTypes(entry.workspacePath)
   if (entry.integrationWorkspace) refreshExpoRouteTypes(entry.integrationWorkspace) // Planner base runs use it
 }
 
@@ -283,6 +284,23 @@ export function refreshExpoRouteTypes(workspacePath) {
   if (!appRoot) return false
   // ponytail: best effort; a failure leaves the old file and tsc reports it as before
   return spawnSync(process.execPath, ['-e', ROUTE_TYPES, types], { cwd: workspacePath, env: { ...process.env, EXPO_ROUTER_APP_ROOT: appRoot }, timeout: 60000, stdio: 'ignore' }).status === 0
+}
+
+// Next's generated types go stale the same way. The per-route files (.next/types/app/<route>/page.ts)
+// are type-checked through tsconfig's ".next/types/**/*.ts" include and nothing removes one when a
+// rebase deletes its route, so tsc fails on a page that no longer exists (I957, 2026-10-09). Drop
+// them, then let `next typegen` (no dev server or build needed) rewrite routes.d.ts, which the
+// tracked next-env.d.ts references and a fresh checkout does not have.
+export function refreshNextRouteTypes(workspacePath) {
+  if (!['next.config.js', 'next.config.mjs', 'next.config.ts'].some(f => existsSync(join(workspacePath, f)))) return false
+  const bin = join(workspacePath, 'node_modules', 'next', 'dist', 'bin', 'next')
+  try {
+    rmSync(join(workspacePath, '.next', 'types', 'app'), { recursive: true, force: true })
+    // ponytail: best effort; a failure leaves the old routes.d.ts and tsc reports it as before
+    return existsSync(bin) && spawnSync(process.execPath, [bin, 'typegen'], { cwd: workspacePath, timeout: 60000, stdio: 'ignore' }).status === 0
+  } catch {
+    return false
+  }
 }
 
 export function integratedDependencyHold(entry, tasksDir) {

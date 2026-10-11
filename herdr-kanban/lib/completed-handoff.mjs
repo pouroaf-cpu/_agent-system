@@ -11,7 +11,7 @@ import { readDelivery } from './delivery-state.mjs'
 import { isHeadless } from './headless.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
-import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, refreshExpoRouteTypes } from './worktrees.mjs'
+import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
 
 // The Builder's recorded check (## Evidence "Check:"), re-run in the card's
@@ -56,7 +56,10 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   if (up.status === 'conflict') return returnIntegrationConflict(tasksDir, card.id, up)
   const entry = readWorktrees(tasksDir)[card.id]
   if (entry.integrationChecked === up.commit) return null
-  refreshExpoRouteTypes(entry.workspacePath) // the rebase may bring routes other cards added
+  // The rebase may bring routes other cards added, dependency changes other cards made, or
+  // leave this worktree's own stale Expo/Next route types behind (I957, I1006, IA133: all three
+  // passed on a plain retry with no code change, so the check's own environment was at fault).
+  try { prepareWorktreeEnvironment(entry) } catch { /* a real install stays pending; the check still runs and reports it */ }
   const check = await io.runIntegrationCheck(command, entry.workspacePath, 300000)
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)

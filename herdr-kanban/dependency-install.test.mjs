@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
-import { dependencyInstallHold, startDependencyInstall, prepareWorktreeEnvironment, refreshExpoRouteTypes } from './lib/worktrees.mjs'
+import { dependencyInstallHold, startDependencyInstall, prepareWorktreeEnvironment, refreshExpoRouteTypes, refreshNextRouteTypes } from './lib/worktrees.mjs'
 
 // Running installs are recorded beside the board config, so a restarted board can see them.
 const stateDir = mkdtempSync(join(tmpdir(), 'hkb-deps-state-'))
@@ -175,5 +175,25 @@ test('an Expo typed-routes checkout gets router.d.ts regenerated from its route 
     assert.match(readFileSync(join(dir, 'expo-env.d.ts'), 'utf8'), /expo\/types/)
     put('app.json', '{"expo":{}}')
     assert.equal(refreshExpoRouteTypes(dir), false, 'projects without typed routes are left alone')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// I957 2026-10-09: a stale .next/types/app/<fixture>/page.ts outlived the route it type-checked,
+// failing tsc on a route that no longer existed (same commit passed on a plain retry).
+test('a Next checkout gets its stale .next/types regenerated via next typegen', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hkb-next-types-'))
+  try {
+    const put = (path, text) => { mkdirSync(join(dir, path, '..'), { recursive: true }); writeFileSync(join(dir, path), text) }
+    put('next.config.ts', '')
+    put('.next/types/app/stale-fixture/page.ts', 'stale')
+    put('node_modules/next/dist/bin/next',
+      "const {mkdirSync,writeFileSync}=require('fs'), {join}=require('path')\n" +
+      "const types=join(__dirname,'..','..','..','..','.next','types')\n" +
+      "mkdirSync(types,{recursive:true}); writeFileSync(join(types,'routes.d.ts'),'fresh')")
+    assert.equal(refreshNextRouteTypes(dir), true)
+    assert.equal(readFileSync(join(dir, '.next/types/routes.d.ts'), 'utf8'), 'fresh')
+    assert.equal(existsSync(join(dir, '.next/types/app/stale-fixture/page.ts')), false, 'the stale per-route file is gone, not just left stale')
+    rmSync(join(dir, 'next.config.ts'))
+    assert.equal(refreshNextRouteTypes(dir), false, 'projects without a next.config are left alone')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
