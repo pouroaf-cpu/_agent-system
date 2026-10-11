@@ -152,6 +152,8 @@ test('exact overlapping card files are held while unrelated files are free', () 
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), null)
     moveCard(f.tasks, 'T-1', 'working')
     assert.match(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration }), /held by T-1/)
+    // A card file that moved lanes after it was listed must not throw (I1051 took the server down).
+    assert.match(overlapHoldReason({ tasksDir: f.tasks, card: { ...second, path: join(f.tasks, 'working', 'gone.md') }, projectPath: f.integration }), /no exact files listed/)
     // A project's parallelFiles may be built on at once; integration serializes them.
     assert.equal(overlapHoldReason({ tasksDir: f.tasks, card: second, projectPath: f.integration, parallelFiles: ['app.js'] }), null)
     writeFileSync(join(f.integration, 'other.js'), 'other\n')

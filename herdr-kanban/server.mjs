@@ -867,7 +867,8 @@ function openFeed(project) {
   const onChange = (_, file) => {
     if (file && (/(^|[\\/])\./.test(file) || /\.(tmp|log|jsonl?)$/i.test(file))) return
     clearTimeout(feed.debounce)
-    feed.debounce = setTimeout(() => broadcastBoard(project), 150)
+    // Nothing sits above this timer: an error thrown here ends the server process.
+    feed.debounce = setTimeout(() => { try { broadcastBoard(project) } catch (err) { console.error(`${project}: board broadcast failed — ${err.message}`) } }, 150)
   }
 
   const startWatch = () => {

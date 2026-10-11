@@ -319,7 +319,11 @@ export function filesOverlap(a, b) {
 }
 const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|-|:|\()\s*(?:unchanged|read-only|reference only)\b/i
 export function cardFiles(path) {
-  const section = readFileSync(path, 'utf8').match(FILES_SECTION)?.[1] ?? ''
+  // A card can change lanes between the board listing and this read; a moved card lists no
+  // files here. Thrown from the board feed's timer this took the whole server down (I1051).
+  let text
+  try { text = readFileSync(path, 'utf8') } catch (err) { if (err.code !== 'ENOENT') throw err; return [] }
+  const section = text.match(FILES_SECTION)?.[1] ?? ''
   return [...section.matchAll(FILE_LINE)].filter((m) => !REFERENCE_ONLY.test(m[0] + section.slice(m.index + m[0].length).split('\n')[0])).map((m) => m[1].trim())
 }
 
