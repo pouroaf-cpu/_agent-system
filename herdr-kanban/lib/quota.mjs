@@ -69,21 +69,34 @@ export function blockEngine(boardRoot, kind, until, now = Date.now()) {
   return quota[kind]
 }
 
+// Hold info for `key` (or its bare engine kind), with the numeric reset time so callers
+// can compare two holds, or null once the later of the two has passed.
+function holdInfo(quota, key, now) {
+  const hit = [key.split(':')[0], key].filter(k => quota[k]?.until > now).sort((a, b) => quota[b].until - quota[a].until)[0]
+  return hit ? { until: quota[hit].until, text: retryHold(`${label(hit)} usage limit`, quota[hit].until) } : null
+}
+
 // The visible hold while an engine, or `key`'s model of it, is blocked (an allowed wait for
 // the stall watchdog), or null once its reset time has passed.
 export function quotaHold(boardRoot, key, now = Date.now(), quota = readQuota(boardRoot)) {
-  const hit = [key.split(':')[0], key].filter(k => quota[k]?.until > now).sort((a, b) => quota[b].until - quota[a].until)[0]
-  return hit ? retryHold(`${label(hit)} usage limit`, quota[hit].until) : null
+  return holdInfo(quota, key, now)?.text ?? null
 }
 
 // Select only at launch: saved settings stay primary, so the next launch returns to it after reset.
 export function selectQuotaAssignment(boardRoot, primary, now = Date.now()) {
   const quota = readQuota(boardRoot)
-  const hold = quotaHold(boardRoot, quotaKey(primary.engine, primary.model), now, quota)
+  const hold = holdInfo(quota, quotaKey(primary.engine, primary.model), now)
   const fallback = primary.fallback
-  if (!hold || !fallback || quotaHold(boardRoot, quotaKey(fallback.engine, fallback.model), now, quota)) return { assignment: primary, hold }
-  return { assignment: fallback, hold: null,
-    message: `started on fallback ${fallback.model}: ${primary.model} usage limit until ${hold.split('retrying at ')[1]}` }
+  if (!hold) return { assignment: primary, hold: null }
+  if (!fallback) return { assignment: primary, hold: hold.text }
+  const fallbackHold = holdInfo(quota, quotaKey(fallback.engine, fallback.model), now)
+  if (!fallbackHold) return { assignment: fallback, hold: null,
+    message: `started on fallback ${fallback.model}: ${primary.model} usage limit until ${hold.text.split('retrying at ')[1]}` }
+  // Both blocked: the card waits only for whichever engine resets first, named for that one —
+  // not always primary's (possibly much later) reset (Injectbuddy I1051/I1054, 2026-10-11:
+  // Codex blocked for weeks, its Claude fallback hit a 2-hour limit, the card's hold still
+  // named Codex's far-future reset).
+  return fallbackHold.until < hold.until ? { assignment: fallback, hold: fallbackHold.text } : { assignment: primary, hold: hold.text }
 }
 
 // The blocks still in force, for the board header and the manager alert.

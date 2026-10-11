@@ -110,6 +110,17 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   blockEngine(root, 'codex', until, now)
   assert.ok(selectQuotaAssignment(root, sameEngine, now).hold)
 
+  // I1051/I1054 (2026-10-11): Codex blocked for weeks, its Claude fallback hit a short
+  // limit while a Builder was running on it — the card's hold must name Claude and its
+  // near reset, not Codex's much later one.
+  writeFileSync(join(root, '.engine-quota.json'), '{}')
+  const farOff = now + 30 * 24 * 3600000, soon = now + 2 * 3600000
+  blockEngine(root, 'codex', farOff, now)
+  blockEngine(root, 'claude', soon, now)
+  const choice = selectQuotaAssignment(root, { ...primary, fallback }, now)
+  assert.equal(choice.assignment.engine, 'claude')
+  assert.equal(choice.hold, `Claude usage limit; retrying at ${new Date(soon).toISOString()}`)
+
   // Exercise the real config route on a private port and config; no live board access.
   const socket = createServer()
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve))
