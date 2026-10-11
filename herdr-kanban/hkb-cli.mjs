@@ -23,7 +23,8 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError, acceptanceCriteriaIds } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError, acceptanceCriteriaIds, createCard, planEditedFiles } from './lib/cards.mjs'
+import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
@@ -113,6 +114,14 @@ function projectSettings() {
   } catch { return undefined }
 }
 
+// Same id prefix POST /api/cards gives a new card for this project, for split --parts' children.
+function projectCardPrefix(project) {
+  try {
+    const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || fileURLToPath(new URL('./board.config.json', import.meta.url)), 'utf8'))
+    return config.cardPrefixes?.[project]
+  } catch { return undefined }
+}
+
 function fail(msg) {
   console.error(`hkb: ${msg}`)
   process.exit(1)
@@ -179,6 +188,119 @@ if (verb === 'wait') {
     activityLog({ tasksDir, project, cardId: current.id, event: 'planner-wait', message: `needs ${items.join(', ')}: ${why} (to ${to})` })
     stopCardRun(project, current.id, 'Stopped at wait')
     console.log(`${current.id} waits in Planning for ${items.join(', ')}; ${to} was told. Stop now.`)
+  } catch (err) { fail(err.message) }
+  process.exit(0)
+}
+
+// split --parts: a Planner splits a card into several ready-to-build children in one
+// step, no manager chat, no second Planner (operator, 2026-10-11). Each part is a full
+// plan; every part must pass the normal Planned hand-in checks and nothing is written
+// until every part has. The old numbered-findings split (below) is untouched.
+if (verb === 'split' && rest[0] === '--parts') {
+  const partPaths = rest.slice(1)
+  if (!cardId || partPaths.length < 2) fail('split --parts needs the card id and at least two part files: hkb split I12 --parts part1.md part2.md')
+  try {
+    const current = findCard(tasksDir, cardId)
+    if (current.column !== 'planning') fail(`split --parts is a Planner handoff; ${current.id} is in ${current.column}`)
+    if (!readCardPlanners(tasksDir)[current.id]?.assignmentId) fail('split --parts requires the assigned Planner and --planner-assignment')
+    assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
+
+    const parts = partPaths.map((p, i) => {
+      let raw
+      try { raw = readFileSync(p, 'utf8') } catch { fail(`can't read part ${i + 1}: ${p}`) }
+      const title = raw.match(/^#\s+(.+?)\s*\r?$/m)?.[1]?.trim()
+      if (!title) fail(`part ${i + 1} (${p}) needs a title line: # Title`)
+      const bodyStart = raw.search(/^## /m)
+      if (bodyStart < 0) fail(`part ${i + 1} (${p}) has no ## sections`)
+      const head = raw.slice(0, bodyStart)
+      const body = raw.slice(bodyStart)
+      const blockedLine = head.match(/^\*\*Blocked by:\*\*\s*([^\r\n]+)/im)?.[1]
+      const blockedTokens = blockedLine ? blockedLine.split(',').map(s => s.trim()).filter(Boolean) : []
+      const partRefs = []
+      for (const t of blockedTokens) {
+        const m = t.match(/^part\s+(\d+)$/i)
+        if (m) {
+          const n = Number(m[1])
+          if (n < 1 || n > partPaths.length || n - 1 === i) fail(`part ${i + 1} (${p}): "${t}" does not refer to one of the other ${partPaths.length - 1} parts`)
+          partRefs.push(n - 1)
+        } else {
+          try { findCard(tasksDir, t) } catch { fail(`part ${i + 1} (${p}): Blocked by "${t}" does not match an existing card`) }
+        }
+      }
+      return { path: p, title, head, body, blockedTokens, partRefs, difficulty: difficultyFromText(head) }
+    })
+
+    // Blocked-by cycle check over the part-index graph.
+    const visiting = new Set(), finished = new Set()
+    const detectCycle = (i, chain) => {
+      if (finished.has(i)) return
+      if (visiting.has(i)) fail(`split --parts: Blocked-by cycle: ${chain.concat(i).map(n => `part ${n + 1}`).join(' -> ')}`)
+      visiting.add(i)
+      for (const j of parts[i].partRefs) detectCycle(j, chain.concat(i))
+      visiting.delete(i); finished.add(i)
+    }
+    parts.forEach((_, i) => detectCycle(i, []))
+    // Transitive reachability over "blocked by" either direction counts as chained.
+    const reachable = (from) => {
+      const seen = new Set(), stack = [from]
+      while (stack.length) { const n = stack.pop(); for (const j of parts[n].partRefs) if (!seen.has(j)) { seen.add(j); stack.push(j) } }
+      return seen
+    }
+    const reach = parts.map((_, i) => reachable(i))
+    const chained = (i, j) => reach[i].has(j) || reach[j].has(i)
+
+    // Every part is a complete plan in the same shape as a normal planned card.
+    const check = planCheck(current)
+    const workflowVersionLine = readFileSync(current.path, 'utf8').match(/^\*\*Workflow version:\*\*[^\r\n]*/m)?.[0] || '**Workflow version:** 2'
+    for (const part of parts) {
+      const diffLine = part.difficulty ? `**Difficulty:** ${part.difficulty}` : current.difficulty ? `**Difficulty:** ${current.difficulty}` : ''
+      const readinessLine = part.head.match(/^\*\*Plan readiness:\*\*[^\r\n]*/im)?.[0] || ''
+      const investigationLine = part.head.match(/^\*\*Investigation approved:\*\*[^\r\n]*/im)?.[0] || ''
+      const newHead = `# ${part.title}\n\n**Workflow:** card-owned\n${workflowVersionLine}\n**Category:** ${current.category}\n` +
+        `**Workspace:** ${current.workspace}\n**Auto-review:** ${current.autoReview ? 'yes' : 'no'}\n${diffLine}\n**Priority** ${current.priority || 5}/10\n` +
+        `${current.mission ? `**Mission:** ${current.mission}\n` : ''}${readinessLine}\n${investigationLine}\n**Split from:** ${current.id}\n`
+      part.merged = `${newHead}\n${part.body}`
+      try { validatePlan(part.merged, { requireReadiness: true, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }) }
+      catch (err) { fail(`part "${part.title}" (${part.path}): ${err.message}`) }
+      part.files = planEditedFiles(part.merged)
+    }
+    for (let i = 0; i < parts.length; i++) {
+      for (let j = i + 1; j < parts.length; j++) {
+        if (chained(i, j)) continue
+        const shared = parts[i].files.find(f => parts[j].files.includes(f))
+        if (shared) fail(`split --parts: part ${i + 1} ("${parts[i].title}") and part ${j + 1} ("${parts[j].title}") both edit ${shared}. Merge them into one part, or add **Blocked by:** part ${i + 1} (or part ${j + 1}) to the other.`)
+      }
+    }
+
+    // Nothing above wrote anything. From here on, create the children.
+    const project = basename(dirname(tasksDir))
+    const prefix = projectCardPrefix(project)
+    const made = []
+    try {
+      for (const part of parts) {
+        const brief = (part.body.match(/^## Approved brief\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? '').trim() || part.title
+        const card = createCard(tasksDir, { title: part.title, brief, category: current.category, workspace: current.workspace, mission: current.mission, priority: current.priority, prefix })
+        writeFileSync(card.path, part.merged)
+        part.id = card.id
+        made.push(card.id)
+      }
+    } catch (err) {
+      fail(`split --parts failed partway: made ${made.join(', ') || 'none'} so far (${err.message})`)
+    }
+    for (const part of parts) {
+      if (!part.blockedTokens.length) continue
+      const ids = part.blockedTokens.map(t => { const m = t.match(/^part\s+(\d+)$/i); return m ? parts[Number(m[1]) - 1].id : t })
+      updateCard(tasksDir, part.id, { addBlockedBy: ids })
+    }
+    for (const part of parts) moveCard(tasksDir, part.id, 'planned', { plannerAssignment, planWorkspace: check.planWorkspace, sharedFiles: check.sharedFiles })
+
+    const parentText = readFileSync(current.path, 'utf8')
+    moveCard(tasksDir, current.id, 'archive', { covered: true })
+    appendHistory(tasksDir, current.id, { event: 'handoff', stage: 'planning', outcome: 'split', note: `split into ${made.join(', ')}`, text: parentText })
+    unbind(tasksDir, current.id)
+    activityLog({ tasksDir, project, cardId: current.id, event: 'planner-finish', message: `planning -> archive (split into ${made.join(', ')})` })
+    stopCardRun(project, current.id, 'Stopped at split')
+    console.log(`${current.id} split into ${made.join(', ')}; all in Planned. Stop now.`)
   } catch (err) { fail(err.message) }
   process.exit(0)
 }
