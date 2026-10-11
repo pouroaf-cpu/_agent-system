@@ -25,7 +25,7 @@ import { spawnForCard, deliver, unsubmittedDelivery, confirmLateDeliveries, STAR
 import { isRetryHold } from './transient.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel } from './prompt.mjs'
+import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel, PLAN_FAIL_TAGS } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
 import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
 import { backendFor } from './agent-backend.mjs'
@@ -710,13 +710,17 @@ export function needsPlanCheck(card) {
   return /\bcheck(?: command)?\s*:?/i.test(plan)
 }
 
-export const PLAN_ISSUES = ['wrong-path', 'stale-plan', 'check-broken', 'check-unreachable', 'check-passes-on-base', 'check-flaky', 'other']
+// Single source of truth: the tag names are parsed from the same rule text the plan-checker prompt shows (lib/prompt.mjs).
+export const PLAN_ISSUES = PLAN_FAIL_TAGS.split(';').map((t) => t.split(' = ')[0].trim())
 
 export function finishPlanCheck({ tasksDir, cardId, reviewRoot, claimId, verdict, evidence }) {
   const card = findCard(tasksDir, cardId)
   const claim = reviewClaimFor(reviewRoot, tasksDir, card.id)
   if (!claim || claim.id !== claimId || claim.role !== 'plancheck' || card.column !== 'planned') throw new Error('Active Planned plancheck claim required')
   if (!['PASS', 'FAIL', 'RETRY'].includes(verdict) || !evidence?.trim()) throw new Error('Plan check needs PASS, FAIL or RETRY and observed evidence')
+  // I1040s: an untagged or mistagged FAIL can't be tallied by scripts/plan-check-issues.mjs. Require the tag to lead the evidence.
+  if (verdict === 'FAIL' && !PLAN_ISSUES.some((t) => evidence.trim().toLowerCase().startsWith(`${t}:`)))
+    throw new Error(`FAIL evidence must start with its tag (${PLAN_ISSUES.join(', ')}): resend as hkb plancheck ${cardId} FAIL '<tag>: ${evidence.trim()}'`)
   if (verdict === 'PASS') {
     try {
       assertReviewInputs(reviewRoot, tasksDir, card.id)

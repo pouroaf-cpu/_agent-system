@@ -2437,8 +2437,10 @@ test('a Codex agent whose card does not browse starts without browser MCPs', () 
 test('Claude board agents start with only the used built-ins, no skills, and MCPs only for browser cards', () => {
   const lean = agentStartArgs({ name: 'b-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
   assert.equal(lean[lean.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop')
+  // Operator 2026-10-11: the Planner's subagent pre-check is gone, replaced by a deterministic
+  // preflight hkb runs itself (planPreflight in hkb-cli.mjs); the Planner no longer needs Agent.
   const planner = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
-  assert.equal(planner[planner.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop,Agent', 'the plan pre-check needs a subagent')
+  assert.equal(planner[planner.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop', 'no subagent tool: the preflight is deterministic, not agent-run')
   assert.ok(lean.includes('--disable-slash-commands') && lean.includes('--strict-mcp-config'))
   assert.ok(!lean.includes('--mcp-config'), 'no MCP servers at all for a non-browser card')
   const browsing = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude' })

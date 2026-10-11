@@ -40,7 +40,6 @@ import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { assertPlannerHandoff } from './lib/planner-state.mjs'
 import { CARD_ID } from './lib/ids.mjs'
-import { PLAN_CHECK_RULE, PLAN_FAIL_TAGS } from './lib/prompt.mjs'
 
 const args = process.argv.slice(2)
 let tasksDir = join(process.cwd(), 'TASKS')
@@ -126,6 +125,43 @@ function baseRunCheck(card) {
   const log = flat(raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8'))
   const missing = lines.filter(([, , said]) => !log.includes(flat(said).slice(0, 60))).map(m => m[1])
   if (missing.length) fail(`## Base run ${missing.join(', ')} not found in ${slash(logPath)}. ${how}`)
+}
+
+// Planner handoff preflight (operator 2026-10-11): replaces the Sonnet subagent that graded its
+// own plan. Deterministic, no dev server, fails open — it only lists a fault on a concrete signal
+// and stays silent on anything it cannot read, leaving that to the board's own (Haiku) plan checker.
+// wrong-path has no check here: checkPlanPaths (via validatePlan, called just above this in the
+// handoff) already refuses a ## Files/Prerequisites/Implementation plan path that doesn't exist and
+// isn't marked (new) — of 108 real plan-check FAILs (2026-10-09..11) zero were wrong-path.
+// check-unreachable (39 of 108, the largest group) is skipped: telling a real selector or app state
+// from a wrong one needs reading the app/check together, which is exactly the judgement call left to
+// the plan checker; no mechanical signal here is reliable enough to refuse on.
+function planPreflight(card) {
+  const text = readFileSync(card.path, 'utf8')
+  const section = (name) => text.match(new RegExp(`^## ${name}[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))?.[1] || ''
+  const slash = (p) => p.replaceAll('\\', '/')
+  const baseRun = section('Base run')
+  const lines = [...baseRun.matchAll(/^[ \t]*(?:[-*][ \t]*)?AC\d+[ \t]+(FAIL|PASS \(guard\)|cannot run)[ \t]*:/gim)]
+  const faults = []
+  // check-passes-on-base: every Base run line already passes, so nothing shows this card is
+  // needed. "cannot run" lines do not count: baseRunCheck sends a Check on a file the card creates
+  // there, and refusing those too would leave a new-file card with no way out. No false refusal
+  // on the 442 plans whose last plan check passed (72 with Base run lines, 2026-10-11).
+  if (lines.length && lines.every(([, kind]) => /^PASS/i.test(kind))) {
+    faults.push('check-passes-on-base: every ## Base run line is "PASS (guard)" — none shows a real FAIL. If an AC already works unchanged, drop it or find what it actually still fails; "PASS (guard)" is only for behaviour this card leaves unchanged.')
+  }
+  // check-broken: the saved log shows a strong, environment-specific failure (not a code assertion),
+  // so the Check errored before it measured anything. Narrowed to tokens that never appear inside a
+  // legitimately-quoted FAIL line (I1015's base-run.log contains "TypeError" as part of one; this set
+  // excludes it) — validated zero-false-positive against the same 15 real PASSes.
+  if (!/^[ \t]*(?:[-*][ \t]*)?AC\d+[ \t]+cannot run[ \t]*:/im.test(baseRun)) {
+    const logPath = join(tasksDir, '.evidence', card.id, 'base-run.log')
+    const raw = existsSync(logPath) ? readFileSync(logPath) : null
+    const log = raw && (raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8'))
+    const crash = log?.match(/MODULE_NOT_FOUND|Cannot find module|ENOENT: no such file or directory|is not recognized as (?:an? internal or external command|a recognized)|command not found|No tests? found/i)
+    if (crash) faults.push(`check-broken: ${slash(logPath)} contains "${crash[0]}" — the Check errored before it could measure any AC. Fix the Check (or its setup), then run it and save base-run.log again.`)
+  }
+  return faults
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
@@ -408,30 +444,12 @@ try {
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
   // After the plan text check, so a wrong path is named before the saved base run is asked for.
   if (check.planWorkspace && current.cardOwned) { validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }); baseRunCheck(current) }
-  // Planner pre-check (operator 2026-10-11): 108 plan-check FAILs in 3 days (check-unreachable 39,
-  // untagged 23, check-broken 19, stale-plan 13, check-passes-on-base 8) each bounced the card back to a
-  // new Planner. The old 4-item self-checklist was self-graded and covered a fraction of PLAN-CHECKER.md,
-  // so the handoff now needs a fresh-context subagent verdict on the plan, newer than the plan and its check files.
-  // ponytail: the Planner writes plan-self-check.md itself, so a Planner can claim a PASS it did not get. If plan-check FAILs per card stay high (scripts/plan-check-issues.mjs), have hkb or a PostToolUse hook on the Agent tool write the verdict instead.
+  // Planner preflight (operator 2026-10-11): a Sonnet subagent checking a Haiku plan checker's
+  // work was waste ("a checker stacked on a checker"). Replaced with the deterministic checks in
+  // planPreflight above; the board's own plan checker remains the only agent-based check.
   if (plannerAssignment && ['planned', 'queue'].includes(target)) {
-    const slash = (p) => p.replaceAll('\\', '/'), dir = join(tasksDir, '.evidence', current.id), file = join(dir, 'plan-self-check.md')
-    const saved = statSync(file, { throwIfNoEntry: false })
-    const inputs = [current.path, ...(existsSync(dir) ? readdirSync(dir).filter(f => f === 'base-run.log' || /\.(m?js|cjs|ts|ps1|py|sh)$/i.test(f)).map(f => join(dir, f)) : [])]
-    const envFile = projectSettings()?.envFile
-    const older = saved && inputs.find(f => statSync(f).mtimeMs > saved.mtimeMs)
-    const text = saved ? readFileSync(file, 'utf8') : ''
-    const passed = saved && text.split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop() === 'VERDICT: PASS'
-    // ponytail: only one "ACn traced:" line is required, not one per AC; upgrade is to count the card's ACs.
-    const traced = saved && /^[\s*#>-]*AC\d+ traced:/m.test(text)
-    if (!passed || older || !traced) {
-      const prompt = `Read ${slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))}. Apply every rule in it to the plan in card ${slash(current.path)}, in the checkout ${slash(check.planWorkspace)} (unchanged base; edit nothing, run no hkb command, start any server on a free port and stop it after). ${envFile ? `Approved dev environment file: ${slash(envFile)}; use it only for the card's setup/Check and never copy or print its values. ` : ''}${PLAN_CHECK_RULE} You hand off nothing: reply with every problem you find, each on its own line with its AC and a tag (${PLAN_FAIL_TAGS}), or, if there are none, one line per AC saying what the Check compares and what the planned build would produce ("AC1 traced: ..."), then the line VERDICT: PASS.`
-      fail(`plan pre-check before ${current.id} leaves planning (not an error).${!saved ? '' : older ? ` plan-self-check.md is older than ${basename(older)}.` : !passed ? ' plan-self-check.md does not end with VERDICT: PASS.' : ' plan-self-check.md has no "ACn traced:" line; save the subagent\'s whole reply, not a summary.'} The board checks every plan against its plan-check rules; do it now, before the handoff, so the card does not bounce back:
-  1. Start ONE subagent with the Agent tool: model sonnet, run_in_background false (wait for its reply). If you have no subagent tool, do this pass yourself as a separate start-to-end pass after re-reading the rules file.
-  2. Give it this prompt exactly, word for word (you may add only notes about running it on this machine; drop or reword nothing): ${prompt}
-  3. Fix every problem it lists in the plan (check scripts only with the Write or Edit tool; if a script changed, run the Check again and save base-run.log again). Then start a NEW subagent with the same prompt. Repeat until it replies VERDICT: PASS.
-  4. Write that last reply in full (not a summary) to ${slash(file)}, ending with the line VERDICT: PASS, and run the same handoff again. Changing the card, a check script or base-run.log after that makes the file stale.
-  5. If the plan cannot be made to pass, use the normal route instead: hkb issue ${current.id} "[planning] <unmet prerequisite and evidence>"`)
-    }
+    const faults = planPreflight(current)
+    if (faults.length) fail(`plan preflight before ${current.id} leaves planning (not an error). Fix each, then run this handoff again:\n  - ${faults.join('\n  - ')}`)
   }
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column

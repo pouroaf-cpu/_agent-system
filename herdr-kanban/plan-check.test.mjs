@@ -71,6 +71,8 @@ test('independent plan gate dispatches once, queues PASS, returns FAIL to Planne
   moveCard(tasksDir, 'T-1', 'planned')
   writeFileSync(join(tasksDir, '.card-planners.json'), JSON.stringify({ 'T-1': { lifecycle: 'running', submitted: true } }))
   current = claim()
+  assert.throws(() => finish('FAIL', 'accessible name Save does not exist; use Save changes'), /FAIL evidence must start with its tag \(wrong-path, stale-plan, check-broken, check-unreachable, check-passes-on-base, check-flaky, other\)/, 'an untagged FAIL is refused before it can move the card')
+  assert.equal(findCard(tasksDir, 'T-1').column, 'planned', 'the refused FAIL never moved the card')
   const before = recoveryState(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')).returns
   const handoff = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)),
     '--tasks', tasksDir, '--review-root', root, '--review-claim', current.id, 'plancheck', 'T-1', 'FAIL', 'check-unreachable: accessible name Save does not exist; use Save changes'], { encoding: 'utf8', windowsHide: true })

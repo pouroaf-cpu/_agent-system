@@ -537,9 +537,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
   } else {
     args.push('--dangerously-skip-permissions')
     // --disable-slash-commands drops the skill listing; cards name skills by SKILL.md path.
-    // Planners also get Agent: the plan pre-check in hkb-cli.mjs has them run a fresh Sonnet subagent
-    // over the plan. Without it every Planner graded its own plan (I1024, 2026-10-11).
-    args.push('--tools', agentRole(name) === 'p' ? `${CLAUDE_BOARD_TOOLS},Agent` : CLAUDE_BOARD_TOOLS, '--disable-slash-commands')
+    args.push('--tools', CLAUDE_BOARD_TOOLS, '--disable-slash-commands')
     // Same rule as the Codex branch: no user MCPs or claude.ai connectors, and the browser MCP
     // only when the card browses.
     args.push('--strict-mcp-config')

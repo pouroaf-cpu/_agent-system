@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -10,7 +10,6 @@ import { readCardPlanners, runCardPlanner, operatorRetry } from './lib/card-plan
 import { saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { agentStartArgs } from './lib/herdr.mjs'
-import { PLAN_CHECK_RULE } from './lib/prompt.mjs'
 
 const HKB = fileURLToPath(new URL('./hkb.mjs', import.meta.url))
 // Hand off as the card's Planner, recorded on the given engine.
@@ -77,8 +76,6 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
 
 // Planner handoffs need a saved base run holding each Base run line.
 const saveBaseRun = (tasks) => { mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 FAIL: helper() returned 0, expected 1') }
-// The plan pre-check verdict a Planner saves; dated a minute ahead so it is newer than the files written after it.
-const savePlanSelfCheck = (tasks, text = 'AC1 traced: Check runs node --test; a correct helper() returning 1 passes it.\nVERDICT: PASS\n', at = Date.now() + 60000) => { const f = join(tasks, '.evidence', 'T-1', 'plan-self-check.md'); mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(f, text); utimesSync(f, new Date(at), new Date(at)) }
 const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
@@ -127,29 +124,40 @@ test('a plan accepted into Planned clears the escalation flag', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('a Planner handoff to Planned needs a fresh PASS from the plan pre-check', () => {
-  const root = mkdtempSync(join(tmpdir(), 'planner-selfcheck-'))
+// Operator 2026-10-11: a Sonnet subagent checking a Haiku plan checker's work was waste ("a
+// checker stacked on a checker"). The Planner's subagent pre-check is gone; hkb now runs a
+// deterministic preflight (planPreflight in hkb-cli.mjs) itself before the hand-off to Planned.
+test('a Planner handoff to Planned runs the deterministic preflight, not an agent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'planner-preflight-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'), card = join(tasks, 'planning', 'T-1.md'), slash = (p) => p.replaceAll('\\', '/')
+    const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'), card = join(tasks, 'planning', 'T-1.md')
     const move = () => handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
     writeFileSync(card, easy.replace(/## Base run\n.*\n/, ''))
     assert.match(move().stderr, /## Base run needs one line per AC.*Missing: AC1/, 'the deterministic refusal comes first')
-    writeFileSync(card, easy); saveBaseRun(tasks)
-    const none = move()
-    assert.equal(none.status, 1)
-    assert.match(none.stderr, /plan pre-check before T-1 leaves planning \(not an error\)/)
-    assert.ok(none.stderr.includes(slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))) && none.stderr.includes(slash(card)), none.stderr)
-    assert.ok(none.stderr.includes(PLAN_CHECK_RULE) && /read the Check script and every script it runs line by line/.test(none.stderr) && none.stderr.includes('"AC1 traced: ..."'), 'the pre-check prompt carries the real checker rule text and the per-AC trace')
-    savePlanSelfCheck(tasks, 'a problem\n')
-    assert.match(move().stderr, /does not end with VERDICT: PASS/)
-    savePlanSelfCheck(tasks, 'VERDICT: PASS\n', Date.now() - 60000)
-    assert.match(move().stderr, /plan-self-check.md is older than T-1.md/)
+
+    // check-passes-on-base: every Base run line is "PASS (guard)", so nothing shows a real FAIL today.
+    writeFileSync(card, easy.replace('AC1 FAIL: helper() returned 0, expected 1', 'AC1 PASS (guard): helper() returned 1'))
+    mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true })
+    writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 PASS (guard): helper() returned 1')
+    const passesOnBase = move()
+    assert.equal(passesOnBase.status, 1)
+    assert.match(passesOnBase.stderr, /plan preflight before T-1 leaves planning \(not an error\)/)
+    assert.match(passesOnBase.stderr, /check-passes-on-base: every ## Base run line is "PASS \(guard\)"/)
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
-    savePlanSelfCheck(tasks, 'no problems\nVERDICT: PASS\n')
-    assert.match(move().stderr, /no "ACn traced:" line/, 'a saved summary with no per-AC trace is refused like any other failed pre-check')
+
+    // check-broken: the saved base-run.log shows an environment crash before any AC was measured.
+    writeFileSync(card, easy)
+    mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true })
+    writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), "MODULE_NOT_FOUND: Cannot find module 'node:test'\nAC1 FAIL: helper() returned 0, expected 1")
+    const broken = move()
+    assert.equal(broken.status, 1)
+    assert.match(broken.stderr, /plan preflight before T-1 leaves planning \(not an error\)/)
+    assert.match(broken.stderr, /check-broken: .*base-run\.log contains "MODULE_NOT_FOUND"/)
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
-    savePlanSelfCheck(tasks)
+
+    // A real FAIL in both the plan and the saved log clears the preflight.
+    saveBaseRun(tasks)
     const ok = move()
     assert.equal(ok.status, 0, ok.stderr)
     assert.equal(findCard(tasks, 'T-1').column, 'planned')
