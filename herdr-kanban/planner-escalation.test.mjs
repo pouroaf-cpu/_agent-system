@@ -77,7 +77,7 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
 // Planner handoffs need a saved base run holding each Base run line.
 const saveBaseRun = (tasks) => { mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 FAIL: helper() returned 0, expected 1') }
 // The plan pre-check verdict a Planner saves; dated a minute ahead so it is newer than the files written after it.
-const savePlanSelfCheck = (tasks, text = 'no problems\nVERDICT: PASS\n', at = Date.now() + 60000) => { const f = join(tasks, '.evidence', 'T-1', 'plan-self-check.md'); mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(f, text); utimesSync(f, new Date(at), new Date(at)) }
+const savePlanSelfCheck = (tasks, text = 'AC1 traced: Check runs node --test; a correct helper() returning 1 passes it.\nVERDICT: PASS\n', at = Date.now() + 60000) => { const f = join(tasks, '.evidence', 'T-1', 'plan-self-check.md'); mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(f, text); utimesSync(f, new Date(at), new Date(at)) }
 const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
@@ -144,6 +144,9 @@ test('a Planner handoff to Planned needs a fresh PASS from the plan pre-check', 
     assert.match(move().stderr, /does not end with VERDICT: PASS/)
     savePlanSelfCheck(tasks, 'VERDICT: PASS\n', Date.now() - 60000)
     assert.match(move().stderr, /plan-self-check.md is older than T-1.md/)
+    assert.equal(findCard(tasks, 'T-1').column, 'planning')
+    savePlanSelfCheck(tasks, 'no problems\nVERDICT: PASS\n')
+    assert.match(move().stderr, /no "ACn traced:" line/, 'a saved summary with no per-AC trace is refused like any other failed pre-check')
     assert.equal(findCard(tasks, 'T-1').column, 'planning')
     savePlanSelfCheck(tasks)
     const ok = move()

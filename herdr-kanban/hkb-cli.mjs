@@ -419,11 +419,14 @@ try {
     const inputs = [current.path, ...(existsSync(dir) ? readdirSync(dir).filter(f => f === 'base-run.log' || /\.(m?js|cjs|ts|ps1|py|sh)$/i.test(f)).map(f => join(dir, f)) : [])]
     const envFile = projectSettings()?.envFile
     const older = saved && inputs.find(f => statSync(f).mtimeMs > saved.mtimeMs)
-    const passed = saved && readFileSync(file, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop() === 'VERDICT: PASS'
-    if (!passed || older) {
+    const text = saved ? readFileSync(file, 'utf8') : ''
+    const passed = saved && text.split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop() === 'VERDICT: PASS'
+    // ponytail: only one "ACn traced:" line is required, not one per AC; upgrade is to count the card's ACs.
+    const traced = saved && /^[\s*#>-]*AC\d+ traced:/m.test(text)
+    if (!passed || older || !traced) {
       const prompt = `Read ${slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))}. Apply every rule in it to the plan in card ${slash(current.path)}, in the checkout ${slash(check.planWorkspace)} (unchanged base; edit nothing, run no hkb command, start any server on a free port and stop it after). ${envFile ? `Approved dev environment file: ${slash(envFile)}; use it only for the card's setup/Check and never copy or print its values. ` : ''}${PLAN_CHECK_RULE} You hand off nothing: reply with every problem you find, each on its own line with its AC and a tag (${PLAN_FAIL_TAGS}), or, if there are none, one line per AC saying what the Check compares and what the planned build would produce ("AC1 traced: ..."), then the line VERDICT: PASS.`
-      fail(`plan pre-check before ${current.id} leaves planning (not an error).${!saved ? '' : older ? ` plan-self-check.md is older than ${basename(older)}.` : ' plan-self-check.md does not end with VERDICT: PASS.'} The board checks every plan against its plan-check rules; do it now, before the handoff, so the card does not bounce back:
-  1. Start ONE subagent with the Agent tool: model haiku, run_in_background false (wait for its reply). If you have no subagent tool, do this pass yourself as a separate start-to-end pass after re-reading the rules file.
+      fail(`plan pre-check before ${current.id} leaves planning (not an error).${!saved ? '' : older ? ` plan-self-check.md is older than ${basename(older)}.` : !passed ? ' plan-self-check.md does not end with VERDICT: PASS.' : ' plan-self-check.md has no "ACn traced:" line; save the subagent\'s whole reply, not a summary.'} The board checks every plan against its plan-check rules; do it now, before the handoff, so the card does not bounce back:
+  1. Start ONE subagent with the Agent tool: model sonnet, run_in_background false (wait for its reply). If you have no subagent tool, do this pass yourself as a separate start-to-end pass after re-reading the rules file.
   2. Give it this prompt exactly, word for word (you may add only notes about running it on this machine; drop or reword nothing): ${prompt}
   3. Fix every problem it lists in the plan (check scripts only with the Write or Edit tool; if a script changed, run the Check again and save base-run.log again). Then start a NEW subagent with the same prompt. Repeat until it replies VERDICT: PASS.
   4. Write that last reply in full (not a summary) to ${slash(file)}, ending with the line VERDICT: PASS, and run the same handoff again. Changing the card, a check script or base-run.log after that makes the file stale.
