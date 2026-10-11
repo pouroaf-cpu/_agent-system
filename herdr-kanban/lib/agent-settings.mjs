@@ -96,11 +96,14 @@ export function assignmentFor(config, card, stage) {
   return builder ? { ...selected, difficulty: setting.model === 'qwen3-coder' && selected.model !== setting.model ? 'easy' : stage.slice(8) } : selected
 }
 
+// claude --effort accepts fewer levels than the board's reasoning scale.
+const CLAUDE_EFFORT = { none: 'low', minimal: 'low', ultra: 'max' }
 export function engineForAssignment(setting) {
   return {
     kind: setting.engine,
     ...(setting.model === 'qwen3-coder' ? { localProvider: 'ollama' } : {}),
     ...(setting.engine === 'codex' && setting.model !== 'qwen3-coder' ? { reasoningArgs: ['-c', `model_reasoning_effort="${setting.reasoning}"`] } : {}),
+    ...(setting.engine === 'claude' ? { effort: CLAUDE_EFFORT[setting.reasoning] || setting.reasoning } : {}),
   }
 }
 

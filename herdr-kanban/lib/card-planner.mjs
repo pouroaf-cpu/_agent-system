@@ -22,6 +22,7 @@ import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition } 
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
+import { engineForAssignment } from './agent-settings.mjs'
 const busy = new Set()
 const lastCorrection = text => text.split(/\*\*(?:Kicked back|Spawn failed|Review feedback)\*\*[^\n]*\n/).at(-1).split(/\*\*Needs you\*\*/)[0].trim()
 export function correctionFingerprint(text) {
@@ -200,7 +201,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         owner.reasoning = ['none', 'minimal', 'low'].includes(owner.reasoning) ? owner.reasoning : 'low'
       }
       save(tasksDir, owners)
-      const launchEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${owner.reasoning}"`] } : {}) } : engine
+      const launchEngine = selected ? engineForAssignment({ engine: selected.engine, model: selected.model, reasoning: owner.reasoning }) : engine
       const amendEngine = amend && engineKind(launchEngine) === 'codex' ? { ...(typeof launchEngine === 'object' ? launchEngine : {}), kind: 'codex', reasoningArgs: ['-c', `model_reasoning_effort="${owner.reasoning}"`] } : launchEngine
       owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: amendEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
       if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })

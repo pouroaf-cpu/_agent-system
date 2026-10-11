@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createHeadless, launchArgs } from './lib/headless.mjs'
+import { engineForAssignment } from './lib/agent-settings.mjs'
 import { PaneProcessTrees } from './lib/process-tree.mjs'
 import { backendFor, validateAgentBackend } from './lib/agent-backend.mjs'
 import { eventEntries, formatEvent, followLog, timeAt, fillTimes, readTimes, terminalLine } from './scripts/agent-view.mjs'
@@ -66,6 +67,15 @@ test('Claude and Codex argv preserve model, permission flags and resume settings
   assert.deepEqual(claude.slice(0, 5), ['-p', 'task', '--output-format', 'stream-json', '--verbose'])
   assert(claude.includes('--dangerously-skip-permissions')); assert(claude.includes('--settings'))
   assert.deepEqual(claude.slice(-2), ['--resume', 'session'])
+})
+
+test('a Claude assignment reasoning level becomes --effort; a Codex assignment is unchanged', () => {
+  const high = launchArgs({ name: 'r-T-01', paneId: 'headless-test', model: 'claude-sonnet-5-5', engine: engineForAssignment({ engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'high' }) }, 'task', 'session')
+  assert(high.includes('--effort')); assert.equal(high[high.indexOf('--effort') + 1], 'high')
+  const none = launchArgs({ name: 'r-T-01', paneId: 'headless-test', model: 'claude-sonnet-5-5', engine: engineForAssignment({ engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'none' }) }, 'task', 'session')
+  assert.equal(none[none.indexOf('--effort') + 1], 'low')
+  const codex = launchArgs({ name: 'r-T-01', paneId: 'headless-test', model: 'gpt-6-luna', engine: engineForAssignment({ engine: 'codex', model: 'gpt-6-luna', reasoning: 'high' }) }, 'task', 'session')
+  assert(!codex.includes('--effort')); assert(codex.includes('model_reasoning_effort="high"'))
 })
 
 test('Claude process tree closes, launch failures surface, pause blocks dispatch, focus opens the readable viewer', async () => {

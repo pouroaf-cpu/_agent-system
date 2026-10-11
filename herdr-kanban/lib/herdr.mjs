@@ -551,6 +551,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     // Session title in the Claude app matches the herdr agent name.
     if (name) args.push('--name', name)
     if (model) args.push('--model', model)
+    if (cfg.effort) args.push('--effort', cfg.effort)
   }
   return args
 }

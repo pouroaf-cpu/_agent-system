@@ -895,7 +895,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     }
 
     const selectedModel = selected?.model ?? model
-    const selectedEngine = selected ? { kind: selected.engine, ...(selected.engine === 'codex' ? { reasoningArgs: ['-c', `model_reasoning_effort="${selected.reasoning}"`] } : {}) } : engine
+    const selectedEngine = selected ? engineForAssignment(selected) : engine
     // The plan checker only runs the Check; the card's audit MCP tools are for its Builder.
     const reviewerEngine = planCheck ? selectedEngine : auditMcpEngine(selectedEngine, cards, tasksDir)
     const environment = projectEnvironment(project)
