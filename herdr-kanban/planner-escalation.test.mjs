@@ -10,6 +10,7 @@ import { readCardPlanners, runCardPlanner, operatorRetry } from './lib/card-plan
 import { saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { agentStartArgs } from './lib/herdr.mjs'
+import { PLAN_CHECK_RULE } from './lib/prompt.mjs'
 
 const HKB = fileURLToPath(new URL('./hkb.mjs', import.meta.url))
 // Hand off as the card's Planner, recorded on the given engine.
@@ -138,6 +139,7 @@ test('a Planner handoff to Planned needs a fresh PASS from the plan pre-check', 
     assert.equal(none.status, 1)
     assert.match(none.stderr, /plan pre-check before T-1 leaves planning \(not an error\)/)
     assert.ok(none.stderr.includes(slash(fileURLToPath(new URL('./PLAN-CHECKER.md', import.meta.url)))) && none.stderr.includes(slash(card)), none.stderr)
+    assert.ok(none.stderr.includes(PLAN_CHECK_RULE) && /read the Check script and every script it runs line by line/.test(none.stderr) && none.stderr.includes('"AC1 traced: ..."'), 'the pre-check prompt carries the real checker rule text and the per-AC trace')
     savePlanSelfCheck(tasks, 'a problem\n')
     assert.match(move().stderr, /does not end with VERDICT: PASS/)
     savePlanSelfCheck(tasks, 'VERDICT: PASS\n', Date.now() - 60000)
