@@ -38,7 +38,7 @@ const { historyPath } = await import('./lib/card-history.mjs')
 let n = 0
 const project = () => { const tasks = join(root, `P${++n}`, 'TASKS'); mkdirSync(tasks, { recursive: true }); return tasks }
 const events = (tasks, id) => readFileSync(historyPath(tasks, id), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(e => e.event === 'start-failed')
-const plan = '**Workflow:** card-owned\n## Approved brief\nDeliver\n## Files\n- `app.mjs` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: result\n## Outcome checks\nAC1 | app.mjs | node check.mjs | break it\n## Prerequisites\nNone\n'
+const plan = '**Workflow:** card-owned\n## Approved brief\nDeliver\n## Files\n- `app.mjs` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: result\n## Prerequisites\nNone\n'
 
 test('a swallowed Enter on a staged paste is pressed again until the agent works', async () => {
   let enters = 0, prompts = 0

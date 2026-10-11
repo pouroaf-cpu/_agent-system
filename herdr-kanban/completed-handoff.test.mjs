@@ -63,6 +63,20 @@ test('no-review done waits for integration, yes still reviews, and verified unch
   }
 })
 
+test('hkb done refuses a version-2 card with an AC that has no recorded test result', t => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-ac-result-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const path = putCard(tasksDir, 'working', 'T-1')
+  writeFileSync(path, readFileSync(path, 'utf8').replace('## Implementation', '## Acceptance criteria\n- AC1: helper() returns 1.\n## Implementation'))
+  let result = runHkb(tasksDir, 'done', 'T-1')
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /missing a recorded test for AC1/)
+  writeFileSync(path, readFileSync(path, 'utf8').replace('Blocker: none\n\n## Evidence', 'AC1: node --test -> 1 passed\nBlocker: none\n\n## Evidence'))
+  result = runHkb(tasksDir, 'done', 'T-1')
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+})
+
 test('re-running hkb done finishes a handoff that stopped after the card move (Tradeflow T-43)', t => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-resume-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))

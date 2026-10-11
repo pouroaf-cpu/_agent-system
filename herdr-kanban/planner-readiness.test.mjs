@@ -25,10 +25,6 @@ Scope: only src/app.mjs and its focused test.
 Stop rules: stop if the target handler or revision differs from this evidence.
 ## Acceptance criteria
 - AC1: Enter activates the control.
-## Outcome checks
-AC1 | src/app.mjs handleKeyDown(event) | node --test planner-readiness.test.mjs passes | remove the handler branch and the check fails
-## Base run
-AC1 FAIL: handleKeyDown is not exported
 ## Prerequisites
 Existing Node runtime; no additional access.
 `
@@ -44,7 +40,7 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
     'TASKS/planning/HK14.md',
   ]
   for (const path of paths) {
-    for (const heading of ['Implementation plan', 'Outcome checks', 'Prerequisites', 'Acceptance criteria']) {
+    for (const heading of ['Implementation plan', 'Prerequisites', 'Acceptance criteria']) {
       const plan = realistic.replace(`## ${heading}\n`, `## ${heading}\nCheck: \`node inspect.mjs "${path}"\`\n`)
       assert.throws(() => validatePlan(plan), /card files move between lanes.*lane-independent.*hkb show <id>.*card id/i, `${heading}: ${path}`)
     }
@@ -64,10 +60,9 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
   try {
     mkdirSync(join(tasks, 'planning'), { recursive: true })
     const path = join(tasks, 'planning', 'I556-approved-job.md')
-    mkdirSync(join(tasks, '.evidence', 'I556'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'I556', 'base-run.log'), 'AC1 FAIL: handleKeyDown is not exported')
     const plan = `# I556 — lane check\n**Workflow:** card-owned\n${realistic}`
       .replaceAll('` —', '` (new) —')
-      .replace('Changes:', '**Callers checked:** none\n**Base check:** regression fails on base\nChanges:')
+      .replace('Changes:', '**Callers checked:** none\nChanges:')
     const move = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'I556', 'planned'], { encoding: 'utf8' })
     writeFileSync(path, plan.replace('Check: node --test test/keyboard.test.mjs', `Check: node inspect.mjs "${path}"`))
     const show = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'show', 'I556'], { encoding: 'utf8' })
@@ -87,16 +82,12 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
     assert.equal(plannedShow.stdout, `${resolve(plannedPath)}\n${plannedText}`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-// TF121: an escaped pipe inside a cell is still one cell; a short row names its AC.
-validatePlan(realistic.replace('handleKeyDown(event)', String.raw`handleKeyDown(event) for a \| b`))
-assert.throws(() => validatePlan(realistic.replace(' | remove the handler branch and the check fails', '')), /no 4-column row for AC1/)
 assert.throws(() => validatePlan(realistic.replace('**Plan readiness:** build-ready', ''), { requireReadiness: true }),
   /authenticated Planner handoff requires/i)
 const investigation = realistic
   .replace('**Plan readiness:** build-ready', '**Plan readiness:** investigation\n**Investigation approved:** yes')
   .replace('Observed cause: handleKeyDown drops the Enter event when focus is in the control.', 'Observed cause: unknown; measure the keyboard event first.')
 validatePlan(investigation, { requireReadiness: true })
-validatePlan(investigation.replace('AC1 | src/app.mjs handleKeyDown(event) | node --test planner-readiness.test.mjs passes | remove the handler branch and the check fails', '| AC1 | src/app.mjs handleKeyDown(event) | node --test planner-readiness.test.mjs passes | remove the handler branch and the check fails |'))
 validatePlan(investigation.replace('- `test/keyboard.test.mjs`', '- `test/evidence/`'))
 assert.throws(() => validatePlan(realistic.replace('- `test/keyboard.test.mjs`', '- `test/evidence/`')),
   /exact relative file paths/i)
@@ -120,7 +111,7 @@ console.log('Planner readiness validation passed')
 
 // Plan check at Planner handoff: Files must exist (unless marked new) and callers must be listed.
 {
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } = await import('node:fs')
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
@@ -133,14 +124,7 @@ console.log('Planner readiness validation passed')
     const newFile = realistic.replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —')
     assert.throws(() => validatePlan(newFile, { workspace: root }), /Callers checked/)
     assert.throws(() => validatePlan(newFile.replace('Changes:', '**Callers checked:**\nChanges:'), { workspace: root }), /Callers checked/, 'an empty line is not a check')
-    assert.throws(() => validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\nChanges:'), { workspace: root }), /Base check/)
-    validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:'), { workspace: root })
-    // I990: a no-regression AC passes on base; it is copied as a guard line, a bare PASS is not.
-    const guarded = newFile.replace('Changes:', '**Callers checked:** none\n**Base check:** 1 failing as expected\nChanges:')
-      .replace('- AC1: Enter activates the control.', '- AC1: Enter activates the control.\n- AC2: Desktop layout is unchanged.')
-      .replace('remove the handler branch and the check fails', 'remove the handler branch and the check fails\nAC2 | none | desktop check passes | hide the section and the check fails')
-    validatePlan(guarded.replace('## Prerequisites', 'AC2 PASS (guard): desktop section visible\n## Prerequisites'), { workspace: root })
-    assert.throws(() => validatePlan(guarded.replace('## Prerequisites', 'AC2 PASS: desktop section visible\n## Prerequisites'), { workspace: root }), /Missing: AC2/)
+    validatePlan(newFile.replace('Changes:', '**Callers checked:** src/main.mjs imports handleKeyDown\nChanges:'), { workspace: root })
     validatePlan(realistic) // no workspace = not a handoff; cards already queued are never re-checked
 
     // hkb applies the check when a Planner hands off from Planning.
@@ -150,24 +134,9 @@ console.log('Planner readiness validation passed')
     const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     let result = hkb()
     assert.notEqual(result.status, 0); assert.match(result.stderr, /src\/missing\.mjs does not exist/)
-    const ready = `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')}\n## Current feedback\nNeeds you: an old question from Owner\nHistory entry: x\n`
-    // Base run lines must come from a saved run of the current Check (I976/IA97, 2026-10-10).
-    const evidence = join(tasks, '.evidence', 'T-1'), log = join(evidence, 'base-run.log')
-    writeFileSync(card, ready)
-    assert.match(hkb().stderr, /no saved base run at .*base-run\.log/)
-    mkdirSync(evidence, { recursive: true }); writeFileSync(log, 'AC1 FAIL: something else\n')
-    assert.match(hkb().stderr, /## Base run AC1 not found in .*base-run\.log/)
-    writeFileSync(log, '\x1b[31mAC1 FAIL:\x1b[0m  handleKeyDown is not exported\n')
-    const later = new Date(Date.now() + 5000)
-    writeFileSync(join(evidence, 'check.mjs'), '// edited'); utimesSync(join(evidence, 'check.mjs'), later, later)
-    assert.match(hkb().stderr, /check\.mjs changed after base-run\.log/)
-    utimesSync(log, new Date(later.getTime() + 1000), new Date(later.getTime() + 1000))
-    writeFileSync(card, ready.replace('AC1 FAIL: handleKeyDown is not exported', 'AC1 FAIL: TypeError: x is not a function'))
-    assert.match(hkb().stderr, /AC1 is a crash or timeout.*AC1 cannot run/)
-    writeFileSync(card, ready.replace('AC1 FAIL: handleKeyDown is not exported', 'AC1 PASS (guard): desktop unchanged'))
-    assert.match(hkb().stderr, /## Base run AC1 not found in .*base-run\.log/, 'a guard line must come from the saved run too')
-    writeFileSync(card, ready.replace('## Prerequisites', '## Prerequisites\n- run node TASKS/.evidence/T-1/check.mjs'))
-    assert.match(hkb().stderr, /TASKS\/\.evidence\/T-1\/check\.mjs is a relative path.*Write it as .*\/TASKS\/\.evidence\/T-1\/check\.mjs/)
+    // No Check script, Base run lines or base-run.log required (operator, 2026-10-11): a
+    // plan with only Callers checked is accepted straight into Planned.
+    const ready = `# T-1 — plan check\n**Workflow:** card-owned\n${newFile.replace('Changes:', '**Callers checked:** none\nChanges:')}\n## Current feedback\nNeeds you: an old question from Owner\nHistory entry: x\n`
     writeFileSync(card, ready)
     result = hkb()
     assert.equal(result.status, 0, result.stderr)
@@ -181,7 +150,7 @@ console.log('Planner readiness validation passed')
     result = hkb()
     assert.equal(result.status, 0, result.stderr)
     const replanned = readFileSync(findCard(tasks, 'T-1').path, 'utf8')
-    assert.doesNotMatch(replanned, /^Kicked back:/m); assert.match(replanned, /^Resolved: .*run the Check yourself/m)
+    assert.doesNotMatch(replanned, /^Kicked back:/m); assert.match(replanned, /^Resolved: .*build and test it yourself/m)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
 
@@ -200,7 +169,7 @@ console.log('Planner readiness validation passed')
     writeFileSync(join(root, 'src', 'app.mjs'), ''); writeFileSync(join(root, '.gitignore'), '*.md\nnode_modules/\n')
     git('add', '.'); git('commit', '-qm', 'base')
     writeFileSync(join(root, 'REPORT.md'), 'ignored'); writeFileSync(join(root, 'TASKS', 'check.mjs'), 'untracked')
-    const plan = realistic.replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')
+    const plan = realistic.replace('Changes:', '**Callers checked:** none\nChanges:')
       .replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —')
     validatePlan(plan, { workspace: root })
     assert.throws(() => validatePlan(plan.replace('- `src/app.mjs` —', '- `REPORT.md` —'), { workspace: root }),
@@ -294,7 +263,7 @@ console.log('Planner readiness validation passed')
     writeFileSync(join(project, 'src', 'app.mjs'), ''); writeFileSync(join(project, 'scripts', 'capture-authed.mjs'), '')
     writeFileSync(join(root, 'board.config.json'), JSON.stringify({ projectsRoot: root, projects: ['Proj'], projectSettings: { Proj: { sharedFiles: ['scripts/capture-authed.mjs'] } } }))
     writeFileSync(join(tasks, 'planning', 'I300.md'), plan('Keyboard fix').replace('# I300 — Keyboard fix', '# I300 — Keyboard fix\n**Workflow:** card-owned')
-      .replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —').replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:'))
+      .replace('- `test/keyboard.test.mjs` —', '- `test/keyboard.test.mjs` (new) —').replace('Changes:', '**Callers checked:** none\nChanges:'))
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, 'move', 'I300', 'planned'], { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: join(root, 'board.config.json') } })
     assert.notEqual(result.status, 0); assert.match(result.stderr, /capture-authed\.mjs is shared/)
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -308,7 +277,7 @@ console.log('Planner readiness validation passed')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
-  const files = (lines) => realistic.replace(/## Files\n[\s\S]*?## Implementation plan/, `## Files\n${lines}\n## Implementation plan`).replace('Changes:', '**Callers checked:** none\n**Base check:** node check.mjs on base: 1 failing as expected\nChanges:')
+  const files = (lines) => realistic.replace(/## Files\n[\s\S]*?## Implementation plan/, `## Files\n${lines}\n## Implementation plan`).replace('Changes:', '**Callers checked:** none\nChanges:')
   const script = '- `scripts/add-guide-article-image.mjs` (new) — idempotent script that adds Article.image'
   const glob = '- `public/legacy/guides/*/index.html` — generated by `scripts/add-guide-article-image.mjs`'
   const root = mkdtempSync(join(tmpdir(), 'plan-glob-'))

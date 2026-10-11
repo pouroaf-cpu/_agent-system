@@ -963,7 +963,7 @@ test('same-plan Builder retries retain saved changes and feedback; changed plans
       assert.equal(readFileSync(join(retry.workspacePath, 'saved.js'), 'utf8'), 'untracked work\n')
       const prompt = workerPrompt({ card, projectPath: f.integration, boardRoot: f.root, tasksDir: f.tasks, workspacePath: retry.workspacePath, previousAttempt: retry.previousAttempt })
       assert.match(prompt, /previous attempt's changes are already in this worktree/)
-      assert.match(prompt, /fix only what the feedback names, then re-run the Check/)
+      assert.match(prompt, /fix only what the feedback names, then re-run your per-AC tests/)
       assert.match(readFileSync(prompt.match(/Read (.+?) \(revision/)[1], 'utf8'), /Fix the missing assertion/)
     }
     writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('Change it.', 'Changed plan.'))

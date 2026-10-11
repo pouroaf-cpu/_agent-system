@@ -27,7 +27,7 @@ const { runCardPlanner, readCardPlanners } = await import('./lib/card-planner.mj
 const { autoSpawn, holdsFor, spawnReviewer } = await import('./lib/autospawn.mjs')
 const { readBindings } = await import('./lib/bindings.mjs')
 const { createCard, findCard } = await import('./lib/cards.mjs')
-const plan = '**Workflow:** card-owned\n## Approved brief\nDeliver\n## Files\n- `app.mjs` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: result\n## Outcome checks\nAC1 | app.mjs | node check.mjs | break it\n## Prerequisites\nNone\n'
+const plan = '**Workflow:** card-owned\n## Approved brief\nDeliver\n## Files\n- `app.mjs` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: result\n## Prerequisites\nNone\n'
 
 test('role fallbacks survive config/API validation, launch on quota, hold if both blocked, and return to primary after reset', async t => {
   const root = mkdtempSync(join(import.meta.dirname, '.quota-fallback-'))

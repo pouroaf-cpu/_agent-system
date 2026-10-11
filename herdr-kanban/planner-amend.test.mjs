@@ -43,7 +43,7 @@ test('Builder planning returns amend only Files/Check/Prerequisites; other retur
       assert.deepEqual(starts[0].engine.reasoningArgs, ['-c', `model_reasoning_effort="${amend ? 'low' : 'high'}"`], note)
       if (amend) {
         assert.ok(prompts[0].includes(note))
-        assert.match(prompts[0], /Edit only ## Files, the Check lines and ## Prerequisites/)
+        assert.match(prompts[0], /Edit only ## Files and ## Prerequisites/)
         assert.doesNotMatch(prompts[0], /Read .*PLANNER-CODE/)
         assert.match(readFileSync(join(dir, '.briefs', `${card.id}-planner.md`), 'utf8'), /Keep this exact step/)
       } else assert.match(prompts[0], /Plan these approved cards/)

@@ -21,9 +21,9 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 // `owner` is a decision, credential, asset or judgement call only the human can
 // supply — no amount of agent effort will resolve it.
 
-import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync } from 'node:fs'
+import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError, acceptanceCriteriaIds } from './lib/cards.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
 import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
@@ -101,67 +101,6 @@ function planCheck(card) {
   const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
   if (dirty) fail(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
   return { planWorkspace, sharedFiles: gitSettings?.sharedFiles }
-}
-
-// Plan checks since 2026-10-09: 18 FAIL, 15 PASS. Most Base run lines came from an older Check
-// (I976/I979/IA100 crashed on base) or a relative TASKS/.evidence path card checkouts lack (IA97/IA98).
-function baseRunCheck(card) {
-  const text = readFileSync(card.path, 'utf8')
-  const section = (name) => text.match(new RegExp(`^## ${name}[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))?.[1] || ''
-  const slash = (p) => p.replaceAll('\\', '/')
-  const rel = ['Files', 'Prerequisites', 'Implementation plan'].map(section).join('\n').match(/(?<![\w:/.\\-])TASKS[\\/]\.evidence[\\/][^\s`'")]*/)?.[0]
-  if (rel) fail(`${rel} is a relative path, but card checkouts have no TASKS/ folder, so the Builder and plan check cannot find it. Write it as ${slash(join(tasksDir, rel.slice(6)))} everywhere in the plan.`)
-  const lines = [...section('Base run').matchAll(/^[ \t]*(?:[-*][ \t]*)?(AC\d+)[ \t]+(?:FAIL|PASS \(guard\))[ \t]*:[ \t]*(.+)$/gim)]
-  if (!lines.length) return
-  const dir = join(tasksDir, '.evidence', card.id), logPath = join(dir, 'base-run.log')
-  const how = `Run the Check on the integration checkout again and save all it prints: <check> 2>&1 | tee ${slash(logPath)} (PowerShell: <check> *>&1 | Tee-Object ${slash(logPath)}), then copy each ## Base run line from that file.`
-  const crashed = lines.find(([, , said]) => /timeout \d+ ?ms exceeded|TypeError|ReferenceError|SyntaxError|Cannot find module|is not a function|is not defined/i.test(said))
-  if (crashed) fail(`## Base run ${crashed[1]} is a crash or timeout, not that AC's own assertion. Fix the Check so it measures ${crashed[1]}; if it tests a file this card creates, write '${crashed[1]} cannot run: <why>'. ${how}`)
-  const saved = statSync(logPath, { throwIfNoEntry: false })
-  if (!saved) fail(`${card.id} has no saved base run at ${slash(logPath)}. ${how}`)
-  const newer = readdirSync(dir).find(f => /\.(m?js|cjs|ts|ps1|py|sh)$/i.test(f) && statSync(join(dir, f)).mtimeMs > saved.mtimeMs)
-  if (newer) fail(`${newer} changed after base-run.log was saved, so the Base run lines may not be from this Check. ${how}`)
-  const raw = readFileSync(logPath), flat = (s) => s.replace(/\x1b\[[0-9;]*m|[`*]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
-  const log = flat(raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8'))
-  const missing = lines.filter(([, , said]) => !log.includes(flat(said).slice(0, 60))).map(m => m[1])
-  if (missing.length) fail(`## Base run ${missing.join(', ')} not found in ${slash(logPath)}. ${how}`)
-}
-
-// Planner handoff preflight (operator 2026-10-11): replaces the Sonnet subagent that graded its
-// own plan. Deterministic, no dev server, fails open — it only lists a fault on a concrete signal
-// and stays silent on anything it cannot read, leaving that to the board's own (Haiku) plan checker.
-// wrong-path has no check here: checkPlanPaths (via validatePlan, called just above this in the
-// handoff) already refuses a ## Files/Prerequisites/Implementation plan path that doesn't exist and
-// isn't marked (new) — of 108 real plan-check FAILs (2026-10-09..11) zero were wrong-path.
-// check-unreachable (39 of 108, the largest group) is skipped: telling a real selector or app state
-// from a wrong one needs reading the app/check together, which is exactly the judgement call left to
-// the plan checker; no mechanical signal here is reliable enough to refuse on.
-function planPreflight(card) {
-  const text = readFileSync(card.path, 'utf8')
-  const section = (name) => text.match(new RegExp(`^## ${name}[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))?.[1] || ''
-  const slash = (p) => p.replaceAll('\\', '/')
-  const baseRun = section('Base run')
-  const lines = [...baseRun.matchAll(/^[ \t]*(?:[-*][ \t]*)?AC\d+[ \t]+(FAIL|PASS \(guard\)|cannot run)[ \t]*:/gim)]
-  const faults = []
-  // check-passes-on-base: every Base run line already passes, so nothing shows this card is
-  // needed. "cannot run" lines do not count: baseRunCheck sends a Check on a file the card creates
-  // there, and refusing those too would leave a new-file card with no way out. No false refusal
-  // on the 442 plans whose last plan check passed (72 with Base run lines, 2026-10-11).
-  if (lines.length && lines.every(([, kind]) => /^PASS/i.test(kind))) {
-    faults.push('check-passes-on-base: every ## Base run line is "PASS (guard)" — none shows a real FAIL. If an AC already works unchanged, drop it or find what it actually still fails; "PASS (guard)" is only for behaviour this card leaves unchanged.')
-  }
-  // check-broken: the saved log shows a strong, environment-specific failure (not a code assertion),
-  // so the Check errored before it measured anything. Narrowed to tokens that never appear inside a
-  // legitimately-quoted FAIL line (I1015's base-run.log contains "TypeError" as part of one; this set
-  // excludes it) — validated zero-false-positive against the same 15 real PASSes.
-  if (!/^[ \t]*(?:[-*][ \t]*)?AC\d+[ \t]+cannot run[ \t]*:/im.test(baseRun)) {
-    const logPath = join(tasksDir, '.evidence', card.id, 'base-run.log')
-    const raw = existsSync(logPath) ? readFileSync(logPath) : null
-    const log = raw && (raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8'))
-    const crash = log?.match(/MODULE_NOT_FOUND|Cannot find module|ENOENT: no such file or directory|is not recognized as (?:an? internal or external command|a recognized)|command not found|No tests? found/i)
-    if (crash) faults.push(`check-broken: ${slash(logPath)} contains "${crash[0]}" — the Check errored before it could measure any AC. Fix the Check (or its setup), then run it and save base-run.log again.`)
-  }
-  return faults
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
@@ -368,7 +307,7 @@ try {
   // A product/operator decision no Planner can make: the card waits in Planning for the
   // manager's answer, uncounted and unescalated; moving the card (/api/move) clears it.
   // [board] is the same wait for a conflict with the board's own tooling (plan check, gate,
-  // Base run, hkb refusal): it still parks the card, but it is the Kanban Manager's problem,
+  // hkb refusal): it still parks the card, but it is the Kanban Manager's problem,
   // not the operator's, so it is flagged there instead of paging the operator (2026-10-10).
   const decisionCategory = verb === 'issue' && !approvalWait && current.column === 'planning' ? failureCategory(note) : null
   decisionWait = decisionCategory === 'decision' || decisionCategory === 'board'
@@ -439,18 +378,14 @@ try {
         if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) fail(`version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`)
       }
       if (!builderPassIn(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
+      // Testing is the Builder's job now, not the Planner's (operator 2026-10-11): for each AC,
+      // run the smallest fitting test and record it here, e.g. "AC1: npm test -> 4 passing".
+      const untested = acceptanceCriteriaIds(text).filter(ac => !new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?${ac}[ \\t]*:[ \\t]*\\S`, 'm').test(result))
+      if (untested.length) fail(`version-2 ${verb} result is missing a recorded test for ${untested.join(', ')} — add a line in ## Implementation or ## Evidence like "${untested[0]}: <command> -> <result>"`)
     }
   }
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
-  // After the plan text check, so a wrong path is named before the saved base run is asked for.
-  if (check.planWorkspace && current.cardOwned) { validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }); baseRunCheck(current) }
-  // Planner preflight (operator 2026-10-11): a Sonnet subagent checking a Haiku plan checker's
-  // work was waste ("a checker stacked on a checker"). Replaced with the deterministic checks in
-  // planPreflight above; the board's own plan checker remains the only agent-based check.
-  if (plannerAssignment && ['planned', 'queue'].includes(target)) {
-    const faults = planPreflight(current)
-    if (faults.length) fail(`plan preflight before ${current.id} leaves planning (not an error). Fix each, then run this handoff again:\n  - ${faults.join('\n  - ')}`)
-  }
+  if (check.planWorkspace && current.cardOwned) validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles })
   card = moveCard(tasksDir, cardId, target, { intake: auditIntake, plannerAssignment, covered: !!coveringCard, ...check, correction: !approvalWait && ['issue', 'rework'].includes(verb) && failureCategory(note) === 'implementation' })
   target = card.column
   if (verb === 'covered') {
@@ -502,7 +437,7 @@ else if (previousColumn === 'planning' && ['planned', 'queue'].includes(target) 
 // current feedback, I994's next Builder re-raised the already-fixed blocker from the old
 // builder-run.log in 43 seconds without running the corrected Check (2026-10-10).
 else if (previousColumn === 'planning' && ['planned', 'queue'].includes(target) && /^## Current feedback\r?\nKicked back: \[planning\]/m.test(readFileSync(card.path, 'utf8'))) {
-  writeCurrentFeedback(tasksDir, card, 'Resolved', 'a Planner re-planned this card after the last [planning] kick-back. That blocker, any earlier Builder result under ## Evidence and any builder-run.log in the evidence folder are history. The plan and Check above are current: run the Check yourself before reporting a blocker.\n')
+  writeCurrentFeedback(tasksDir, card, 'Resolved', 'a Planner re-planned this card after the last [planning] kick-back. That blocker, any earlier Builder result under ## Evidence and any builder-run.log in the evidence folder are history. The plan above is current: build and test it yourself before reporting a blocker.\n')
 }
 
 const binding = readBindings(tasksDir)[card.id]

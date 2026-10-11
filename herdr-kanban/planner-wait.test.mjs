@@ -115,7 +115,7 @@ test('hkb issue [decision] from Planning holds the card for the manager, uncount
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-// A board/process conflict (plan check, gate, Base run) is the Kanban Manager's problem, not the
+// A board/process conflict (plan check, gate, hkb refusal) is the Kanban Manager's problem, not the
 // operator's or the project manager's: it parks the card like [decision] but flags the Kanban
 // Manager inbox directly, bypassing any registered project manager (operator, 2026-10-10).
 test('hkb issue [board] from Planning holds the card and flags the Kanban Manager, not the project manager', async () => {

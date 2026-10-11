@@ -31,7 +31,7 @@ function fixture(t) {
   t.after(() => { if (prior === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = prior; rmSync(root, { recursive: true, force: true }) })
   return { root, tasks, config }
 }
-const plan = `## Approved brief\nDeliver correct result\n## Files\n- \`app.mjs\` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: correct result\n## Outcome checks\nAC1 | app.mjs | node check.mjs expects correct | remove required result and assert failure\n## Prerequisites\nNone\n## Implementation\nChanged app.mjs\n## Evidence\nnode check.mjs passed; evidence: check-output.txt\n`
+const plan = `## Approved brief\nDeliver correct result\n## Files\n- \`app.mjs\` result\n## Implementation plan\nChange app.mjs\n## Acceptance criteria\n- AC1: correct result\n## Prerequisites\nNone\n## Implementation\nChanged app.mjs\n## Evidence\nnode check.mjs passed; evidence: check-output.txt\n`
 
 test('Pause persists, blocks prompt boundary, Start preserves other pauses and confirmed delivery is deduplicated', async t => {
   const f = fixture(t)
@@ -84,9 +84,9 @@ test('history is append-only, focused briefing excludes transcript and feedback 
   assert.ok(first.id)
 })
 
-test('new plans require outcome/check mapping; missing requirement fails validation', () => {
+test('new plans need no Check/Base-run script; a duplicated AC id still fails validation', () => {
   validatePlan('**Workflow version:** 2\n' + plan)
-  assert.throws(() => validatePlan('**Workflow version:** 2\n' + plan.replace('AC1 | app.mjs', 'AC2 | app.mjs')), /map each AC/)
+  assert.throws(() => validatePlan('**Workflow version:** 2\n' + plan.replace('- AC1: correct result', '- AC1: correct result\n- AC1: duplicate id')), /unique AC ID/)
 })
 
 test('relevant code and acceptance changes invalidate evidence; optional caps remain disabled until chosen', t => {
@@ -167,7 +167,7 @@ test('version-2 handoff validates a structured result and repeated completion is
   const done = () => spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
   assert.notEqual(done().status, 0)
   const current = findCard(f.tasks, card.id)
-  writeFileSync(current.path, readFileSync(current.path, 'utf8').replace('Changed app.mjs', 'Stage: builder\nOutcome: PASS\nFiles: app.mjs\nBlocker: none').replace('node check.mjs passed; evidence: check-output.txt', 'Check: node check.mjs\nResult: expected output and negative case passed\nEvidence: check-output.txt'))
+  writeFileSync(current.path, readFileSync(current.path, 'utf8').replace('Changed app.mjs', 'Stage: builder\nOutcome: PASS\nFiles: app.mjs\nBlocker: none').replace('node check.mjs passed; evidence: check-output.txt', 'Check: node check.mjs\nResult: expected output and negative case passed\nEvidence: check-output.txt\nAC1: node check.mjs -> passed'))
   assert.equal(done().status, 0)
   const before = readFileSync(historyPath(f.tasks, card.id), 'utf8')
   assert.equal(done().status, 0)
@@ -324,7 +324,7 @@ test('version-2 done reads one-line comma fields and "Outcome: PASS: note" the s
   const write = (impl, ev) => { const c = findCard(f.tasks, card.id); writeFileSync(c.path, readFileSync(c.path, 'utf8').replace(/Changed app\.mjs|- Stage:.*/, impl).replace(/node check\.mjs passed; evidence: check-output\.txt|Check: node check.*/, ev)) }
   write('- Stage: builder, Outcome: FAIL, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: failed, Evidence: check-output.txt')
   assert.match(done().stderr, /requires Stage: builder and Outcome: PASS/)
-  write('- Stage: builder, Outcome: PASS: fixed the toggle, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: 3 passed, Evidence: check-output.txt')
+  write('- Stage: builder, Outcome: PASS: fixed the toggle, Files: app.mjs, Blocker: none', 'Check: node check.mjs, Result: 3 passed, Evidence: check-output.txt\nAC1: node check.mjs -> 3 passed')
   assert.equal(done().status, 0, done().stderr)
 })
 
@@ -333,7 +333,7 @@ test('done repairs a literal PowerShell `r`n that hid the Implementation heading
   const card = createCard(f.tasks, { title: 'escaped result', brief: 'correct result' })
   writeFileSync(card.path, `# ${card.id} — escaped\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`
     .replace('## Implementation\nChanged app.mjs', '## Implementation`r`nStage: builder, Outcome: PASS, Files: app.mjs, Blocker: none')
-    .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence`r`nCheck: node check.mjs; Result: passed; Evidence: check-output.txt'))
+    .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence`r`nCheck: node check.mjs; Result: passed; Evidence: check-output.txt\nAC1: node check.mjs -> passed'))
   moveCard(f.tasks, card.id, 'working')
   const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
   assert.equal(run.status, 0, run.stderr)
@@ -353,7 +353,7 @@ test('issue/done restore a prefix-overwritten plan and relocate duplicate Builde
     const start = saved.indexOf('## Implementation'), end = saved.indexOf('## Acceptance criteria', start)
     writeFileSync(current.path, (saved.slice(0, start) + result + saved.slice(end))
       .replace('## Implementation\nChanged app.mjs', result + '\n## Implementation\n<!-- empty -->')
-      .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence\x60r\x60nCheck: node check.mjs; Result: passed; Evidence: check-output.txt'))
+      .replace('## Evidence\nnode check.mjs passed; evidence: check-output.txt', '## Evidence\x60r\x60nCheck: node check.mjs; Result: passed; Evidence: check-output.txt\nAC1: node check.mjs -> passed'))
     const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, verb, card.id, ...(verb === 'issue' ? ['[planning] specified target is incomplete'] : [])], { encoding: 'utf8' })
     assert.equal(run.status, 0, run.stderr)
     assert.match(run.stdout, /restored ## Implementation plan from history/)
@@ -376,7 +376,7 @@ test('done moves a Builder result written under Implementation plan into Impleme
   writeFileSync(card.path, `# ${card.id} — plan\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`)
   moveCard(f.tasks, card.id, 'working')
   const current = findCard(f.tasks, card.id), saved = readFileSync(current.path, 'utf8')
-  const result = 'Stage: builder\nOutcome: PASS\nFiles: app.mjs\nCheck: node check.mjs\nResult: passed\nEvidence: check-output.txt\nBlocker: none'
+  const result = 'Stage: builder\nOutcome: PASS\nFiles: app.mjs\nCheck: node check.mjs\nResult: passed\nEvidence: check-output.txt\nBlocker: none\nAC1: node check.mjs -> passed'
   writeFileSync(current.path, saved.replace('## Implementation plan\nChange app.mjs', `## Implementation plan\n${result}`).replace('## Implementation\nChanged app.mjs', '## Implementation\n<!-- result -->'))
   const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
   assert.equal(run.status, 0, run.stderr)

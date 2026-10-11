@@ -22,6 +22,13 @@ const AUDIT_TEMPLATES = {
 }
 export const AUDITS = Object.keys(AUDIT_TEMPLATES)
 
+// Shared by the plan check (every AC needs its own id) and the Builder handoff
+// (every AC needs a recorded test result) — one id list, one regex.
+export function acceptanceCriteriaIds(text) {
+  const section = text.match(/^## Acceptance criteria\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? ''
+  return [...section.matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
+}
+
 // `workspace` (absolute) is passed only at a Planner handoff, so cards already
 // queued or working are never blocked retroactively by the plan check.
 export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null, sharedFiles = [] } = {}) {
@@ -41,17 +48,13 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if (!section(name)) throw new Error(`Plan incomplete: fill ## ${name} before handoff; keep the template headings`)
   }
   // I556: a check tied to Planning stops working as soon as the card moves.
-  const commands = ['Implementation plan', 'Outcome checks', 'Prerequisites', 'Acceptance criteria'].map(section).join('\n').replaceAll('\\', '/')
+  const commands = ['Implementation plan', 'Prerequisites', 'Acceptance criteria'].map(section).join('\n').replaceAll('\\', '/')
   if (new RegExp(String.raw`\bTASKS/(?:${ALL.map(c => c.dir).join('|')})/${CARD_ID}(?:-[^/\s]+)?\.md\b`, 'i').test(commands)) {
     throw new Error('Plan check failed: card files move between lanes. Use a lane-independent check such as hkb show <id> or the card id, instead of TASKS/<lane>/<ID>-*.md in check commands.')
   }
   if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
-    const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
-    const checks = section('Outcome checks')
-    // A cell may hold an escaped pipe, \|, as Markdown allows (Tradeflow TF121).
-    const cell = String.raw`(?:\\.|[^|\\])+`
-    const unmapped = criteria.find(id => !new RegExp(String.raw`^\s*\|?\s*${id}\s*\|${cell}\|${cell}\|${cell}\|?\s*$`, 'm').test(checks))
-    if (!criteria.length || new Set(criteria).size !== criteria.length || unmapped) throw new Error(`Plan incomplete: map each AC ID to change, acceptance check and negative check under Outcome checks${unmapped ? ` (no 4-column row for ${unmapped})` : ''}`)
+    const criteria = acceptanceCriteriaIds(text)
+    if (!criteria.length || new Set(criteria).size !== criteria.length) throw new Error('Plan incomplete: give each acceptance criterion its own unique AC ID (AC1, AC2, ...)')
     if (!section('Prerequisites')) throw new Error('Plan incomplete: state workspace prerequisites (or explicitly none)')
   }
   const fileLines = [...section('Files').matchAll(/^-\s+`([^`]+)`([^\n]*)/gm)]
@@ -95,13 +98,12 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
       ['observed cause and evidence', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:observed cause|cause)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*[^\r\n]+/im],
       ['inspected current revision/state', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?inspected current (?:revision\/state|revision|state)[ \t]*:[ \t]*[^\r\n]+/im],
       ['concrete changes', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:change|changes|concrete changes)[ \t]*:[ \t]*[^\r\n]+/im],
-      ['runnable check and expected result', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:check|check command|setup)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*(?:expected(?: result)?|result)[ \t]*:[ \t]*[^\r\n]+/im],
       ['scope/stop rules', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:scope|stop rules?)[ \t]*:[ \t]*[^\r\n]+/im],
     ]
     const missing = required.filter(([, pattern]) => !pattern.test(plan)).map(([name]) => name)
     // Say the exact form: a Claude Haiku Planner wrote "### Observed cause" headings and retried
     // the same shape ten times before escalating (Injectbuddy I260, 2026-09-26).
-    if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}. Inside ## Implementation plan, write each as a line that starts with its label and a colon (headings do not count): "Agreed outcome: ...", "Unchanged constraints: ...", "Cause: ..." then "Evidence: ...", "Inspected current state: ...", "Changes: ...", "Check: ..." then "Expected result: ...", "Scope: ...".`)
+    if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}. Inside ## Implementation plan, write each as a line that starts with its label and a colon (headings do not count): "Agreed outcome: ...", "Unchanged constraints: ...", "Cause: ..." then "Evidence: ...", "Inspected current state: ...", "Changes: ...", "Scope: ...". Testing is the Builder's job, not the plan's.`)
     const cause = plan.match(/(?:^|\n)\s*(?:[-*]\s*)?(?:observed cause|cause)\s*:\s*([^\n]+)/i)?.[1] || ''
     if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
     if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
@@ -125,15 +127,6 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     }
     checkPlanPaths(planRoot, section('Files'), section('Prerequisites'), section('Implementation plan'))
     if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
-    // Most Builder kick-backs were plans whose own check did not match the code: a wrong
-    // selector (I427), a screenshot count the script never produced (I432), a zero-reference
-    // AC that files outside ## Files made impossible (I445). Running the check once first catches them.
-    if (readiness === 'build-ready' && !/^\*\*Base check:\*\*[ 	]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Base check:** line: run the Check once on the current integration checkout and record the command and what it printed (a regression check should fail there; a count, selector or file it relies on must exist). If it cannot run before the change (it tests a file this card creates), say why.')
-    // Each AC must show the Check reached its own assertion on base (operator 2026-10-09): I974
-    // took three plan-check FAILs for ACs whose Check timed out or never measured them.
-    const criteria = [...section('Acceptance criteria').matchAll(/^-\s+(AC\d+):\s+\S.+$/gm)].map(m => m[1])
-    const unrun = criteria.filter(id => !new RegExp(String.raw`^[ \t]*(?:[-*][ \t]*)?${id}[ \t]+(?:FAIL|cannot run|PASS \(guard\))[ \t]*:[ \t]*\S`, 'im').test(section('Base run')))
-    if (readiness === 'build-ready' && unrun.length) throw new Error(`Plan check failed: ## Base run needs one line per AC copied from the Check's output on the current integration checkout, showing it failed at that AC's own assertion: "AC1 FAIL: expected 1 Catch up card at 390, got 0". A timeout, a locator that never appeared or zero measurements is not a FAIL line: fix the Check. Only when the Check cannot run before the change (it tests a file this card creates) write "AC1 cannot run: <why>". An AC that only guards behaviour this card leaves unchanged passes on base: "AC3 PASS (guard): <its output line>". Missing: ${unrun.join(', ')}`)
   }
 }
 

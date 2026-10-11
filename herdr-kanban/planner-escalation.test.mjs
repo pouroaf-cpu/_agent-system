@@ -74,8 +74,6 @@ test('a Claude-planned card keeps the old path: no escalation, no Codex log', ()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-// Planner handoffs need a saved base run holding each Base run line.
-const saveBaseRun = (tasks) => { mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true }); writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 FAIL: helper() returned 0, expected 1') }
 const PLAN = `# T-1 — escalated plan
 **Workflow:** card-owned
 **Workflow version:** 2
@@ -93,7 +91,6 @@ Observed cause: helper is missing.
 Evidence: src/app.mjs does not exist.
 Inspected current revision/state: git revision abc123; working tree clean.
 **Callers checked:** none
-**Base check:** node check.mjs on base: 1 failing as expected
 Changes: add helper() and its test.
 Setup: none; use the existing Node runtime.
 Check: node --test test/app.test.mjs
@@ -102,10 +99,6 @@ Scope: only the two new files.
 Stop rules: stop if src/app.mjs already exists.
 ## Acceptance criteria
 - AC1: helper() returns 1.
-## Outcome checks
-AC1 | src/app.mjs helper() | node --test test/app.test.mjs passes | return 0 and the check fails
-## Base run
-AC1 FAIL: helper() returned 0, expected 1
 ## Prerequisites
 Existing Node runtime; no additional access.
 `
@@ -114,7 +107,7 @@ test('a plan accepted into Planned clears the escalation flag', () => {
   const root = mkdtempSync(join(tmpdir(), 'planner-escalation-clear-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
-    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN); saveBaseRun(tasks)
+    writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN)
     updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-5-5', at: 'x' } })
     const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
@@ -124,40 +117,17 @@ test('a plan accepted into Planned clears the escalation flag', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-// Operator 2026-10-11: a Sonnet subagent checking a Haiku plan checker's work was waste ("a
-// checker stacked on a checker"). The Planner's subagent pre-check is gone; hkb now runs a
-// deterministic preflight (planPreflight in hkb-cli.mjs) itself before the hand-off to Planned.
-test('a Planner handoff to Planned runs the deterministic preflight, not an agent', () => {
+// Operator 2026-10-11: the Planner-written Check script, its Base run lines and base-run.log
+// caused most plan rejections and half of Builder "[planning]" kick-backs, not the plan itself.
+// A Planner now writes no Check script, no Base run lines and no base-run.log; the Builder owns
+// testing. The hand-off to Planned must accept a plan that carries none of that.
+test('a Planner handoff to Planned accepts a plan with no Check script, Base run or base-run.log', () => {
   const root = mkdtempSync(join(tmpdir(), 'planner-preflight-'))
   try {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
     const easy = PLAN.replace('**Workspace:**', '**Difficulty:** easy\n**Workspace:**'), card = join(tasks, 'planning', 'T-1.md')
     const move = () => handoff(tasks, 'T-1', 1, 'claude', 'move', 'T-1', 'planned')
-    writeFileSync(card, easy.replace(/## Base run\n.*\n/, ''))
-    assert.match(move().stderr, /## Base run needs one line per AC.*Missing: AC1/, 'the deterministic refusal comes first')
-
-    // check-passes-on-base: every Base run line is "PASS (guard)", so nothing shows a real FAIL today.
-    writeFileSync(card, easy.replace('AC1 FAIL: helper() returned 0, expected 1', 'AC1 PASS (guard): helper() returned 1'))
-    mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true })
-    writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), 'AC1 PASS (guard): helper() returned 1')
-    const passesOnBase = move()
-    assert.equal(passesOnBase.status, 1)
-    assert.match(passesOnBase.stderr, /plan preflight before T-1 leaves planning \(not an error\)/)
-    assert.match(passesOnBase.stderr, /check-passes-on-base: every ## Base run line is "PASS \(guard\)"/)
-    assert.equal(findCard(tasks, 'T-1').column, 'planning')
-
-    // check-broken: the saved base-run.log shows an environment crash before any AC was measured.
     writeFileSync(card, easy)
-    mkdirSync(join(tasks, '.evidence', 'T-1'), { recursive: true })
-    writeFileSync(join(tasks, '.evidence', 'T-1', 'base-run.log'), "MODULE_NOT_FOUND: Cannot find module 'node:test'\nAC1 FAIL: helper() returned 0, expected 1")
-    const broken = move()
-    assert.equal(broken.status, 1)
-    assert.match(broken.stderr, /plan preflight before T-1 leaves planning \(not an error\)/)
-    assert.match(broken.stderr, /check-broken: .*base-run\.log contains "MODULE_NOT_FOUND"/)
-    assert.equal(findCard(tasks, 'T-1').column, 'planning')
-
-    // A real FAIL in both the plan and the saved log clears the preflight.
-    saveBaseRun(tasks)
     const ok = move()
     assert.equal(ok.status, 0, ok.stderr)
     assert.equal(findCard(tasks, 'T-1').column, 'planned')
