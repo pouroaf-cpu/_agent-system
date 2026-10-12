@@ -107,6 +107,22 @@ assert.throws(() => validatePlan(realistic.replace('**Plan readiness:** build-re
   /build-ready or investigation/i)
 assert.throws(() => validatePlan(realistic.replace('Outcome: preserve the approved keyboard behavior.', 'Outcome:')),
   /agreed outcome/i)
+test('HK24: plan labels in bold or bullet form are accepted', () => {
+  const labels = [['Outcome', 'agreed outcome'], ['Unchanged constraints', 'unchanged constraints'], ['Observed cause', 'observed cause and evidence'], ['Evidence', 'observed cause and evidence'], ['Inspected current revision/state', 'inspected current revision/state'], ['Changes', 'concrete changes'], ['Scope', 'scope/stop rules']]
+  const forms = { bare: l => `${l}:`, bold: l => `**${l}:**`, bullet: l => `- ${l}:`, 'bold-bullet': l => `- **${l}:**` }
+  const rewrite = (text, wrap) => [...labels.map(([l]) => l), 'Stop rules'].reduce((t, l) => t.replace(`\n${l}: `, `\n${wrap(l)} `), text)
+  const drop = (text, ...names) => text.split('\n').filter(line => !names.some(n => line.replace(/^[-*\s]*\**/, '').startsWith(`${n}:`))).join('\n')
+  const options = { requireReadiness: true }
+  for (const [form, wrap] of Object.entries(forms)) {
+    const plan = rewrite(realistic, wrap)
+    assert.doesNotThrow(() => validatePlan(plan, options), `${form} labels pass`) // AC1, AC2, AC4
+    if (form === 'bold-bullet') continue
+    for (const [label, name] of labels) {
+      assert.throws(() => validatePlan(drop(plan, label, ...label === 'Scope' ? ['Stop rules'] : []), options),
+        new RegExp(`needs ${name.replace('/', '\\/')}\\. Inside`), `${form}: missing ${label} names ${name}`) // AC3
+    }
+  }
+})
 console.log('Planner readiness validation passed')
 
 // Plan check at Planner handoff: Files must exist (unless marked new) and callers must be listed.

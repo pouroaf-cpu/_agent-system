@@ -99,11 +99,11 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if (!/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])) throw Object.assign(new Error('Plan incomplete: investigation requires explicit approval on the card'), { operatorApproval: true })
   }
   if (readiness === 'build-ready') {
-    const plan = section('Implementation plan')
+    const plan = section('Implementation plan').replaceAll('**', '')
     const required = [
       ['agreed outcome', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:outcome|agreed outcome)[ \t]*:[ \t]*[^\r\n]+/im],
       ['unchanged constraints', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?unchanged constraints?[ \t]*:[ \t]*[^\r\n]+/im],
-      ['observed cause and evidence', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:observed cause|cause)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*[^\r\n]+/im],
+      ['observed cause and evidence', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:observed cause|cause)[ \t]*:[ \t]*[^\r\n]+[\s\S]*?(?:^|\n)[ \t]*(?:[-*][ \t]*)?evidence[ \t]*:[ \t]*[^\r\n]+/im],
       ['inspected current revision/state', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?inspected current (?:revision\/state|revision|state)[ \t]*:[ \t]*[^\r\n]+/im],
       ['concrete changes', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:change|changes|concrete changes)[ \t]*:[ \t]*[^\r\n]+/im],
       ['scope/stop rules', /(?:^|\n)[ \t]*(?:[-*][ \t]*)?(?:scope|stop rules?)[ \t]*:[ \t]*[^\r\n]+/im],
@@ -111,7 +111,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     const missing = required.filter(([, pattern]) => !pattern.test(plan)).map(([name]) => name)
     // Say the exact form: a Claude Haiku Planner wrote "### Observed cause" headings and retried
     // the same shape ten times before escalating (Injectbuddy I260, 2026-09-26).
-    if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}. Inside ## Implementation plan, write each as a line that starts with its label and a colon (headings do not count): "Agreed outcome: ...", "Unchanged constraints: ...", "Cause: ..." then "Evidence: ...", "Inspected current state: ...", "Changes: ...", "Scope: ...". Testing is the Builder's job, not the plan's.`)
+    if (missing.length) throw new Error(`Plan incomplete: build-ready plan needs ${missing.join(', ')}. Inside ## Implementation plan, write each as a line that starts with its label and a colon (a leading - bullet or **bold** label is fine; headings do not count): "Agreed outcome: ...", "Unchanged constraints: ...", "Cause: ..." then "Evidence: ...", "Inspected current state: ...", "Changes: ...", "Scope: ...". Testing is the Builder's job, not the plan's.`)
     const cause = plan.match(/(?:^|\n)\s*(?:[-*]\s*)?(?:observed cause|cause)\s*:\s*([^\n]+)/i)?.[1] || ''
     if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
     if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
