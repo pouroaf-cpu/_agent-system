@@ -64,6 +64,12 @@ test('dispatch records effective difficulty and usage before a headless Builder 
   assert.equal(launched.model, 'gpt-6-luna')
   assert.equal(readWorkflow(f.tasks)['T-1'].builderAttempt.difficulty, 'easy')
   assert.equal(Object.values(readUsage(f.tasks).runs)[0].difficulty, 'easy')
+  // A first plain crash retries once in Queue without stepping up difficulty (audit #7).
+  const retried = routeBuilderNoHandoff({ tasksDir: f.tasks, cardId: 'T-1', reason: 'Builder exited unsuccessfully' })
+  assert.equal(retried.column, 'queue')
+  assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'easy', 'unchanged by a first crash; recordBuilderAttempt already set it on dispatch')
+  moveCard(f.tasks, 'T-1', 'working')
+  // A second plain crash in a row escalates to Planning and steps up difficulty, as a single crash did before.
   routeBuilderNoHandoff({ tasksDir: f.tasks, cardId: 'T-1', reason: 'Builder exited unsuccessfully' })
   assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'medium')
 })
@@ -97,6 +103,11 @@ test('hkb issue and later missing handoff count one return; direct failed transi
   assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'medium')
   moveCard(f.tasks, 'T-1', 'working')
   recordBuilderAttempt(f.tasks, f.card(), 'medium')
+  // A first plain crash retries once in Queue without stepping up difficulty (audit #7).
+  assert.equal(routeBuilderNoHandoff({ tasksDir: f.tasks, cardId: 'T-1', reason: 'process ended' }).column, 'queue')
+  assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'medium')
+  moveCard(f.tasks, 'T-1', 'working')
+  // A second plain crash in a row escalates to Planning and steps up difficulty, as a single crash did before.
   routeBuilderNoHandoff({ tasksDir: f.tasks, cardId: 'T-1', reason: 'process ended' })
   assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'hard')
   moveCard(f.tasks, 'T-1', 'working')

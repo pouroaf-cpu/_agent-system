@@ -13,20 +13,35 @@ import { findCard, moveCard } from './lib/cards.mjs'
 import { operationalHold, readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
 import { runCardPlanner, drainIssues } from './lib/card-planner.mjs'
 
-test('Builder fallback routes Working to Planning and preserves assignment/worktree evidence', t => {
+test('Builder fallback kicks back to Queue once, then to Planning on a second crash in a row (audit #7)', t => {
   const root = mkdtempSync(join(tmpdir(), 'lifecycle-safeguards-'))
   const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(working, { recursive: true })
-  writeFileSync(join(working, 'T-1.md'), '# T-1 — saved work\n**Workflow:** card-owned\n## Files\n- `app.mjs`\n## Implementation\nStage: builder\n## Evidence\nCheck: node check.mjs\n')
+  writeFileSync(join(working, 'T-1.md'), '# T-1 — saved work\n**Workflow:** card-owned\n## Approved brief\nKeep the saved work passing.\n## Files\n- `app.mjs`\n## Implementation plan\nFix the bug.\n## Acceptance criteria\n- AC1: it works\n## Implementation\nStage: builder\n## Evidence\nCheck: node check.mjs\n')
   writeFileSync(join(root, 'app.mjs'), 'saved')
   writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'pane-1', name: 'builder' } } }))
   writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': { state: 'building', worktreePath: join(root, 'worktree') } }))
+
+  // First plain crash: one retry in Queue, a short reason on the card, raw evidence kept out of it.
+  const retried = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Session pane-1 is missing without a valid Builder handoff from Working', evidence: 'last visible output' })
+  assert.equal(retried.column, 'queue')
+  const retriedText = readFileSync(retried.path, 'utf8')
+  assert.match(retriedText, /Kicked back[\s\S]*Session pane-1 is missing/)
+  assert.doesNotMatch(retriedText, /last visible output/, 'raw pane evidence stays out of the card body')
+  assert.deepEqual(readWorkflow(tasks)['T-1'].builder, { pane_id: 'pane-1', name: 'builder' })
+  assert.equal(readWorkflow(tasks)['T-1'].noHandoffStreak, 1)
+  assert.match(readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8'), /builder-no-handoff/)
+
+  // Second crash in a row escalates to Planning, same as every crash did before this change.
+  moveCard(tasks, 'T-1', 'working')
   const moved = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason: 'Session pane-1 is missing without a valid Builder handoff from Working', evidence: 'last visible output' })
   assert.equal(moved.column, 'planning')
-  assert.match(readFileSync(moved.path, 'utf8'), /Kicked back[\s\S]*\[planning\] Builder fallback[\s\S]*last visible output/)
-  assert.deepEqual(readWorkflow(tasks)['T-1'].builder, { pane_id: 'pane-1', name: 'builder' })
+  const movedText = readFileSync(moved.path, 'utf8')
+  assert.match(movedText, /Kicked back[\s\S]*\[planning\] Builder fallback/)
+  assert.doesNotMatch(movedText, /last visible output/, 'raw pane evidence stays out of the card body')
   assert.equal(readWorkflow(tasks)['T-1'].operational ?? null, null, 'no hold: a fresh Planner takes the card')
+  assert.equal(readWorkflow(tasks)['T-1'].noHandoffStreak, 0)
   assert.equal(JSON.parse(readFileSync(join(tasks, '.board-worktrees.json')))['T-1'].state, 'building')
   assert.match(readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8'), /builder-no-handoff/)
   assert.equal(existsSync(join(tasks, 'issues')), false, 'nothing lands in Issues')
@@ -97,10 +112,12 @@ test('Builder fallback judges only the agent\'s last message in a scraped pane (
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(working, { recursive: true })
   const pane = (last) => `+194 lines\n\n• Reading the brief.\n\n• Ran Get-Content skill.md\n  │ … +5 lines\n  └ Should you ask? You cannot.\n\n• ${last}\n\n  Worked for 1m 15s · 3:30 PM\n\n\n› Ask Codex to do anything\n\n  GPT-6-Luna medium`
-  writeFileSync(join(working, 'T-7.md'), '# T-7 — plan gap\n**Workflow:** card-owned\n')
+  writeFileSync(join(working, 'T-7.md'), '# T-7 — plan gap\n**Workflow:** card-owned\n## Approved brief\nClose the plan gap.\n## Files\n- `app.mjs`\n## Implementation plan\nFix the gap.\n## Acceptance criteria\n- AC1: it works\n')
   const gap = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-7', reason: 'no handoff', evidence: pane('[planning] The delivery requires extracting\n  the flow machinery; recording the blocker.') })
   assert.equal(readWorkflow(tasks)['T-7']?.waitFor ?? null, null, 'plan gap goes to the Planner, not a person')
   assert.match(readFileSync(gap.path, 'utf8'), /Kicked back/)
+  // First plain crash retries in Queue, not Planning (audit #7) — this scenario is not yet a second crash.
+  assert.equal(gap.column, 'queue')
   writeFileSync(join(working, 'T-8.md'), '# T-8 — question\n**Workflow:** card-owned\n')
   routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-8', reason: 'no handoff', evidence: pane('Should I keep the old\n  selector or rename it?') })
   assert.equal(readWorkflow(tasks)['T-8'].waitFor.why, 'Should I keep the old selector or rename it?', 'ask text is the agent\'s question, not the pane')

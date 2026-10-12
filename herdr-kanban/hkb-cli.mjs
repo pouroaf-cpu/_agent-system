@@ -568,6 +568,9 @@ if (binding) updateWorkflow(tasksDir, card.id, { builder: binding })
 if (['done', 'unchanged', 'pass'].includes(verb)) updateWorkflow(tasksDir, card.id, {
   operational: null,
   completedStage: previousColumn,
+  // A genuine Builder handoff resets the no-handoff streak (audit #7): only consecutive
+  // crashes in a row escalate to Planning; a successful hand-in starts the count over.
+  ...(previousColumn === 'working' ? { noHandoffStreak: null } : {}),
   ...(target === 'completed' ? { completedAt: new Date().toISOString() } : {}),
 })
 unbind(tasksDir, card.id)

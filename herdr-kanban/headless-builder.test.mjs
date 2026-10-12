@@ -94,7 +94,7 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     const before=findCard(tasksDir,'T-1').buildAttempts
     // Restart after spawn acknowledgement, before delivery confirmation was saved.
     saveDelivery('proof',first.pane_id,{...readDelivery('proof',first.pane_id),status:'launching'})
-    assert.deepEqual(await reconcileBuilderExits({...common,agents:await agentList('proof')}),[{id:'T-1',to:'planning'}])
+    assert.deepEqual(await reconcileBuilderExits({...common,agents:await agentList('proof')}),[{id:'T-1',to:'queue'}])
     assert.equal(readDelivery('proof',first.pane_id).status,'confirmed')
     assert.equal(findCard(tasksDir,'T-1').buildAttempts,before)
     assert.equal(readBindings(tasksDir)['T-1'],undefined)

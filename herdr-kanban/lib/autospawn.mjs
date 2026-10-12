@@ -90,16 +90,37 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   const issue = builderIssue(tasksDir, card.id, (readBindings(tasksDir)[card.id] || readWorkflow(tasksDir)[card.id]?.builder)?.started)
   if (issue) { reason = `Builder reported: ${issue.note}`; evidence = '' }
   const detail = `${String(reason || 'Builder ended without a valid handoff').trim()}${evidence ? `; evidence: ${String(evidence).trim().slice(-4000)}` : ''}`
+  // Audit 2026-10-12 report #7: the card body gets a short plain reason only, never the raw
+  // pane tail or "evidence:" text above; the full detail still goes to history for diagnosis.
+  const shortReason = String(reason || 'Builder ended without a valid handoff').trim().slice(0, 300)
+  // Judge only the agent's own last message, not tool output in the pane (I385 was held on
+  // a skill file's text). A [planning]/[implementation] tag is a plan gap for the Planner.
+  const said = lastAgentMessage(evidence)
+  const isQuestion = looksLikeAQuestion(said) && !/^\[(planning|implementation)\]/i.test(said)
   unbind(tasksDir, card.id)
+
+  // Audit 2026-10-12 report #7: a plain crash (no filed hkb issue, no captured question) gets
+  // one Builder retry in Queue with difficulty unchanged; only a second one in a row escalates
+  // to Planning and steps up difficulty, same as every crash did before this change. A filed
+  // hkb issue or a captured question is a deliberate signal, not a crash, and still goes
+  // straight to Planning on the first exit, same as today.
+  if (!issue && !isQuestion) {
+    const streak = (readWorkflow(tasksDir)[card.id]?.noHandoffStreak || 0) + 1
+    if (streak < 2) {
+      updateWorkflow(tasksDir, card.id, { noHandoffStreak: streak })
+      appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
+      const moved = moveCard(tasksDir, card.id, 'queue')
+      appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n${shortReason}. Retrying once in Queue for a fresh Builder before this goes to Planning.\n`)
+      return moved
+    }
+  }
+  updateWorkflow(tasksDir, card.id, { noHandoffStreak: 0 })
   recordBuilderReturn(tasksDir, card, detail)
   const moved = moveCard(tasksDir, card.id, 'planning')
   // Nobody reads a stopped Builder's pane, so a question or blocker left there as plain
   // text otherwise just gets requeued/replanned into the same silence (38 of the last 100
   // bounces, 2026-09-27). Hold it for a person instead of kicking it back to a fresh Planner.
-  // Judge only the agent's own last message, not tool output in the pane (I385 was held on
-  // a skill file's text). A [planning]/[implementation] tag is a plan gap for the Planner.
-  const said = lastAgentMessage(evidence)
-  if (looksLikeAQuestion(said) && !/^\[(planning|implementation)\]/i.test(said)) {
+  if (isQuestion) {
     const question = said.slice(-2000)
     updateWorkflow(tasksDir, moved.id, { waitFor: { cards: [], files: [], decision: true, why: question, since: new Date(now).toISOString() } })
     writeCurrentFeedback(tasksDir, moved, 'Needs you', `${question}\n\nRecord the answer on the card, then move it to Planning (or Planned).\n`)
@@ -107,7 +128,7 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
     activityLog({ tasksDir, project: basename(dirname(tasksDir)), cardId: card.id, event: 'agent-question-captured', message: question })
     return moved
   }
-  appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n[planning] Builder fallback: ${detail}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
+  appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n[planning] Builder fallback: ${shortReason}. Worktree, commits and prior output are preserved; resolve why the Builder stopped before requeueing.\n`)
   // A filed hkb issue is already in history as the Builder's own handoff; only a silent exit is a no-handoff.
   appendHistory(tasksDir, card.id, { event: issue ? 'builder-issue-exit' : 'builder-no-handoff', stage: 'working', reason: detail, evidence })
   // I1002, IA138 (2026-10-11): clear the stale hold so the Planner can start now.
@@ -135,7 +156,8 @@ export async function reconcileBuilderExits({ tasksDir, project, agents, boardRo
       let routed
       if (handedOff) {
         routed = moveCard(tasksDir, cardId, 'completed')
-        updateWorkflow(tasksDir, cardId, { completedStage: 'working', completedAt: new Date(now).toISOString() })
+        // A genuine handoff resets the no-handoff streak (audit #7): only consecutive crashes escalate.
+        updateWorkflow(tasksDir, cardId, { completedStage: 'working', completedAt: new Date(now).toISOString(), noHandoffStreak: null })
         unbind(tasksDir, cardId)
       } else {
         routed = routeBuilderNoHandoff({ tasksDir, cardId, reason: `Session ${binding.pane_id} exited with code=${agent.exitCode ?? 'unknown'} without a valid Builder handoff from Working`, evidence, boardRoot, engine: binding.engine, model: binding.model, session, now })
