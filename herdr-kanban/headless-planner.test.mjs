@@ -1,10 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync as rmSyncOnce } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+
+// Node 24's rmSync ignores maxRetries for EPERM, which Windows gives while a just-killed child
+// (or a scanner) still holds the directory: retry here instead.
+const rmSync = (path, options) => {
+  for (let i = 1; ; i++) {
+    try { return rmSyncOnce(path, options) } catch (err) {
+      if (i >= 100 || err.code !== 'EPERM') throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
 const run = promisify(execFile)
 
 test('Planner launches headlessly, resumes corrections, and recovers exits without handoff', async () => {
@@ -25,7 +36,7 @@ test('Planner launches headlessly, resumes corrections, and recovers exits witho
     Object.assign(headless,createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]}))
     const card=createCard(tasksDir,{title:'Proof',brief:'A specific approved outcome'})
     const args={project:'Proof',projectPath:root,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},model:'claude-sonnet-5-5',engine:'claude',handoffGraceMs:10}
-    const untilDone=async()=>{for(let n=0;n<150;n++){const rows=await agentList('proof');if(rows.length&&rows.every(a=>a.agent_status==='done'&&a.agent_session))return rows;await new Promise(r=>setTimeout(r,50))}throw Error('Timed out')}
+    const untilDone=async()=>{for(let n=0;n<600;n++){const rows=await agentList('proof');if(rows.length&&rows.every(a=>a.agent_status==='done'&&a.agent_session))return rows;await new Promise(r=>setTimeout(r,50))}throw Error('Timed out')}
     const first=await runCardPlanner(args)
     assert.match(first.pane_id,/^headless-/)
     const initial=readCardPlanners(tasksDir)[card.id]
@@ -66,7 +77,7 @@ test('Planner launches headlessly, resumes corrections, and recovers exits witho
     console.log('headless Planner flow passed')
   `)
   try {
-    const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-planner' }, timeout: 30000, windowsHide: true })
+    const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-planner' }, timeout: 90000, windowsHide: true })
     assert.match(result.stdout, /headless Planner flow passed/)
   } finally {
     await new Promise(r => setTimeout(r, 1200))

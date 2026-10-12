@@ -15,7 +15,7 @@ function fixture() {
   writeFileSync(source, 'approved\n' + 'x'.repeat(9000)); writeFileSync(card, 'approved card'); writeFileSync(script, 'console.log("check output")')
   const module = fileURLToPath(new URL('./lib/builder-guard.mjs', import.meta.url))
   const pins = Object.fromEntries([guardScript, module, process.execPath, script].map(p => [p, digest(readFileSync(p))]))
-  const policy = { version: 1, approvedBy: 'fixture operator', project: 'Fixture', cardId: 'T-1', authorizationId: 'fixture-only', workspace: root, cardHash: digest(readFileSync(card)), read: [source, card], write: [source], pins, commands: { check: { executable: process.execPath, args: [script], purpose: 'test', timeoutMs: 1000 } } }
+  const policy = { version: 1, approvedBy: 'fixture operator', project: 'Fixture', cardId: 'T-1', authorizationId: 'fixture-only', workspace: root, cardHash: digest(readFileSync(card)), read: [source, card], write: [source], pins, commands: { check: { executable: process.execPath, args: [script], purpose: 'test', timeoutMs: 30000 } } }
   writeFileSync(path, JSON.stringify(policy))
   const hash = digest(readFileSync(path))
   const event = operation => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: operationPrefix(path, hash) + Buffer.from(JSON.stringify(operation)).toString('base64url') } })

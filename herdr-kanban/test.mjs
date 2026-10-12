@@ -3,7 +3,7 @@ import { assignmentFor } from './lib/agent-settings.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync as rmSyncOnce } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
@@ -23,6 +23,17 @@ import { deliverWith } from './lib/spawn.mjs'
 import { parseManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { latestTokenSnapshot, recordUsageFinish, recordUsageStart, tokenSnapshots, usageDelta, usageSummary } from './lib/request-usage.mjs'
+
+// Node 24's rmSync ignores maxRetries for EPERM, which Windows gives while a just-killed child
+// (or a scanner) still holds the directory: retry here instead.
+const rmSync = (path, options) => {
+  for (let i = 1; ; i++) {
+    try { return rmSyncOnce(path, options) } catch (err) {
+      if (i >= 100 || err.code !== 'EPERM') throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
 
 const CARD = `# T-04 — Money calc pages fail mobile LCP (TRT 4.23s / Sema 4.26s)
 
@@ -1605,14 +1616,14 @@ const pollDirs = ['owner', 'planning', 'backlog', 'queue', 'working', 'issues', 
 // With `progress`, the 5s budget restarts whenever progress() changes: a chain of
 // stub herdr calls (one node process each, ~0.5s apiece under load) is slow, not stuck.
 async function waitUntil(fn, label, progress = () => 0) {
-  let deadline = Date.now() + 5000
+  let deadline = Date.now() + 30000
   let mark = progress()
   let last
   while (Date.now() < deadline) {
     last = await fn()
     if (last) return last
     await delay(50)
-    if (progress() !== mark) { mark = progress(); deadline = Date.now() + 5000 }
+    if (progress() !== mark) { mark = progress(); deadline = Date.now() + 30000 }
   }
   assert.fail(`${label} timed out; last=${JSON.stringify(last)}`)
 }

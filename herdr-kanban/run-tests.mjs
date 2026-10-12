@@ -1,8 +1,8 @@
 // node run-tests.mjs [files...]
 // Runs test.mjs, planner-prompt-check.mjs and every *.test.mjs here, one process per file on half the cores, each killed
-// after 60s. Slow files get longer and start first. worktrees.test.mjs is git processes and no waits
-// (86s alone, 98s in the suite) and release.test.mjs builds three origin/clone repos plus a server
-// (16s alone, 35s beside a second suite): both only get slower as the machine gets busier.
+// after 120s. Slow files get longer and start first (see SLOW). worktrees.test.mjs is git processes and no waits
+// (86s alone, 98s in the suite, 190-290s beside a second suite) and release.test.mjs builds three origin/clone
+// repos plus a server (16s alone, 35s beside a second suite): both only get slower as the machine gets busier.
 // Needs the local TASK-TEMPLATE.md (git-ignored). Runs against a temp KANBAN_CONFIG, never the live board.config.json.
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -17,10 +17,21 @@ const files = process.argv.slice(2).length ? process.argv.slice(2)
 // config in KANBAN_TEST, selects the herdr backend.
 const configDir = process.env.KANBAN_CONFIG ? null : mkdtempSync(join(tmpdir(), 'kanban-tests-'))
 if (configDir) { process.env.KANBAN_CONFIG = join(configDir, 'board.config.json'); writeFileSync(process.env.KANBAN_CONFIG, '{}') }
-const args = ['--test', '--test-isolation=none', '--experimental-test-module-mocks', '--test-timeout=60000']
-const SLOW = { 'worktrees.test.mjs': 300000, 'release.test.mjs': 120000, 'test.mjs': 120000, 'watchdog-herdr.test.mjs': 150000 } // test.mjs: ~35s alone, over 60s while agents build
-const limit = file => SLOW[file] ?? 60000
-const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20, env: { ...process.env, KANBAN_TEST: '1' } },
+const args = ['--test', '--test-isolation=none', '--experimental-test-module-mocks']
+// A file's time roughly triples beside a second suite or live agents (every file spawns node, git or
+// PowerShell), so each limit is about 3x its time alone. The kill limit also caps any one test.
+const SLOW = {
+  'worktrees.test.mjs': 900000, // 50 serial git tests: 80-190s alone, 480s+ with three suites on the machine
+  'release.test.mjs': 300000, // four release runs over three repos: 61s in a pair, past 120s on a busy board
+  'headless-builder.test.mjs': 150000, // one 45-110s test
+  'watchdog-herdr.test.mjs': 240000, // one 50-90s test
+  'test.mjs': 240000, // ~35s alone, 100s+ with three suites
+  'syntax.test.mjs': 240000, // one serial node --check per .mjs file: 20s alone, 75s+ under load
+  'agent-process.test.mjs': 180000, // PowerShell process listings: 25s alone, 37s+ in a pair
+  'headless-planner.test.mjs': 120000,
+}
+const limit = file => SLOW[file] ?? 120000 // 60s was hit by npm-shim and completed-handoff beside three suites
+const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, `--test-timeout=${limit(file)}`, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20, env: { ...process.env, KANBAN_TEST: '1' } },
   (err, stdout, stderr) => done({ file, err, out: `${stdout}${stderr}`, secs: Math.round((Date.now() - start) / 1000) }))) }
 
 // Longest first: worktrees.test.mjs started last and alone set the wall time. Half the cores: every
@@ -37,7 +48,7 @@ for (const { file, err, out, secs } of results.sort((a, b) => a.file.localeCompa
   tests += count
   if (!err) { console.log(`ok    ${file} (${count}) ${secs}s`); continue }
   failed.push(file)
-  console.log(`FAIL  ${file}${err.killed ? ` (timed out after ${limit(file) / 1000}s)` : ''}\n${out}`)
+  console.log(`FAIL  ${file}${err.killed ? ` (timed out after ${limit(file) / 1000}s)` : ` (exit ${err.code ?? err.signal}${out.trim() ? '' : `, no output: ${err.message.split('\n')[0]}`})`}\n${out}`)
 }
 if (configDir) rmSync(configDir, { recursive: true, force: true })
 console.log(`\n${files.length} files, ${tests} tests, ${failed.length} failing files${failed.length ? `: ${failed.join(', ')}` : ''}`)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, appendFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, appendFileSync, rmSync as rmSyncOnce } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -9,6 +9,17 @@ import { engineForAssignment } from './lib/agent-settings.mjs'
 import { PaneProcessTrees } from './lib/process-tree.mjs'
 import { backendFor, validateAgentBackend } from './lib/agent-backend.mjs'
 import { eventEntries, formatEvent, followLog, timeAt, fillTimes, readTimes, terminalLine } from './scripts/agent-view.mjs'
+
+// Node 24's rmSync ignores maxRetries for EPERM, which Windows gives while a just-killed child
+// (or a scanner) still holds the directory: retry here instead.
+const rmSync = (path, options) => {
+  for (let i = 1; ; i++) {
+    try { return rmSyncOnce(path, options) } catch (err) {
+      if (i >= 100 || err.code !== 'EPERM') throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function until(fn) { for (let n = 0; n < 150; n++) { const result = await fn(); if (result) return result; await wait(50) } throw new Error('Timed out') }

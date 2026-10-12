@@ -11,7 +11,7 @@ test('2026-10-03: detached syntax failures retain stderr and a run error, withou
   mkdirSync(join(board, 'scripts'))
   const script = join(board, 'scripts', 'e2e-nightly.mjs')
   const wait = async predicate => {
-    for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(r => setTimeout(r, 50)) }
+    for (let i = 0; i < 600; i++) { if (predicate()) return; await new Promise(r => setTimeout(r, 50)) }
     assert.fail('runner did not finish')
   }
   try {

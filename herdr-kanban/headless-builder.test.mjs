@@ -1,10 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync as rmSyncOnce } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
+
+// Node 24's rmSync ignores maxRetries for EPERM, which Windows gives while a just-killed child
+// (or a scanner) still holds the directory: retry here instead.
+const rmSync = (path, options) => {
+  for (let i = 1; ; i++) {
+    try { return rmSyncOnce(path, options) } catch (err) {
+      if (i >= 100 || err.code !== 'EPERM') throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
 const run = promisify(execFile)
 
 test('headless Builders bind their worktree, resume corrections, and recover exits with and without handoff', async () => {
@@ -137,7 +148,7 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     console.log('headless Builder flow passed')
   `)
   try {
-    const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-builder' }, timeout: 45000, windowsHide: true })
+    const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-builder' }, timeout: 120000, windowsHide: true })
     assert.match(result.stdout, /headless Builder flow passed/)
   } finally {
     await new Promise(resolve => setTimeout(resolve, 1500))

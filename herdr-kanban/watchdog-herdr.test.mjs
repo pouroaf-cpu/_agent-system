@@ -4,11 +4,22 @@
 // and restart, so nothing real is started, pushed or restarted.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync as rmSyncOnce } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
+
+// Node 24's rmSync ignores maxRetries for EPERM, which Windows gives while a just-killed child
+// (or a scanner) still holds the directory: retry here instead.
+const rmSync = (path, options) => {
+  for (let i = 1; ; i++) {
+    try { return rmSyncOnce(path, options) } catch (err) {
+      if (i >= 100 || err.code !== 'EPERM') throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
 
 const HERE = import.meta.dirname
 const STUB_HERDR = `@echo off

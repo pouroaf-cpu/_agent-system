@@ -65,11 +65,11 @@ test('settled keeps the wake-up line when the file is emptied during the quiet w
 })
 
 test('settled returns first-seen and added lines once each, in order, across a mid-wait trim (AC3)', async () => {
-  const inbox = ['old', 'a']
-  setTimeout(() => inbox.push('b'), 15)
-  setTimeout(() => { inbox.length = 0 }, 25)
-  setTimeout(() => inbox.push('c', 'a'), 35)
-  assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+  // One inbox state per read, not per timer: a poll delayed past a 10ms timer gap under load
+  // skipped the 'b' state and failed this test (13 Oct 2026, HK19).
+  const states = [['old', 'a'], ['old', 'a', 'b'], [], ['c', 'a']]
+  let reads = 0
+  assert.deepEqual(await settled(() => states[Math.min(reads++, states.length - 1)], 1, 50, 1000, 5), ['a', 'b', 'c'])
 })
 
 test('a wake never prints a bare INBOX or ASK 0; an emptied .md falls back to the .log (AC2)', () => {

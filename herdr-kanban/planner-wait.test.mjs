@@ -172,7 +172,7 @@ test('/api/move planning -> planning clears a missing-file wait and requests a P
     const base = `http://127.0.0.1:${port}`
     for (let i = 0; ; i++) {
       try { if ((await fetch(`${base}/api/board?project=Proj`)).ok) break } catch {}
-      if (i > 80 || child.exitCode !== null) throw new Error(`server did not start: ${output}`)
+      if (i > 600 || child.exitCode !== null) throw new Error(`server did not start: ${output}`)
       await new Promise(resolve => setTimeout(resolve, 100))
     }
     const response = await fetch(`${base}/api/move`, {
