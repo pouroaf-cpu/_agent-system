@@ -2437,6 +2437,11 @@ test('a Codex agent whose card does not browse starts without browser MCPs', () 
 test('Claude board agents start with only the used built-ins, no skills, and MCPs only for browser cards', () => {
   const lean = agentStartArgs({ name: 'b-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
   assert.equal(lean[lean.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop')
+  // Audit 2026-10-12-herdr-kanban-planner-token-efficiency, Finding 1: "user" and "project"
+  // settings both walk up to the operator's home directory and load their interactive-chat
+  // CLAUDE.md on every board agent call. "local" is the only --setting-sources value that
+  // excludes both.
+  assert.equal(lean[lean.indexOf('--setting-sources') + 1], 'local')
   // Operator 2026-10-11: the Planner's subagent pre-check is gone, replaced by a deterministic
   // preflight hkb runs itself (planPreflight in hkb-cli.mjs); the Planner no longer needs Agent.
   const planner = agentStartArgs({ name: 'p-t-1', paneId: 'p', model: 'claude-opus-5-5', engine: 'claude', browser: false })
@@ -2450,7 +2455,10 @@ test('Claude board agents start with only the used built-ins, no skills, and MCP
   assert.equal(settings.autoMemoryEnabled, false)
   assert.equal(settings.promptSuggestionEnabled, false)
   for (const id of ['vercel-plugin@vercel', 'i-have-adhd@i-have-adhd', 'agents-design-experience@buildwithclaude', 'andrej-karpathy-skills@karpathy-skills', 'agent-coms@pouroa-plugins']) assert.equal(settings.enabledPlugins[id], false, id)
-  assert.ok(!('ponytail@ponytail' in settings.enabledPlugins) && !('caveman@caveman' in settings.enabledPlugins), 'ponytail and caveman stay as the user set them')
+  // --setting-sources local (above) drops the "user" source that used to carry ponytail's
+  // enabledPlugins entry, so it is restated here instead; caveman stays off either way.
+  assert.equal(settings.enabledPlugins['ponytail@ponytail'], true, "ponytail must still run for every role (for now; Planner opt-out is the operator's call)")
+  assert.ok(!('caveman@caveman' in settings.enabledPlugins), 'caveman stays off')
   assert.match(settings.hooks.Stop[0].hooks[0].command, /agent-stop-hook\.mjs/)
 })
 

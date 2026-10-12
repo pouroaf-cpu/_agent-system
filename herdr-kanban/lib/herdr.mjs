@@ -546,6 +546,14 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     // marker, which turns off transcript saving, and the transcript is where the
     // board reads a Claude agent's token usage.
     args.push('--settings', CLAUDE_AGENT_SETTINGS)
+    // "user" and "project" settings both walk up to the operator's home directory and
+    // load ~/.claude/CLAUDE.md on every call (audit 2026-10-12-herdr-kanban-planner-token-
+    // efficiency, Finding 1): that file is written for the operator's interactive chats and
+    // its own first line tells board agents to skip it, but Claude Code loads it anyway.
+    // "local" keeps only the project's own .claude/settings.local.json; anything board agents
+    // still need from the user/project sources (the ponytail hook, for one) is restated in
+    // CLAUDE_AGENT_SETTINGS instead, which always applies via --settings above.
+    args.push('--setting-sources', 'local')
     // Session title in the Claude app matches the herdr agent name.
     if (name) args.push('--name', name)
     if (model) args.push('--model', model)

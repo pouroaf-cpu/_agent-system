@@ -10,7 +10,8 @@
     "i-have-adhd@i-have-adhd": false,
     "agents-design-experience@buildwithclaude": false,
     "andrej-karpathy-skills@karpathy-skills": false,
-    "agent-coms@pouroa-plugins": false
+    "agent-coms@pouroa-plugins": false,
+    "ponytail@ponytail": true
   },
   "hooks": {
     "SessionStart": [
