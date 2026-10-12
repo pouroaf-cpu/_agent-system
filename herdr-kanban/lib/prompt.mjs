@@ -44,6 +44,8 @@ const PLANNER_OVERLAYS = {
   'auth-security': 'C:/Users/PFrew/Projects/_roles/PLANNER-AUTH-SECURITY.md',
   data: 'C:/Users/PFrew/Projects/_roles/PLANNER-DATA.md',
 }
+// Audit/recovery rules (planner audit F2) only cost tokens on the cards that need them.
+const PLANNER_AUDIT_RECOVERY = 'C:/Users/PFrew/Projects/_roles/PLANNER-AUDIT-RECOVERY.md'
 
 // Collapse to one line and strip any stray newline: a newline in a prompt is a
 // submit keypress, not whitespace.
@@ -146,6 +148,7 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
     .map((c) => `${c.id} [${c.category || 'code'}] [${c.column}] (${briefing(tasksDir, c, 'planner')})`)
     .join(', ')
   const overlays = [...new Set(cards.map((c) => PLANNER_OVERLAYS[c.category || 'code'] || PLANNER_OVERLAYS.code))]
+  if (cards.some((c) => c.audit || c.buildAttempts > 0)) overlays.push(PLANNER_AUDIT_RECOVERY)
   if (amend) return oneLine(
     `Amend mode: correct the existing plan for ${list}. Builder's issue: ${amend}`,
     shellRule(engine),
