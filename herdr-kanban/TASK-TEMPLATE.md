@@ -27,14 +27,21 @@
 <!-- Planner: one exact repository-relative path per bullet, in backticks, followed by its purpose. -->
 
 ## Implementation plan
-<!-- Planner: set Plan readiness to build-ready only after recording outcome, unchanged constraints, observed cause/evidence, inspected revision/state, exact files and targets, concrete changes, and scope/stop rules. Unknown cause remains investigation. Testing is the Builder's job, not the plan's. -->
+<!-- Planner: set Plan readiness to build-ready only after filling every label below. Unknown cause remains investigation. Testing is the Builder's job, not the plan's. -->
+Agreed outcome:
+Unchanged constraints:
+Cause:
+Evidence:
+Inspected current state:
+Changes:
+Scope:
 **Callers checked:** <!-- Planner: every file that references each changed function/export (grep for it), or none -->
 
 ## Acceptance criteria
 <!-- Orchestrator supplies agreed outcomes; Planner preserves them as - AC1: observable outcome bullets. -->
 
 ## Prerequisites
-<!-- Planner: exact workspace dependencies, approved environment availability and required tools/access. Never include secrets. -->
+<!-- Planner: exact workspace dependencies, approved environment availability and required tools/access. Every Files and Prerequisites path must exist in the checkout unless marked (new). Never include secrets. -->
 
 ## Implementation
 <!-- Builder: Stage: builder; Outcome: PASS or BLOCKED; Files: exact changed paths; Blocker: none or exact blocker. Use one field per line. -->
