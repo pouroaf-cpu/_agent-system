@@ -35,3 +35,19 @@ export function checkWorkflowLimits(tasksDir, id, role, now = Date.now()) {
   }
   return null
 }
+
+// Audit 2026-10-12 finding 10: maxTokensPerCard holds the card once reached (stall-watchdog
+// routes a workflow-limit hold straight to Owner), which the audit says a size warning must
+// not do. This is a separate, warning-only read: it never feeds checkWorkflowLimits or any
+// hold, so it cannot move, hold or kick back a card. The caller (server.mjs) sends the result
+// through notifyManagerException, whose own cooldown state makes each card's alert one-time.
+export function tokenWarnings(tasksDir) {
+  const threshold = workflowLimits().warnTokensPerCard
+  if (!Number.isFinite(threshold) || threshold <= 0) return []
+  const totals = new Map()
+  for (const run of Object.values(readUsage(tasksDir).runs)) {
+    if (run.duplicateOf) continue
+    for (const id of run.cardIds || []) totals.set(id, (totals.get(id) || 0) + (run.delta?.total || 0))
+  }
+  return [...totals].filter(([, total]) => total >= threshold).map(([id, total]) => ({ id, total, threshold }))
+}

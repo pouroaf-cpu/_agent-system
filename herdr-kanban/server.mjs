@@ -14,6 +14,7 @@ import { alertOwnerCards } from './lib/owner-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
+import { tokenWarnings } from './lib/workflow-limits.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
 import { releaseWaiting, finishRelease, releasedHead } from './lib/release.mjs'
@@ -785,6 +786,12 @@ async function pollProject(project) {
     }
     const ageing = ownerAgeing(tasksDir)
     if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
+    // Warning only (finding 10): never held, moved or kicked back; one inbox line per card, ever.
+    for (const warn of tokenWarnings(tasksDir)) {
+      await notifyManagerException({ boardRoot: HERE, key: `token-warn:${project}:${warn.id}`, cooldownMs: Infinity,
+        title: `${project} ${warn.id}: card token usage is high`,
+        detail: `Total usage across this card's recorded runs has reached ${warn.total.toLocaleString()} tokens (warn threshold ${warn.threshold.toLocaleString()}). Warning only; the card is not held, moved or kicked back.` })
+    }
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
     for (const [kind, block] of Object.entries(activeQuota(HERE))) {
       await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} ${block.why || 'usage limit'}`,
