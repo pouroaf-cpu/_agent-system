@@ -152,3 +152,18 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   child.kill()
   await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve))
 })
+
+test('a blocked Claude primary with no fallback holds the card and launches nothing', t => {
+  const root = mkdtempSync(join(import.meta.dirname, '.quota-hold-'))
+  const previous = process.env.KANBAN_CONFIG
+  process.env.KANBAN_CONFIG = join(root, 'board.config.json')
+  t.after(() => { if (previous === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = previous; rmSync(root, { recursive: true, force: true }) })
+  const primary = assignmentFor({}, { difficulty: 'medium' }, 'working')
+  assert.equal(primary.engine, 'claude')
+  assert.equal(primary.fallback, undefined)
+  const now = Date.now(), until = now + 3600000
+  blockEngine(root, 'claude', until, now)
+  const choice = selectQuotaAssignment(root, primary, now)
+  assert.deepEqual(choice.assignment, primary)
+  assert.match(choice.hold, /Claude usage limit; retrying at/)
+})

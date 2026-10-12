@@ -835,8 +835,8 @@ test('trivial cards use the lightweight builder model and engine', async () => {
     agents: [], max: 1,
     spawn: async (args) => { seen = args; return { pane_id: 'w1:p1', name: 'kb-t-04' } },
   })
-  assert.equal(seen.model, 'gpt-6-luna')
-  assert.deepEqual(seen.engine.reasoningArgs, ['-c', 'model_reasoning_effort="low"'])
+  assert.equal(seen.model, 'claude-sonnet-5-5')
+  assert.deepEqual(seen.engine, { kind: 'claude', effort: 'medium' })
   rmSync(root, { recursive: true, force: true })
 })
 

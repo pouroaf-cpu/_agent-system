@@ -28,19 +28,19 @@ test('difficulty defaults, legacy cards, model settings, fallbacks and local opt
   assert.equal(difficultyFromText('**Trivial:** yes\r\n'), 'easy')
   assert.equal(difficultyFromText('**Difficulty:** hard\n**Trivial:** yes'), 'hard')
   assert.equal(builderDifficulty({}), 'easy') // unrated (pre-difficulty) cards stay on Luna, as planned
-  for (const [difficulty, model, reasoning] of [['tiny', 'qwen3-coder', 'none'], ['easy', 'gpt-6-luna', 'low'], ['medium', 'claude-sonnet-5-5', 'medium'], ['hard', 'claude-opus-5-5', 'high']]) {
+  for (const [difficulty, model, reasoning] of [['tiny', 'claude-sonnet-5-5', 'medium'], ['easy', 'claude-sonnet-5-5', 'medium'], ['medium', 'claude-sonnet-5-5', 'medium'], ['hard', 'claude-opus-5-5', 'high']]) {
     const config = { agentSettings: { tinyEnabled: true } }
     const setting = assignmentFor(config, { difficulty }, 'working')
     assert.equal(setting.model, model)
     assert.equal(setting.reasoning, reasoning)
-    assert(setting.fallback)
+    assert.equal(setting.fallback, undefined)
     validateSettingsPatch(config, { [`builder-${difficulty}`]: setting })
   }
-  assert.equal(assignmentFor({}, { difficulty: 'tiny' }, 'working').model, 'gpt-6-luna')
-  assert.equal(assignmentFor({}, { trivial: true }, 'working').reasoning, 'low')
+  assert.equal(assignmentFor({}, { difficulty: 'tiny' }, 'working').model, 'claude-sonnet-5-5')
+  assert.equal(assignmentFor({}, { trivial: true }, 'working').reasoning, 'medium')
   const disabledFallback = assignmentFor({ agentSettings: { global: { 'builder-medium': { fallback: { engine: 'codex', model: 'qwen3-coder', reasoning: 'none' } } } } }, { difficulty: 'medium' }, 'working')
-  assert.equal(disabledFallback.fallback.model, 'gpt-6-luna', 'local fallbacks also respect opt-in')
-  const setting = assignmentFor({ agentSettings: { tinyEnabled: true } }, { difficulty: 'tiny' }, 'working')
+  assert.equal(disabledFallback.fallback.model, 'claude-sonnet-5-5', 'local fallbacks also respect opt-in')
+  const setting = assignmentFor({ agentSettings: { tinyEnabled: true, global: { 'builder-tiny': { engine: 'codex', model: 'qwen3-coder', reasoning: 'none' } } } }, { difficulty: 'tiny' }, 'working')
   const args = launchArgs({ name: 'b-t-1', model: setting.model, engine: engineForAssignment(setting), browser: false }, 'task')
   assert(args.includes('exec')); assert(args.includes('--oss'))
   assert.equal(args[args.indexOf('--local-provider') + 1], 'ollama')
@@ -61,7 +61,7 @@ test('dispatch records effective difficulty and usage before a headless Builder 
       return binding
     } })
   assert.deepEqual(started, ['T-1'])
-  assert.equal(launched.model, 'gpt-6-luna')
+  assert.equal(launched.model, 'claude-sonnet-5-5')
   assert.equal(readWorkflow(f.tasks)['T-1'].builderAttempt.difficulty, 'easy')
   assert.equal(Object.values(readUsage(f.tasks).runs)[0].difficulty, 'easy')
   // A first plain crash retries once in Queue without stepping up difficulty (audit #7).

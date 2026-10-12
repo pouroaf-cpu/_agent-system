@@ -233,7 +233,7 @@ test('a card held by a usage limit is not stuck; it is again once the limit is g
   writeFileSync(path, readFileSync(path, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - 3 * 3600000).toISOString()}"`))
   const quotaFile = join(root, '.engine-quota.json')
   const until = Date.now() + 86400000
-  writeFileSync(quotaFile, JSON.stringify({ codex: { until, since: new Date().toISOString() } }))
+  writeFileSync(quotaFile, JSON.stringify({ claude: { until, since: new Date().toISOString() } }))
   try {
     const r = await get('/api/stuck?project=Proj&minutes=60')
     assert.equal(r.status, 200, r.body.error)

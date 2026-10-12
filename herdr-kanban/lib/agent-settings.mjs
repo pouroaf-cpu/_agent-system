@@ -20,12 +20,12 @@ export const SUPPORTED = {
   },
 }
 
-const fallback = { engine: 'codex', model: 'gpt-6-sol', reasoning: 'high' }
+// No default carries a fallback: a Claude usage limit leaves the card waiting in its lane.
 const builderDefaults = {
-  tiny: { engine: 'codex', model: 'qwen3-coder', reasoning: 'none', fallback: { engine: 'codex', model: 'gpt-6-luna', reasoning: 'low' } },
-  easy: { engine: 'codex', model: 'gpt-6-luna', reasoning: 'low', fallback: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium' } },
-  medium: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium', fallback },
-  hard: { engine: 'claude', model: 'claude-opus-5-5', reasoning: 'high', fallback },
+  tiny: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium' },
+  easy: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium' },
+  medium: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium' },
+  hard: { engine: 'claude', model: 'claude-opus-5-5', reasoning: 'high' },
 }
 function localSetting(setting, enabled) {
   if (!enabled && setting.model === 'qwen3-coder') return builderDefaults.easy
@@ -48,13 +48,13 @@ function legacySetting(config, stage) {
   if (stage.startsWith('builder-')) return builderDefaults[stage.slice(8)]
   if (stage === 'plancheck') return { engine: 'claude', model: 'claude-sonnet-5', reasoning: 'medium' }
   const role = legacyRole[stage]
+  // Codex is no longer an engine for any role: never read a Codex kind or model from the legacy fields.
   const engine = config.engines?.[role] ?? config.engine ?? { kind: 'claude' }
-  const kind = kindOf(engine) || 'claude'
   const requested = config.models?.[role] || config.models?.working
-  // Legacy fixtures and older boards may use a local alias (for example
-  // "test"). Keep them readable while newly saved settings remain strict.
-  const model = SUPPORTED[kind]?.models.includes(requested) ? requested : SUPPORTED[kind]?.models[0]
-  return validateAssignment({ engine: kind, model, reasoning: reasoningOf(engine) }, `legacy ${stage}`)
+  const claude = kindOf(engine) === 'claude'
+  const fallbackModel = stage === 'review' ? 'claude-sonnet-5' : 'claude-sonnet-5-5'
+  const model = SUPPORTED.claude.models.includes(requested) ? requested : fallbackModel
+  return validateAssignment({ engine: 'claude', model, reasoning: claude ? reasoningOf(engine) : 'medium' }, `legacy ${stage}`)
 }
 
 export function globalSettings(config) {
