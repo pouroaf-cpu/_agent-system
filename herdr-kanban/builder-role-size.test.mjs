@@ -2,12 +2,14 @@
 // text and rules already repeated in the runtime prompt. Guards the trimmed size and content.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const path = join(here, '..', '_roles', 'BUILDER.md')
+// BUILDER.md is gitignored, so card worktrees lack it; fall back to the live copy on the main checkout.
+const local = join(here, '..', '_roles', 'BUILDER.md')
+const path = existsSync(local) ? local : 'C:/Users/PFrew/Projects/_roles/BUILDER.md'
 
 test('BUILDER.md stays at or below 8,500 bytes with no stale text', () => {
   const text = readFileSync(path)
