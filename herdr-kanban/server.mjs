@@ -787,7 +787,8 @@ async function pollProject(project) {
     const ageing = ownerAgeing(tasksDir)
     if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
     // Warning only (finding 10): never held, moved or kicked back; one inbox line per card, ever.
-    for (const warn of tokenWarnings(tasksDir)) {
+    const board = readBoard(tasksDir)
+    for (const warn of tokenWarnings(tasksDir, new Set(COLUMNS.filter(c => c.key !== 'archive').flatMap(c => (board[c.key] || []).map(x => x.id))))) {
       await notifyManagerException({ boardRoot: HERE, key: `token-warn:${project}:${warn.id}`, cooldownMs: Infinity,
         title: `${project} ${warn.id}: card token usage is high`,
         detail: `Total usage across this card's recorded runs has reached ${warn.total.toLocaleString()} tokens (warn threshold ${warn.threshold.toLocaleString()}). Warning only; the card is not held, moved or kicked back.` })

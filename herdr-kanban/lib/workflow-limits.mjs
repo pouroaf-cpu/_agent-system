@@ -41,7 +41,9 @@ export function checkWorkflowLimits(tasksDir, id, role, now = Date.now()) {
 // not do. This is a separate, warning-only read: it never feeds checkWorkflowLimits or any
 // hold, so it cannot move, hold or kick back a card. The caller (server.mjs) sends the result
 // through notifyManagerException, whose own cooldown state makes each card's alert one-time.
-export function tokenWarnings(tasksDir) {
+// liveIds: only cards still on the board. Without it every archived card is named too
+// (616 inbox lines in one poll, 2026-10-12).
+export function tokenWarnings(tasksDir, liveIds) {
   const threshold = workflowLimits().warnTokensPerCard
   if (!Number.isFinite(threshold) || threshold <= 0) return []
   const totals = new Map()
@@ -49,5 +51,5 @@ export function tokenWarnings(tasksDir) {
     if (run.duplicateOf) continue
     for (const id of run.cardIds || []) totals.set(id, (totals.get(id) || 0) + (run.delta?.total || 0))
   }
-  return [...totals].filter(([, total]) => total >= threshold).map(([id, total]) => ({ id, total, threshold }))
+  return [...totals].filter(([id, total]) => total >= threshold && (!liveIds || liveIds.has(id))).map(([id, total]) => ({ id, total, threshold }))
 }

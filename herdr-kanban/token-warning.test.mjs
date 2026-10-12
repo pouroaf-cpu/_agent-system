@@ -43,6 +43,9 @@ test('AC1: a card past the warn threshold is named with its total, and AC2: it i
   assert.equal(warnings[0].id, card.id)
   assert.equal(warnings[0].total, 400000)
   assert.equal(warnings[0].threshold, 375000)
+  // Only cards still on the board are named: an archived card is not (616 inbox lines, 2026-10-12).
+  assert.equal(tokenWarnings(f.tasks, new Set([card.id])).length, 1)
+  assert.deepEqual(tokenWarnings(f.tasks, new Set()), [])
   // maxTokensPerCard was never set, so dispatch is still unheld (AC2).
   assert.equal(checkWorkflowLimits(f.tasks, card.id, 'planner'), null)
 })
