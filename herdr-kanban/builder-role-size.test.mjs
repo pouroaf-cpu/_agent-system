@@ -1,0 +1,24 @@
+// Token-efficiency audit (2026-10-12), finding 5: BUILDER.md held stale Codex/restricted-mode
+// text and rules already repeated in the runtime prompt. Guards the trimmed size and content.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const path = join(here, '..', '_roles', 'BUILDER.md')
+
+test('BUILDER.md stays at or below 8,500 bytes with no stale text', () => {
+  const text = readFileSync(path)
+  assert.ok(text.length <= 8500, `BUILDER.md is ${text.length} bytes, want <= 8500`)
+
+  const str = text.toString('utf8')
+  assert.doesNotMatch(str, /login:false/)
+  assert.doesNotMatch(str, /mcp__cua_repl/)
+  assert.doesNotMatch(str, /restricted Builder mode/)
+
+  assert.match(str, /Testing is yours now/)
+  assert.match(str, /Planned ahead/)
+  assert.match(str, /Keep each file's format/)
+})
