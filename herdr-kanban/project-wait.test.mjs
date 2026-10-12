@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom } from './scripts/project-wait.mjs'
+import { inboxLog } from './lib/inbox.mjs'
+import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom, settled, inboxWake, askWake } from './scripts/project-wait.mjs'
 
 test('planFails returns recent plan-check FAIL lines from recently changed history files', () => {
   const root = mkdtempSync(join(tmpdir(), 'km-planfails-'))
@@ -54,6 +55,46 @@ test('an inbox burst settles into one wake with every line', async () => {
   setTimeout(() => inbox.push('b'), 15)
   setTimeout(() => inbox.push('c'), 35)
   assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+})
+
+test('settled keeps the wake-up line when the file is emptied during the quiet wait (AC1)', async () => {
+  let calls = 0
+  assert.deepEqual(await settled(() => calls++ ? [] : ['new'], 0, 30, 1000, 5), ['new'])
+  calls = 0
+  assert.deepEqual(await settled(() => calls++ ? [] : ['old', 'new'], 1, 30, 1000, 5), ['new'])
+})
+
+test('settled returns first-seen and added lines once each, in order, across a mid-wait trim (AC3)', async () => {
+  const inbox = ['old', 'a']
+  setTimeout(() => inbox.push('b'), 15)
+  setTimeout(() => { inbox.length = 0 }, 25)
+  setTimeout(() => inbox.push('c', 'a'), 35)
+  assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+})
+
+test('a wake never prints a bare INBOX or ASK 0; an emptied .md falls back to the .log (AC2)', () => {
+  assert.equal(inboxWake([], ['- 13 Oct FOUND HK18 (planning): x'], 'i.md'), 'INBOX - 13 Oct FOUND HK18 (planning): x')
+  const empty = inboxWake([], [], 'i.md')
+  assert.notEqual(empty, 'INBOX')
+  assert.doesNotMatch(empty, /^INBOX\s*$/)
+  assert.match(empty, /nothing to read/)
+  assert.equal(inboxWake(['a', 'b'], ['z'], 'i.md'), 'INBOX a\nb')
+
+  const ask = 'x ASK P I1 (planning): q'
+  assert.equal(askWake([ask], [], 'i.md'), 'ASK 1 new question(s) in i.md: answer each now, or ask the operator in chat if only they can')
+  assert.equal(askWake([], [ask], 'i.md'), `ASK 1 new question(s) in i.md: answer each now, or ask the operator in chat if only they can\n${ask}`)
+  assert.match(askWake([], [], 'i.md'), /nothing to read/)
+})
+
+test('an emptied .md with one .log line wakes with that line', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wait-'))
+  try {
+    const md = join(dir, 'KM-INBOX.md')
+    writeFileSync(md, '')
+    writeFileSync(inboxLog(md), '- 13 Oct FOUND HK18 (planning): x\n')
+    const read = f => { try { return readFileSync(f, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
+    assert.equal(inboxWake(read(md), read(inboxLog(md)), md), 'INBOX - 13 Oct FOUND HK18 (planning): x')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('ASK lines wake the manager; FOUND lines do not count as questions', () => {

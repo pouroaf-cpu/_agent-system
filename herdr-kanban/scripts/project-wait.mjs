@@ -7,6 +7,7 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { inboxLog } from '../lib/inbox.mjs'
 
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
@@ -42,15 +43,31 @@ export function planFails(root, sinceMs) {
 // Planners file ASK/FOUND lines in bursts (7 in 8 min on 2026-10-09 20:01) and each wake was
 // its own BOARD EVENT on the operator's phone: wait for 2 quiet minutes (10 at most) and send
 // the burst as one.
+// A chat that clears handled lines mid-wait must not lose the lines that woke us (HK18 FOUND,
+// 13 Oct 2026): keep every line first seen past `from`, then add later ones, each once.
 export async function settled(read, from, quietMs = 120e3, capMs = 600e3, tickMs = 10e3) {
   const start = Date.now()
-  let seen = read().length, quietSince = Date.now()
+  const first = read()
+  const older = new Set(first.slice(0, from)), got = [...new Set(first.slice(from))]
+  const take = list => { for (const l of list) if (!older.has(l) && !got.includes(l)) got.push(l) }
+  let seen = first.length, quietSince = Date.now()
   while (Date.now() - quietSince < quietMs && Date.now() - start < capMs) {
     await new Promise(r => setTimeout(r, tickMs))
-    const n = read().length
-    if (n !== seen) { seen = n; quietSince = Date.now() }
+    const now = read()
+    take(now)
+    if (now.length !== seen) { seen = now.length; quietSince = Date.now() }
   }
-  return read().slice(from)
+  take(read())
+  return got
+}
+
+// Never a bare INBOX / "ASK 0": when the .md was emptied, the new lines come from its .log.
+const nothing = file => `the inbox changed but holds nothing to read (${file} was emptied; ${inboxLog(file)} has no new line)`
+export const inboxWake = (added, logged, file) => `INBOX ${(added.length ? added : logged.length ? logged : [nothing(file)]).join('\n')}`
+export function askWake(added, logged, file) {
+  const got = added.length ? added : logged
+  if (!got.length) return `ASK the inbox ${file} changed with nothing to read (see ${inboxLog(file)})`
+  return `ASK ${got.length} new question(s) in ${file}: answer each now, or ask the operator in chat if only they can` + (added.length ? '' : `\n${got.join('\n')}`)
 }
 
 export const digest = (before, now, file) => now > before ? `INBOX ${now - before} new ASK/FOUND line(s) in ${file}: read and handle them` : 'RE-ARM'
@@ -113,7 +130,7 @@ async function main() {
     } catch { return null } // board down: the watchdog writes that to the inbox
   }
   const snapshot = stuck => ({ project, cards: cards(), inbox: lines(inbox), stuck })
-  const started = Date.now(), inboxAtStart = lines(inbox).length
+  const started = Date.now(), inboxAtStart = lines(inbox).length, logFrom = lines(inboxLog(inbox)).length
   // Compare lines, not counts: the chat trims handled lines while this waits.
   const seenAsks = new Set(lines(inbox).filter(isAsk)), newAsks = () => lines(inbox).filter(l => isAsk(l) && !seenAsks.has(l))
   let nextCheck = started + CHECK_MS
@@ -126,7 +143,7 @@ async function main() {
     if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
     if (newAsks().length) {
       const added = await settled(newAsks, 0)
-      console.log(`ASK ${added.length} new question(s) in ${inbox}: answer each now, or ask the operator in chat if only they can`)
+      console.log(askWake(added, lines(inboxLog(inbox)).slice(logFrom).filter(isAsk), inbox))
       return
     }
     if (Date.now() >= nextCheck) {

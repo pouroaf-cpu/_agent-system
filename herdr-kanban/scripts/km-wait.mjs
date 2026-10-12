@@ -11,7 +11,8 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { planFails, planSinceFrom, settled, stuckDetail } from './project-wait.mjs'
+import { inboxLog } from '../lib/inbox.mjs'
+import { inboxWake, planFails, planSinceFrom, settled, stuckDetail } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -25,6 +26,7 @@ const cards = () => readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isD
     return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.md') && f !== 'README.md').map(f => `${d.name}/${lane}/${f}`) : []
   }))
 const inboxLines = () => { try { return readFileSync(INBOX, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
+const logLines = () => { try { return readFileSync(inboxLog(INBOX), 'utf8').split('\n').filter(Boolean) } catch { return [] } }
 const stuck = async () => {
   try {
     const { projects } = await (await fetch(BOARD, { signal: AbortSignal.timeout(30000) })).json()
@@ -36,7 +38,7 @@ const stuck = async () => {
 
 const done = line => { console.log(line); process.exit(0) }
 const seen = new Set(cards())
-let lines = inboxLines().length
+let lines = inboxLines().length, logFrom = logLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
 const started = Date.now()
 let savedPlanSince
@@ -54,9 +56,11 @@ for (let tick = 0; ; tick++) {
   }
   const added = cards().filter(c => !seen.has(c))
   if (added.length) done(`OWNER/POU ${added.join(', ')}`)
+  const logNow = logLines().length // read before the .md: a line posted between the two is reported twice at worst
   const inbox = inboxLines()
-  if (inbox.length > lines) done(`INBOX ${(await settled(inboxLines, lines)).join('\n')}`)
+  if (inbox.length > lines) done(inboxWake(await settled(inboxLines, lines), logLines().slice(logFrom), INBOX))
   lines = inbox.length // after a trim, the next alert must still wake the Manager
+  logFrom = logNow
   if (tick % 6 === 5) {
     const now = await stuck()
     if (now) {
