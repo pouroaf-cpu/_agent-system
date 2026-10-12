@@ -4,14 +4,38 @@ import { mkdtempSync, appendFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCard } from './lib/cards.mjs'
-import { appendHistory, writeCurrentFeedback } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback, historyPath } from './lib/card-history.mjs'
 import { updateWorkflow } from './lib/workflow-state.mjs'
-import { runCardPlanner } from './lib/card-planner.mjs'
+import { runCardPlanner, amendment } from './lib/card-planner.mjs'
 
-test('Builder planning returns amend only Files/Check/Prerequisites; other returns fully re-plan', async () => {
+// Token audit 2026-10-12, finding 8: amend mode fired in 0 of 461 real sessions because the
+// old test required every clause to mention a section (including "Check", which amend mode
+// never edits) and an action word. amendment() now reads the note as a whole.
+test('amendment() returns amend mode for a note naming one missing file (F8 AC1)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'amendment-ac1-'))
+  try {
+    const card = createCard(dir, { title: 'Existing plan', brief: 'Keep the approved outcome' })
+    updateWorkflow(dir, card.id, { correction: { category: 'planning', note: '[planning] Add missing fixtures.json to ## Files' } })
+    appendHistory(dir, card.id, { event: 'transition', from: 'working', to: 'planning' })
+    assert.equal(amendment(dir, { ...card, column: 'planning' }), '[planning] Add missing fixtures.json to ## Files')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('amendment() returns a full plan (null) for a note mentioning acceptance criteria or behaviour (F8 AC2)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'amendment-ac2-'))
+  try {
+    const card = createCard(dir, { title: 'Existing plan', brief: 'Keep the approved outcome' })
+    updateWorkflow(dir, card.id, { correction: { category: 'planning', note: '[planning] Add output.json to Files and change acceptance criteria' } })
+    appendHistory(dir, card.id, { event: 'transition', from: 'working', to: 'planning' })
+    assert.equal(amendment(dir, { ...card, column: 'planning' }), null)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('Builder planning returns amend only Files/Prerequisites; other returns fully re-plan', async () => {
   for (const [note, amend, from = 'working', category = 'planning'] of [
     ['[planning] Add generated output.json to ## Files', true],
-    ['[planning] Correct the Check command to node test.mjs', true],
+    // F8: "Check" is no longer a section amend mode edits; a note naming only Check gets a full plan.
+    ['[planning] Correct the Check command to node test.mjs', false],
     ['[planning] Prerequisites names missing fixtures.json', true],
     ['[planning] Add output.json to Files; correct Check command', true],
     ['[planning] Redesign the implementation', false],
@@ -51,6 +75,11 @@ test('Builder planning returns amend only Files/Check/Prerequisites; other retur
         assert.match(before, /Keep this exact step/, 'the card the amend Planner reads directly still has it')
       } else assert.match(prompts[0], /Plan these approved cards/)
       assert.equal(readFileSync(card.path, 'utf8'), before)
+      // F8 AC3: each decision writes a history event naming the mode chosen.
+      if (category === 'planning' && from === 'working') {
+        const history = readFileSync(historyPath(dir, card.id), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+        assert.ok(history.some(e => e.event === 'planner-amend-decision' && e.mode === (amend ? 'amend' : 'full')), note)
+      }
     } finally { rmSync(dir, { recursive: true, force: true }) }
   }
 })

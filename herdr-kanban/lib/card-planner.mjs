@@ -107,17 +107,22 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
 // A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
 export const ESCALATION_MODEL = 'claude-opus-5-5'
-function amendment(tasksDir, card) {
+// token audit 2026-10-12, F8: amend mode fired in 0 of 461 real sessions because this test
+// required every clause of the note to mention a section AND an action word AND still named
+// "Check", a section amend mode never edits. It now reads the note as a whole and only the
+// two sections amend mode can touch (## Files, ## Prerequisites).
+export function amendment(tasksDir, card) {
   const correction = readWorkflow(tasksDir)[card.id]?.correction
   const transition = lastTransition(tasksDir, card.id)
   if (card.column !== 'planning' || transition?.from !== 'working' || transition.to !== 'planning' || correction?.category !== 'planning') return null
   const note = correction.note?.replace(/^\s*\[planning\]\s*/i, '')
   if (!note || !/^\s*\[planning\]/i.test(correction.note)) return null
-  // ponytail: conservative prose heuristic; uncertain or mixed feedback gets a full plan.
-  const clauses = note.split(/\n|;|[.!?]\s+|\b(?:and|but|also)\b/i).filter(s => s.trim())
-  return clauses.every(s => /\b(?:Files|Check|Prerequisites?)\b/i.test(s)
-    && /\b(?:add|include|list|missing|outside|omit\w*|correct\w*|edit|replace|wrong|invalid|command|does not exist|nonexistent|generated)\b/i.test(s)
-    && !/\b(?:acceptance|criteria|architecture|implement\w*|behavio\w*|scope expansion|redesign|security)\b/i.test(s)) ? correction.note : null
+  // ponytail: conservative heuristic; anything pointing at a bigger problem gets a full plan.
+  const full = /\b(?:acceptance|criteria|architecture|implement\w*|behavio\w*|scope expansion|redesign|security)\b/i.test(note)
+  const amend = !full && /\b(?:Files|Prerequisites?)\b/i.test(note)
+    && /\b(?:add|include|list|missing|outside|omit\w*|correct\w*|edit|replace|wrong|invalid|command|does not exist|nonexistent|generated)\b/i.test(note)
+  appendHistory(tasksDir, card.id, { event: 'planner-amend-decision', mode: amend ? 'amend' : 'full' })
+  return amend ? correction.note : null
 }
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 const plannerEnvFile = project => { try { return projectEnvironment(project)?.path } catch { return undefined } }
@@ -193,7 +198,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       bindCardRunAssignment(project, [card.id], 'planner', paneId)
       const choice = choiceFor(card)
       const selected = selectedFor(card) ? choice.assignment : null
-      const amend = amendment(tasksDir, card)
+      const amend = owner.amendNote = amendment(tasksDir, card)
       owner.model = selected?.model ?? model
       owner.engine = selected?.engine ?? (typeof engine === 'string' ? engine : engine?.kind)
       owner.reasoning = selected?.reasoning
@@ -221,7 +226,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: amendment(tasksDir, card), envFile: plannerEnvFile(project) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
+      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: owner.amendNote, envFile: plannerEnvFile(project) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (!isHeadless(owner.paneId) && agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
