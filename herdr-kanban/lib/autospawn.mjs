@@ -107,7 +107,8 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   if (!issue && !isQuestion) {
     const streak = (readWorkflow(tasksDir)[card.id]?.noHandoffStreak || 0) + 1
     if (streak < 2) {
-      updateWorkflow(tasksDir, card.id, { noHandoffStreak: streak })
+      // Same as the Planning path below (I1002, IA138): a stale hold must not block the retry.
+      updateWorkflow(tasksDir, card.id, { noHandoffStreak: streak, operational: null })
       appendHistory(tasksDir, card.id, { event: 'builder-no-handoff', stage: 'working', reason: detail, evidence })
       const moved = moveCard(tasksDir, card.id, 'queue')
       appendFileSync(moved.path, `\n\n**Kicked back** ${formatNZTime(now)}\n\n${shortReason}. Retrying once in Queue for a fresh Builder before this goes to Planning.\n`)
