@@ -201,7 +201,7 @@ const historyMarker = new RegExp(`^\\*\\*(?:${HISTORY_LABELS})\\*\\*`, 'm')
 const notLabel = new RegExp(`^(?:${HISTORY_LABELS}|Needs you)$`)
 // A POST /api/card note (lib/cards.mjs updateCard): "**<Heading>** <ISO time>", blank line, plain body.
 const NOTE = /^\*\*([^*\r\n]+)\*\* (\d{4}-\d\d-\d\dT[\d:.]+Z)\r?\n\r?\n([\s\S]*?)(?=^\*\*|^## |^---|$(?![\s\S]))/gm
-export function focusedText(text, role, { skip = [] } = {}) {
+export function focusedText(text, role, { skip = [], keep = null } = {}) {
   // Project the whole card, not just the prefix before the first attempt. Legacy
   // approved Return N corrections can appear AFTER history markers.
   const historical = new Set(['History', 'Transcript', 'Previous attempts', 'Launch prompt'])
@@ -216,6 +216,7 @@ export function focusedText(text, role, { skip = [] } = {}) {
   for (const chunk of chunks) {
     const heading = chunk.match(/^## ([^\r\n]+)/)?.[1]
     if (heading && (historical.has(heading) || skip.includes(heading))) continue
+    if (keep && (!heading || !keep.includes(heading))) continue
     const returned = heading?.match(/^Return (\d+) (.+)/)
     if (returned && Number(returned[1]) !== latestBySection.get(returned[2].toLowerCase())) continue
     // Reviewer sees current Builder result/evidence, never a previous verdict.
@@ -245,8 +246,13 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   // The card's own copy is taken at creation; rules added later reach live cards
   // only through here (Injectbuddy I265). The brief revision hash carries the change.
   const constraints = projectConstraints(tasksDir, card.category)
+  // A Planner reads the card itself (lib/prompt.mjs); its brief then holds only what
+  // the card doesn't already show: current feedback, decisions/notes, and a constraints
+  // update only when it differs from the card's own copy (token audit 2026-10-12, F3).
   // The current copy replaces the card's creation-time one (builder audit F8).
-  const text = focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
+  const text = role === 'planner'
+    ? focusedText(source, role, { keep: ['Current feedback'] }) + (constraints && constraints !== sectionBody(source, 'Project constraints') ? `\n\n## Current project constraints\n${constraints}` : '')
+    : focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })

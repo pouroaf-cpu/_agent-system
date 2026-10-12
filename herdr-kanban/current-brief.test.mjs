@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { focusedText, writeBrief, historyPath } from './lib/card-history.mjs'
+import { focusedText, writeBrief, writeCurrentFeedback, historyPath } from './lib/card-history.mjs'
 import { workerPrompt, reviewerPrompt, psLiteral } from './lib/prompt.mjs'
+import { createCard } from './lib/cards.mjs'
 
 const source = `# T-1 — Exact task
 **Recovery:** {"returns":3}
@@ -117,4 +118,35 @@ test('PowerShell literals survive spaces/apostrophes; generated handoff is direc
   assert.doesNotMatch(review, /run "node|\\\\"which criterion/)
   assert.match(review, /may append only the current Reviewer evidence and Review verdict/)
   assert.doesNotMatch(review, /do not edit the card by hand/)
+})
+
+// Token audit 2026-10-12, finding 3: the Planner brief stops repeating the card; Builder
+// and Reviewer briefs are untouched by this.
+test('a first-time Planner brief with unchanged constraints is at or below 1,000 characters (F3 AC1)', () => {
+  const tasks = join(mkdtempSync(join(tmpdir(), 'planner-brief-size-')), 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  const card = createCard(tasks, { title: 'Fresh card', brief: 'Add the thing.', category: 'code' })
+  const brief = readFileSync(writeBrief(tasks, card, 'planner'), 'utf8')
+  assert.ok(brief.length <= 1000, `${brief.length} chars`)
+})
+
+test('a kicked-back Planner brief holds Current feedback and drops the implementation plan (F3 AC2); Builder/Reviewer briefs are unaffected (F3 AC3); brief-source is still written (F3 AC4)', () => {
+  const tasks = join(mkdtempSync(join(tmpdir(), 'planner-brief-feedback-')), 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  const card = createCard(tasks, { title: 'Returned card', brief: 'Add the thing.', category: 'code' })
+  appendFileSync(card.path, '\n## Implementation plan\nDo the exact approved step.\nCheck: node check.mjs\n')
+  writeCurrentFeedback(tasks, card, 'Kicked back', '[planning] Add missing fixtures.json to ## Files')
+
+  const plannerBrief = readFileSync(writeBrief(tasks, card, 'planner'), 'utf8')
+  assert.match(plannerBrief, /## Current feedback\nKicked back: \[planning\] Add missing fixtures\.json to ## Files/)
+  assert.doesNotMatch(plannerBrief, /## Implementation plan/)
+  assert.doesNotMatch(plannerBrief, /Do the exact approved step/)
+
+  for (const role of ['builder', 'reviewer']) {
+    const brief = readFileSync(writeBrief(tasks, card, role), 'utf8')
+    assert.match(brief, /Do the exact approved step/, role)
+  }
+
+  const history = readFileSync(historyPath(tasks, card.id), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+  assert.ok(history.some(e => e.event === 'brief-source' && e.stage === 'planner'))
 })

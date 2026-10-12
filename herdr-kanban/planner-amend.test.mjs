@@ -45,7 +45,10 @@ test('Builder planning returns amend only Files/Check/Prerequisites; other retur
         assert.ok(prompts[0].includes(note))
         assert.match(prompts[0], /Edit only ## Files and ## Prerequisites/)
         assert.doesNotMatch(prompts[0], /Read .*PLANNER-CODE/)
-        assert.match(readFileSync(join(dir, '.briefs', `${card.id}-planner.md`), 'utf8'), /Keep this exact step/)
+        const brief = readFileSync(join(dir, '.briefs', `${card.id}-planner.md`), 'utf8')
+        assert.doesNotMatch(brief, /Keep this exact step/, 'the brief no longer repeats the plan; the card itself still carries it')
+        assert.match(brief, /## Current feedback/)
+        assert.match(before, /Keep this exact step/, 'the card the amend Planner reads directly still has it')
       } else assert.match(prompts[0], /Plan these approved cards/)
       assert.equal(readFileSync(card.path, 'utf8'), before)
     } finally { rmSync(dir, { recursive: true, force: true }) }
