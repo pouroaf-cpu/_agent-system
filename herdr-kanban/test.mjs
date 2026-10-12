@@ -2462,6 +2462,9 @@ test('Claude board agents start with only the used built-ins, no skills, and MCP
   const shared = JSON.parse(readFileSync(lean[lean.indexOf('--settings') + 1], 'utf8'))
   assert.equal(shared.enabledPlugins['ponytail@ponytail'], true, 'Builders and Reviewers keep the ponytail hook')
   assert.deepEqual({ ...settings, enabledPlugins: { ...settings.enabledPlugins, 'ponytail@ponytail': true } }, shared, 'the Planner settings differ only in the ponytail switch')
+  // Operator 2026-10-13: any agent a board agent starts runs on Haiku (token cost), in both files.
+  assert.equal(settings.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
+  assert.equal(shared.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
   assert.ok(!('caveman@caveman' in settings.enabledPlugins), 'caveman stays off')
   assert.match(settings.hooks.Stop[0].hooks[0].command, /agent-stop-hook\.mjs/)
 })

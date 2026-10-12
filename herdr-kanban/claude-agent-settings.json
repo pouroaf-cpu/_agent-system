@@ -1,6 +1,7 @@
 {
   "env": {
-    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
   },
   "autoMemoryEnabled": false,
   "remoteControlAtStartup": false,
