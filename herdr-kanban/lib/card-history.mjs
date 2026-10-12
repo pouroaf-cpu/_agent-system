@@ -61,13 +61,17 @@ export function repairHandoffSections(tasksDir, card) {
   const chunks = s => s.split(/(?=^## )/m), heading = s => s.match(/^## ([^\r\n]+)/)?.[1]?.trim()
   // I906: a Builder wrote its result under '## Implementation plan', leaving '## Implementation' empty.
   // Move the result across and empty the plan so it is restored from history below.
-  if (saved && sectionBody(saved, 'Implementation plan') && !sectionBody(text, 'Implementation')) {
+  // IA154: on a second build '## Implementation' still held the first attempt's result, so this
+  // must not wait for it to be empty; every line that is not the saved plan's is the result.
+  const builderLine = /^(?:- )?Stage: builder/m, savedPlan = saved ? sectionBody(saved, 'Implementation plan') : ''
+  if (savedPlan && !builderLine.test(savedPlan)) {
     const parts = chunks(text), at = parts.findIndex(s => heading(s) === 'Implementation plan')
-    const from = at < 0 ? -1 : parts[at].search(/^(?:- )?Stage: builder/m)
-    if (from >= 0) {
-      const result = `## Implementation\n${parts[at].slice(from).trimEnd()}\n\n`, empty = parts.findIndex(s => heading(s) === 'Implementation')
+    if (at >= 0 && builderLine.test(parts[at])) {
+      const planLines = new Set(savedPlan.split(/\r?\n/).map(s => s.trim()))
+      const lines = parts[at].split(/\r?\n/).slice(1).filter(s => s.trim() && !planLines.has(s.trim()))
+      const result = `## Implementation\n${lines.join('\n')}\n\n`, old = parts.findIndex(s => heading(s) === 'Implementation')
       parts[at] = '## Implementation plan\n\n'
-      empty < 0 ? parts.push(result) : parts.splice(empty, 1, result)
+      old < 0 ? parts.push(result) : parts.splice(old, 1, result)
       text = parts.join('')
     }
   }

@@ -387,6 +387,24 @@ test('done moves a Builder result written under Implementation plan into Impleme
   assert.equal(findCard(f.tasks, card.id).column, 'completed')
 })
 
+test('done restores the plan when a second build writes its result over it (InjectbuddyApp IA154)', t => {
+  const f = fixture(t)
+  const card = createCard(f.tasks, { title: 'result over plan, second build', brief: 'correct result' })
+  writeFileSync(card.path, `# ${card.id} — plan\n**Workflow:** card-owned\n**Workflow version:** 2\n${plan}`)
+  moveCard(f.tasks, card.id, 'working')
+  const current = findCard(f.tasks, card.id), saved = readFileSync(current.path, 'utf8')
+  const result = 'AC1: node check.mjs -> passed\nStage: builder\nOutcome: PASS\nFiles: app.mjs\nCheck: node check.mjs\nResult: passed\nEvidence: check-output.txt\nBlocker: none'
+  // '## Implementation' keeps the first attempt's result, as it does after a kick-back.
+  writeFileSync(current.path, saved.replace('## Implementation plan\nChange app.mjs', `## Implementation plan\n${result}`).replace('## Implementation\nChanged app.mjs', '## Implementation\nStage: builder\nOutcome: BLOCKED\nUnmet: AC1'))
+  const run = spawnSync(process.execPath, [join(here, 'hkb.mjs'), '--tasks', f.tasks, 'done', card.id], { encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  const text = readFileSync(findCard(f.tasks, card.id).path, 'utf8')
+  assert.match(text, /## Implementation plan\nChange app.mjs\n/)
+  assert.match(text, new RegExp(`## Implementation\n${result.replaceAll('.', '\\.')}\n`))
+  assert.doesNotMatch(text, /Outcome: BLOCKED/)
+  assert.equal(findCard(f.tasks, card.id).column, 'completed')
+})
+
 test('shared handoff repairs lone PowerShell newlines but preserves inline `npm run`', t => {
   const f = fixture(t)
   const card = createCard(f.tasks, { title: 'inline command', brief: 'correct result' })
