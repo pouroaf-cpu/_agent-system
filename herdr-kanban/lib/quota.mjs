@@ -20,6 +20,14 @@ const CAPACITY_WAIT_MS = 15 * 60000
 const AUTH = /"error":"authentication_failed"|Failed to authenticate[:.] (?:OAuth|API Error: 401)|OAuth session expired/i
 const AUTH_WAIT_MS = 15 * 60000
 export const SIGN_IN = 'sign-in expired'
+// The engine rejected the request because it will not serve this model. Injectbuddy
+// 2026-10-12 20:38Z: Codex answered every start with HTTP 400 "The 'gpt-6-sol' model is not
+// supported when using Codex with a ChatGPT account", each counted as a no-handoff (I1197,
+// I1200, I1204, I1206, I1207, I1208). It does not clear by itself: hold that model for an hour.
+// `\W{1,8}` spans both `":"` and the backslash-escaped `\":\"` of a wrapped JSON event.
+const REJECTED = /invalid_request_error\W{1,8}message\W{1,8}[^"\\]{0,100}\bmodel is not supported\b/i
+const REJECTED_WAIT_MS = 60 * 60000
+export const MODEL_REJECTED = 'model rejected'
 const MONTHS =['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const h24 = (h, ap) => (Number(h) % 12) + (/p/i.test(ap) ? 12 : 0)
 
@@ -42,7 +50,7 @@ function resetAt(text, now) {
 }
 
 // { until } when the end of an agent's screen shows an engine usage or rate limit, else
-// null; `modelCap` when only that agent's model is capped. Only the last lines count: a
+// null; `modelCap` when only that agent's model is capped or rejected by the engine. Only the last lines count: a
 // card about usage limits must not block its engine.
 export function usageLimit(screen, now = Date.now()) {
   const tail = String(screen || '').trimEnd().split(/\r?\n/).slice(-20).join(' ').replace(/\s+/g, ' ')
@@ -50,6 +58,7 @@ export function usageLimit(screen, now = Date.now()) {
   // (I534, 2026-09-30, sent a passing Builder back to Planning). Wait a short while on that model.
   if (CAPACITY.test(tail)) return { until: now + CAPACITY_WAIT_MS, modelCap: true }
   if (AUTH.test(tail)) return { until: now + AUTH_WAIT_MS, why: SIGN_IN }
+  if (REJECTED.test(tail)) return { until: now + REJECTED_WAIT_MS, why: MODEL_REJECTED, modelCap: true }
   if (!LIMIT.test(tail)) return null
   const at = resetAt(tail, now)
   return { until: at > now ? at : now + HOUR, ...(MODEL_CAP.test(tail) && { modelCap: true }) }

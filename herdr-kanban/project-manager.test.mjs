@@ -246,6 +246,23 @@ test('a card held by a usage limit is not stuck; it is again once the limit is g
   moveCard(tasks, card.id, 'archive', { operatorArchive: true })
 })
 
+// HK17: an engine's model rejection is a hold, but it must not read as a usage limit.
+test('a card held by a rejected model reads "model rejected" in the summary, not "usage limit"', async () => {
+  const card = createCard(tasks, { title: 'Model rejected', brief: 'x', prefix: 'P' })
+  moveCard(tasks, card.id, 'owner')
+  moveCard(tasks, card.id, 'planning')
+  const quotaFile = join(root, '.engine-quota.json')
+  const until = Date.now() + 3600000
+  try {
+    for (const [why, label] of [['model rejected', 'model rejected'], [undefined, 'usage limit']]) {
+      writeFileSync(quotaFile, JSON.stringify({ claude: { until, since: new Date().toISOString(), ...(why && { why }) } }))
+      const waiting = (await get('/api/summary')).body.projects[0].waitingCards.find(c => c.id === card.id)
+      assert.equal(waiting.on, `${label} until ${formatNZClock(until)}`)
+    }
+  } finally { rmSync(quotaFile, { force: true }) }
+  moveCard(tasks, card.id, 'archive', { operatorArchive: true })
+})
+
 test('hkb found goes to the registered manager inbox, to the Kanban Manager without one, and always with --board', async () => {
   mkdirSync(join(tasks, 'working'), { recursive: true })
   writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')

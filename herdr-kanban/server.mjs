@@ -26,7 +26,7 @@ import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded, logAgentO
 import { dailyMetrics } from './lib/metrics.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
-import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment, SIGN_IN } from './lib/quota.mjs'
+import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment, SIGN_IN, MODEL_REJECTED } from './lib/quota.mjs'
 import { startProjectPolling } from './lib/project-polling.mjs'
 import { getHeadlessAgent } from './lib/headless.mjs'
 import { eventEntries, readTimes, fillTimes } from './scripts/agent-view.mjs'
@@ -407,7 +407,7 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const fileWait = live.has(holder)
     const held = card.column === 'owner' && isOperatorHold(card)
     const decisionWait = !!wait?.decision || held
-    const on = quota[card.id] ? `${quota[card.id].includes(SIGN_IN) ? SIGN_IN : 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
+    const on = quota[card.id] ? `${[SIGN_IN, MODEL_REJECTED].find(why => quota[card.id].includes(why)) ?? 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
       : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'decision')
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
