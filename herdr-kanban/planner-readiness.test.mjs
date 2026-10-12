@@ -300,6 +300,9 @@ console.log('Planner readiness validation passed')
     // I530: a read-only .py bullet is a file; a bad path is named, not blamed on globs.
     validatePlan(files(`${script}\n${glob}\n- \`scripts/live_syringe.py\` — read-only`))
     assert.throws(() => validatePlan(files(`${script}\n${glob}\n- \`scripts/tools\` — folder`)), /scripts\/tools is not one/)
+    // TF167: a named dotfile is a file; a dot folder is still refused.
+    validatePlan(files(`${script}\n${glob}\n- \`web/.gitignore\` — add one line`))
+    assert.throws(() => validatePlan(files(`${script}\n${glob}\n- \`web/.github\` — folder`)), /web\/\.github is not one/)
     // At plan time the glob must match at least one tracked file.
     assert.throws(() => validatePlan(files(`${script}\n${glob.replace('guides', 'guidez')}`), { workspace: root }), /matches no file tracked by git/)
   } finally { rmSync(root, { recursive: true, force: true }) }
