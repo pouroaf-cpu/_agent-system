@@ -2455,7 +2455,13 @@ test('Claude board agents start with only the used built-ins, no skills, and MCP
   for (const id of ['vercel-plugin@vercel', 'i-have-adhd@i-have-adhd', 'agents-design-experience@buildwithclaude', 'andrej-karpathy-skills@karpathy-skills', 'agent-coms@pouroa-plugins']) assert.equal(settings.enabledPlugins[id], false, id)
   // --setting-sources local (above) drops the "user" source that used to carry ponytail's
   // enabledPlugins entry, so it is restated here instead; caveman stays off either way.
-  assert.equal(settings.enabledPlugins['ponytail@ponytail'], true, "ponytail must still run for every role (for now; Planner opt-out is the operator's call)")
+  // Operator 2026-10-13: Planners write no code, so they start without the ponytail hook
+  // (about 1.8k tokens a call); every other role keeps it. The Planner file must otherwise
+  // match the shared one, so a hook added to one cannot be forgotten in the other.
+  assert.equal(settings.enabledPlugins['ponytail@ponytail'], false, 'no ponytail hook for a Planner')
+  const shared = JSON.parse(readFileSync(lean[lean.indexOf('--settings') + 1], 'utf8'))
+  assert.equal(shared.enabledPlugins['ponytail@ponytail'], true, 'Builders and Reviewers keep the ponytail hook')
+  assert.deepEqual({ ...settings, enabledPlugins: { ...settings.enabledPlugins, 'ponytail@ponytail': true } }, shared, 'the Planner settings differ only in the ponytail switch')
   assert.ok(!('caveman@caveman' in settings.enabledPlugins), 'caveman stays off')
   assert.match(settings.hooks.Stop[0].hooks[0].command, /agent-stop-hook\.mjs/)
 })
