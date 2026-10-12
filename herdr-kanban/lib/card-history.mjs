@@ -17,6 +17,19 @@ export function appendHistory(tasksDir, id, event) {
   appendFileSync(path, JSON.stringify(entry) + '\n')
   return entry
 }
+// Audit 2026-10-12 report #11: finished-output and completed-builder-retirement events stored
+// the agent's whole pane output (107.5M + 52.5M chars/week on Injectbuddy alone; nothing has
+// read either event type back in 7 days - a disk/scan cost, not a token one). Keep the full
+// text in a plain log file under .evidence (same convention as gateIntegration's check logs)
+// and store only its path plus the last 2,000 characters in the history event.
+export function logAgentOutput(tasksDir, id, label, text) {
+  const dir = join(tasksDir, '.evidence')
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, `${id.toUpperCase()}-${label}-${Date.now()}.log`)
+  const full = String(text ?? '')
+  writeFileSync(path, full)
+  return { log: path.replaceAll('\\', '/'), outputTail: full.slice(-2000) }
+}
 // The card an earlier `hkb found` in the last 3 days came from when this finding quotes the
 // same code snippet. I967, I968 and I983 each sent the same 'rounded-lgborder' typo to the
 // manager's phone within 20 min (2026-10-09).

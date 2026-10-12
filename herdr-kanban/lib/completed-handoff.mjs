@@ -9,7 +9,7 @@ import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
 import { readUsage, recordUsageFinish, agentSessionId } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
 import { isHeadless } from './headless.mjs'
-import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, builderHandedOff, logAgentOutput } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment, startDependencyInstall, installRunning } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
@@ -153,7 +153,10 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       const output = await io.paneRead(paneId, session)
       if (!String(output).trim()) throw new Error(`${card.id}: cannot preserve finished output`)
       await io.recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
-      const history = appendHistory(tasksDir, card.id, { event: 'completed-builder-retirement', builder, sessionId: identity, worktree: entry, card: readFileSync(card.path, 'utf8'), output })
+      // The card's own current text is preserved in the retirement log alongside the output
+      // rather than as a separate full-size field (audit #11); nothing has read either back.
+      const retirementLog = logAgentOutput(tasksDir, card.id, 'builder-retirement', `${readFileSync(card.path, 'utf8')}\n\n=== output ===\n${output}`)
+      const history = appendHistory(tasksDir, card.id, { event: 'completed-builder-retirement', builder, sessionId: identity, worktree: entry, ...retirementLog })
       const current = (await io.agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
       if (!matches(current) || !['done', 'idle'].includes(current.agent_status) || !['completed', 'review'].includes(findCard(tasksDir, card.id).column)) throw new Error(`${card.id}: Builder changed before retirement; preserve checkout`)
       await io.paneClose(paneId, session)

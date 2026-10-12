@@ -21,7 +21,7 @@ import { activeCardRun, readCardRuns, authorizeCardRun, stopCardRun } from './li
 import { cardRunEligibility, tickCardRun } from './lib/card-runner.mjs'
 import { reconcileCompletedHandoffs, operatorFinish } from './lib/completed-handoff.mjs'
 import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
-import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './lib/card-history.mjs'
+import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded, logAgentOutput } from './lib/card-history.mjs'
 import { dailyMetrics } from './lib/metrics.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
@@ -269,7 +269,7 @@ async function pollAgentsNow(project) {
       const agent = allAgents.find(a => a.pane_id === saved.builder.pane_id && ['idle', 'done'].includes(a.agent_status))
       if (!agent) continue
       try {
-        appendHistory(tasksDirOf(project), id, { event: 'finished-output', run: agent.agent_session, agent: agent.name, output: await paneRead(agent.pane_id, sessionOf(project)) })
+        appendHistory(tasksDirOf(project), id, { event: 'finished-output', run: agent.agent_session, agent: agent.name, ...logAgentOutput(tasksDirOf(project), id, 'finished-output', await paneRead(agent.pane_id, sessionOf(project))) })
         updateWorkflow(tasksDirOf(project), id, { outputSavedAt: saved.completedAt })
       } catch { /* Retain the session and retry output capture next poll. */ }
     }

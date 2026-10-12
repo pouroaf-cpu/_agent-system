@@ -6,7 +6,7 @@ import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, builderIssue, builderHandedOff } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, builderIssue, builderHandedOff, logAgentOutput } from './card-history.mjs'
 import { looksLikeAQuestion, lastAgentMessage } from './agent-question.mjs'
 import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
@@ -607,7 +607,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
     if (ids.length) {
       try {
         const output = await paneRead(a.pane_id, sessionOf(project))
-        for (const id of ids) appendHistory(tasksDir, id, { event: 'finished-output', agent: a.name, run: a.agent_session, output })
+        for (const id of ids) appendHistory(tasksDir, id, { event: 'finished-output', agent: a.name, run: a.agent_session, ...logAgentOutput(tasksDir, id, 'finished-output', output) })
       } catch { continue } // Keep the pane until its output can be preserved.
     }
     await paneClose(a.pane_id, sessionOf(project)).catch(() => {})
