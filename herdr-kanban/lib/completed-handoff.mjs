@@ -11,7 +11,7 @@ import { readDelivery } from './delivery-state.mjs'
 import { isHeadless } from './headless.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff } from './card-history.mjs'
 import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
-import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment } from './worktrees.mjs'
+import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment, startDependencyInstall, installRunning } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
 
 // The Builder's recorded check (## Evidence "Check:"), re-run in the card's
@@ -39,10 +39,10 @@ export function runShell(command, cwd, timeout) {
 
 // A check that ran out of time under load is retried with backoff, never returned to the
 // Builder as a failure to fix. Null once the budget is spent: the caller fails it as today.
-function checkTimedOut(tasksDir, cardId, what, now) {
+function checkTimedOut(tasksDir, cardId, what, now, why = 'timed out (machine under load?)') {
   const retry = nextRetry(readWorkflow(tasksDir)[cardId]?.integrationRetry, now)
   if (retry.exhausted) return null
-  const reason = retryHold(`${what} timed out (machine under load?)`, retry.nextAt)
+  const reason = retryHold(`${what} ${why}`, retry.nextAt)
   updateWorkflow(tasksDir, cardId, { integrationRetry: { since: retry.since, tries: retry.tries, nextAt: retry.nextAt, reason } })
   return { id: cardId, status: 'held', reason }
 }
@@ -59,13 +59,21 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   // The rebase may bring routes other cards added, dependency changes other cards made, or
   // leave this worktree's own stale Expo/Next route types behind (I957, I1006, IA133: all three
   // passed on a plain retry with no code change, so the check's own environment was at fault).
-  try { prepareWorktreeEnvironment(entry) } catch { /* a real install stays pending; the check still runs and reports it */ }
+  // InjectbuddyApp 2026-10-12: IA156 added a package; IA155's check ran before the board installed it
+  // and IA154's ran while npm ci was rewriting the shared node_modules. Both failed on missing modules
+  // and went back as build failures. Packages missing or mid-install: install, wait, check again.
+  const busy = () => [entry.workspacePath, entry.integrationWorkspace].some(folder => folder && io.installRunning(folder))
+  const waitForInstall = () => checkTimedOut(tasksDir, card.id, `integration check ${command}`, now, 'is waiting for dependencies to install')
+  let installing = busy()
+  try { prepareWorktreeEnvironment(entry) } catch (err) { installing ||= !!err.installIn && String(io.startInstall({ folder: err.installIn, tasksDir })).startsWith('installing dependencies in ') }
+  const waiting = installing && waitForInstall()
+  if (waiting) return waiting
   const check = await io.runIntegrationCheck(command, entry.workspacePath, 300000)
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
   writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}\n\n${check.output}\n`)
   appendHistory(tasksDir, card.id, { event: 'integration-check', ok: check.ok, command, commit: up.commit, evidence })
-  const timedOut = !check.ok && isTransient(check) && checkTimedOut(tasksDir, card.id, `integration check ${command}`, now)
+  const timedOut = !check.ok && (isTransient(check) ? checkTimedOut(tasksDir, card.id, `integration check ${command}`, now) : busy() && waitForInstall())
   if (timedOut) return timedOut
   if (!check.ok) return returnIntegrationConflict(tasksDir, card.id, { reason: `integration check ${command} failed on current master (full output: ${evidence})`, output: check.output.slice(-3000) })
   updateWorktree(tasksDir, card.id, { integrationChecked: up.commit })
@@ -99,7 +107,7 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
 
 export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(),
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees, runCheck: runRecordedCheck } }) {
-  io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, ...io }
+  io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, startInstall: startDependencyInstall, installRunning, ...io }
   const results = [], session = sessionOf(project)
   for (const entry of Object.values(readWorktrees(tasksDir))) {
     // One card's problem must never freeze the whole project poll.

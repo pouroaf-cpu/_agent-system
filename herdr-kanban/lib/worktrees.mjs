@@ -326,6 +326,8 @@ function recordedInstalls(now) {
   try { all = JSON.parse(readFileSync(installsPath(), 'utf8')) } catch { /* none, or torn: nothing to wait for */ }
   return Object.fromEntries(Object.entries(all).filter(([, r]) => now - r.startedAt < INSTALL_TIMEOUT_MS && pidAlive(r.pid)))
 }
+// A check run in a folder whose packages are being reinstalled reads a half-written node_modules (IA154).
+export const installRunning = (folder, now = Date.now()) => !!installs.get(norm(folder))?.running || norm(folder) in recordedInstalls(now)
 function recordInstall(key, record) {
   const all = recordedInstalls(Date.now())
   if (record) all[key] = record

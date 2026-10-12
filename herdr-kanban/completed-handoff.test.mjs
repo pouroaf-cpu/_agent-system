@@ -359,6 +359,31 @@ test('a timed-out integration or recorded check backs off without counting as a 
   assert.equal(registry()['T-1'].conflictFailures, 1)
 })
 
+test('an integration check waits while dependencies install instead of failing the card (InjectbuddyApp IA154, IA155)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'check-install-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- `app.js` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', worktreePath: root, workspacePath: root, integrationWorkspace: join(root, 'main'), baseCommit: 'b0' } }))
+  const t0 = Date.now(), min = 60000
+  let checks = 0, installing = true, startsDuringCheck = false, result = { ok: false, output: "error TS2307: Cannot find module 'expo-router'" }
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit: 'c1' }), installRunning: () => installing,
+    runIntegrationCheck: async () => { checks++; installing ||= startsDuringCheck; return result }, reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const run = now => reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], integrationCheck: 'npm test', io, now })
+  const registry = () => JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1']
+  // An install is running in the shared folder: the check does not run at all.
+  const [held] = await run(t0)
+  assert.equal(held.status, 'held'); assert.match(held.reason, /integration check npm test is waiting for dependencies to install; retrying at \d{4}-/)
+  assert.equal(checks, 0); assert.equal(registry().conflictFailures, undefined); assert.equal(findCard(tasksDir, 'T-1').column, 'completed')
+  // The install started while the check ran: its failure is not the card's.
+  installing = false; startsDuringCheck = true
+  assert.equal((await run(t0 + 2 * min))[0].status, 'held')
+  assert.equal(checks, 1); assert.equal(registry().conflictFailures, undefined)
+  // Install finished: the same commit passes and integrates.
+  installing = startsDuringCheck = false; result = { ok: true, output: 'ok' }
+  assert.equal((await run(t0 + 10 * min))[0].status, 'integrated')
+})
+
 test('a replacement Builder recorded with the previous pane session is still retired', async t => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-replaced-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
