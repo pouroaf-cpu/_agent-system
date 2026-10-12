@@ -2238,7 +2238,7 @@ function renderAgents() {
     el.agents.append(m);
   };
   for (const [key, block] of Object.entries(state.quotaBlocks || {}))
-    say(`${key.replace(':', ' ')} usage limit — no such agent starts until ${formatNZTime(block.until)}.`);
+    say(`${key.replace(':', ' ')} ${block.why || 'usage limit'} — no such agent starts until ${formatNZTime(block.until)}.`);
   if (!state.herdrUp) say('herdr is not running — no agent status available.');
 }
 

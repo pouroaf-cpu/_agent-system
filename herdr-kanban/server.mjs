@@ -25,7 +25,7 @@ import { historyPath, appendHistory, laneEnteredAt, lastBlockerLanded } from './
 import { dailyMetrics } from './lib/metrics.mjs'
 import { readAuditReports, resolveAuditReport, editorArguments } from './lib/audit-reports.mjs'
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
-import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment } from './lib/quota.mjs'
+import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment, SIGN_IN } from './lib/quota.mjs'
 import { startProjectPolling } from './lib/project-polling.mjs'
 import { getHeadlessAgent } from './lib/headless.mjs'
 import { eventEntries, readTimes, fillTimes } from './scripts/agent-view.mjs'
@@ -406,7 +406,7 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const fileWait = live.has(holder)
     const held = card.column === 'owner' && isOperatorHold(card)
     const decisionWait = !!wait?.decision || held
-    const on = quota[card.id] ? `usage limit until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
+    const on = quota[card.id] ? `${quota[card.id].includes(SIGN_IN) ? SIGN_IN : 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
       : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'decision')
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
@@ -787,8 +787,10 @@ async function pollProject(project) {
     if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
     for (const [kind, block] of Object.entries(activeQuota(HERE))) {
-      await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} usage limit`,
-        detail: `No ${kind} agent starts on any project until ${formatNZTime(block.until)}. Waiting cards keep their lanes and resume by themselves.` })
+      await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} ${block.why || 'usage limit'}`,
+        detail: block.why === SIGN_IN
+          ? `The ${kind} CLI on the board PC is signed out, so no ${kind} agent can start on any project. The operator must sign it in again (run it, then /login). The board tries one start again at ${formatNZTime(block.until)}; waiting cards keep their lanes.`
+          : `No ${kind} agent starts on any project until ${formatNZTime(block.until)}. Waiting cards keep their lanes and resume by themselves.` })
     }
     const breaker = breakerState(project)
     if (breaker.breakerTripped) {

@@ -51,7 +51,7 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   const limit = boardRoot && usageLimit(evidence, now)
   if (limit) {
     const key = quotaKey(engineKind(engine), limit.modelCap && model)
-    blockEngine(boardRoot, key, limit.until, now)
+    blockEngine(boardRoot, key, limit.until, now, limit.why)
     appendHistory(tasksDir, card.id, { event: 'engine-usage-limit', stage: 'working', engine: key, until: new Date(limit.until).toISOString(), evidence })
     unbind(tasksDir, card.id)
     return moveCard(tasksDir, card.id, 'queue')
@@ -816,7 +816,7 @@ export async function reconcileReviewers({ reviewRoot, boardRoot, project, tasks
     // "ended without a verdict" hold, so its cards wait in Review for the reset.
     const limit = agent && boardRoot && claim.engine && usageLimit(await read(claim.paneId, sessionOf(project)).catch(() => ''), now)
     if (limit) {
-      blockEngine(boardRoot, quotaKey(claim.engine, limit.modelCap && claim.model), limit.until, now)
+      blockEngine(boardRoot, quotaKey(claim.engine, limit.modelCap && claim.model), limit.until, now, limit.why)
       for (const id of claim.cards) updateWorkflow(claim.tasksDir, id, { operational: null })
     }
     if (limit || agent?.agent_status === 'idle') await close(claim.paneId, sessionOf(project)).catch(() => {})

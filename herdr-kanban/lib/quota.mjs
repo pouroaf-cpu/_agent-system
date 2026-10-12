@@ -13,6 +13,13 @@ const LIMIT = /hit your (?:usage |session )?limit|usage limit reached|limit will
 const MODEL_CAP = /\b(?:opus|sonnet|haiku|weekly|7-day)\b[^.|]{0,20}\blimit\b/i
 const CAPACITY = /model is at capacity/i
 const CAPACITY_WAIT_MS = 15 * 60000
+// The engine's own sign-in ran out: no agent of it can start until someone signs in again,
+// and that is not the card's fault. Injectbuddy 2026-10-12 08:00Z: the Claude CLI sign-in
+// expired, every Builder exited in seconds and 13 cards were kicked back to Planning with
+// their difficulty stepped up. Try one start again every 15 minutes.
+const AUTH = /"error":"authentication_failed"|Failed to authenticate[:.] (?:OAuth|API Error: 401)|OAuth session expired/i
+const AUTH_WAIT_MS = 15 * 60000
+export const SIGN_IN = 'sign-in expired'
 const MONTHS =['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const h24 = (h, ap) => (Number(h) % 12) + (/p/i.test(ap) ? 12 : 0)
 
@@ -42,6 +49,7 @@ export function usageLimit(screen, now = Date.now()) {
   // Codex "Selected model is at capacity": the model's servers are busy, not our usage
   // (I534, 2026-09-30, sent a passing Builder back to Planning). Wait a short while on that model.
   if (CAPACITY.test(tail)) return { until: now + CAPACITY_WAIT_MS, modelCap: true }
+  if (AUTH.test(tail)) return { until: now + AUTH_WAIT_MS, why: SIGN_IN }
   if (!LIMIT.test(tail)) return null
   const at = resetAt(tail, now)
   return { until: at > now ? at : now + HOUR, ...(MODEL_CAP.test(tail) && { modelCap: true }) }
@@ -60,10 +68,11 @@ export function readQuota(boardRoot) {
 }
 
 // Block one engine kind (or quotaKey) until `until`; a later block is never shortened.
-export function blockEngine(boardRoot, kind, until, now = Date.now()) {
+// `why` names a block that is not a usage limit (SIGN_IN).
+export function blockEngine(boardRoot, kind, until, now = Date.now(), why) {
   const quota = readQuota(boardRoot)
   if (quota[kind]?.until >= until) return quota[kind]
-  quota[kind] = { until, since: quota[kind]?.until > now ? quota[kind].since : new Date(now).toISOString() }
+  quota[kind] = { until, since: quota[kind]?.until > now ? quota[kind].since : new Date(now).toISOString(), ...(why && { why }) }
   writeFileSync(quotaPath(boardRoot) + '.tmp', JSON.stringify(quota, null, 2) + '\n')
   renameSync(quotaPath(boardRoot) + '.tmp', quotaPath(boardRoot))
   return quota[kind]
@@ -73,7 +82,7 @@ export function blockEngine(boardRoot, kind, until, now = Date.now()) {
 // can compare two holds, or null once the later of the two has passed.
 function holdInfo(quota, key, now) {
   const hit = [key.split(':')[0], key].filter(k => quota[k]?.until > now).sort((a, b) => quota[b].until - quota[a].until)[0]
-  return hit ? { until: quota[hit].until, text: retryHold(`${label(hit)} usage limit`, quota[hit].until) } : null
+  return hit ? { until: quota[hit].until, text: retryHold(`${label(hit)} ${quota[hit].why || 'usage limit'}`, quota[hit].until) } : null
 }
 
 // The visible hold while an engine, or `key`'s model of it, is blocked (an allowed wait for

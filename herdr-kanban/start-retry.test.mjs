@@ -265,6 +265,12 @@ test('an engine usage-limit screen is recognised with its reset time; other outp
   // I695-I706 2026-10-03: headless Claude printed "session limit" and six Planners went to Owner.
   assert.deepEqual(usageLimit(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790400000}}\n{"type":"result","result":"You've hit your session limit · resets 2am (Pacific/Auckland)"}`, now), { until: 1790400000000 })
   assert.deepEqual(usageLimit('■ Selected model is at capacity. Please try a\ndifferent model.\n › Ask Codex to do anything', now), { until: now + 15 * 60000, modelCap: true }, 'I534: a busy model waits 15 min on that model only')
+  // 2026-10-12 08:00Z: the Claude CLI sign-in expired and 13 Injectbuddy Builders were kicked back as failed builds.
+  const signedOut = '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"error":"authentication_failed"}\n{"duration_api_ms":0,"terminal_reason":"api_error"}'
+  assert.deepEqual(usageLimit(signedOut, now), { until: now + 15 * 60000, why: 'sign-in expired' })
+  assert.equal(usageLimit('AC2: the login form shows "Failed to authenticate" for a wrong password -> pass', now), null, 'a card about sign-in errors is not an expired engine sign-in')
+  const { quotaHold } = await import('./lib/quota.mjs')
+  assert.match(quotaHold(null, 'claude:claude-sonnet-5-5', now, { claude: { until: now + 15 * 60000, why: 'sign-in expired' } }), /^Claude sign-in expired; retrying at /)
 })
 
 test('a usage limit blocks that engine: the card keeps its lane with no failure counted, nothing of that engine starts, the wait is not a stall, and work resumes after the reset', async () => {

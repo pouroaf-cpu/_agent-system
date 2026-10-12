@@ -418,9 +418,9 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         const limit = usageLimit(evidence, now)
         if (limit) {
           const kind = quotaKey(owner.engine || plannerEngine(card), limit.modelCap && (owner.model || plannerModel(card)))
-          blockEngine(boardRoot, kind, limit.until, now)
+          blockEngine(boardRoot, kind, limit.until, now, limit.why)
           appendHistory(tasksDir, card.id, { event: 'engine-usage-limit', stage: 'planning', engine: kind, until: new Date(limit.until).toISOString(), evidence })
-          await retire(card, owner, agent, `${kind} usage limit`)
+          await retire(card, owner, agent, `${kind} ${limit.why || 'usage limit'}`)
           owner.submitted = false
           owner.closedAt = new Date(now).toISOString()
           delete owner.inactiveSince
