@@ -240,9 +240,7 @@ test('the worker prompt stays inside the card scope and one proportional check',
   const card = { id: 'T-04', title: 'x', workspace: 'TASKS/workspaces/android', path: 'C:\\p\\TASKS\\queue\\T-04-x.md' }
   const text = workerPrompt({ card, projectPath: 'C:\\p', boardRoot: 'C:\\board', engine: { kind: 'codex' } })
   assert.match(text, /Read .*BUILDER\.md.*exact listed files/i)
-  assert.match(text, /one proportional check type/i)
-  assert.match(text, /Rerun the same check after fixing implementation, setup, or harness errors/i)
-  assert.match(text, /Stop after three identical unresolved failures/i)
+  assert.match(text, /proportional check per BUILDER\.md's check-type and failure-stop rules/i)
   assert.match(text, /login:false.*never prefix bare -NoProfile/)
   assert.match(text, /Start checks with yield_time_ms 30000 and poll with yield_time_ms 30000; never poll faster/, 'Codex polls re-send the whole context')
   assert.match(text, /git diff --stat \/ --numstat.*max_output_tokens 1500/)
@@ -251,7 +249,7 @@ test('the worker prompt stays inside the card scope and one proportional check',
   assert.match(text, /Workspace root: C:\/p\/TASKS\/workspaces\/android/i)
   assert.match(text, /git -C '?C:\/p\/TASKS\/workspaces\/android/i)
   assert.doesNotMatch(text, /ORCHESTRATION\.md|CLAUDE\.md|browser behaviour|journal step/i)
-  assert.match(text, /Browser checks are allowed only when explicitly required by the card/i)
+  // Browser-check gating now lives only in BUILDER.md (which this prompt reads), not restated here.
   assert.match(text, /stage only the exact implementation files/i)
   assert.match(text, /Never push/i)
   assert.ok(text.indexOf('create one local commit') < text.indexOf('done T-04'), 'the commit precedes done')

@@ -46,7 +46,7 @@ test('the first Codex Planner blocker escalates the card to an Opus Planner; the
     assert.equal(starts.length, 1)
     assert.equal(starts[0].model, 'claude-opus-5-5')
     assert.equal(starts[0].engine.kind, 'claude')
-    assert.match(prompts[0], /Escalation: a Codex Planner could not make this card build-ready/)
+    assert.match(prompts[0], /Escalation: a Planner could not make this card build-ready/)
     // The launch guard lets a Planner start on it. The escalation keeps the Codex
     // assignment's reasoning ('high'), which now carries over as Claude's --effort.
     assert.deepEqual(agentStartArgs({ name: starts[0].name, paneId: 'p9', model: 'claude-opus-5-5', engine: starts[0].engine }).slice(-4), ['--model', 'claude-opus-5-5', '--effort', 'high'])

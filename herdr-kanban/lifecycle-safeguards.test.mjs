@@ -143,7 +143,7 @@ test('Planner and Builder prompts require prerequisite verification and one hand
   assert.match(builder, /verify every named prerequisite file, route, selector, dependency and check/i)
   assert.match(builder, /exactly one of these/)
   assert.match(planner, /verify every named prerequisite file, route, selector, dependency and check/i)
-  assert.match(planner, /exactly one .*move <ID> planned command/i)
+  assert.match(planner, /exactly one .* command, chosen by outcome: move <ID> planned/i)
 })
 
 test('Planner that stops without a handoff gets one fresh Planner with saved evidence, then Owner', async t => {
