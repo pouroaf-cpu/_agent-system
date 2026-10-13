@@ -2476,6 +2476,9 @@ test('Claude board agents start with only the used built-ins, no skills, and MCP
   // Operator 2026-10-13: any agent a board agent starts runs on Haiku (token cost), in both files.
   assert.equal(settings.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
   assert.equal(shared.env.CLAUDE_CODE_SUBAGENT_MODEL, 'haiku')
+  // HK59: a hung shell command ended after 903 s in HK45; headless runs default to 10 minutes or less, in both files.
+  assert.ok(Number(settings.env.BASH_DEFAULT_TIMEOUT_MS) <= 600000)
+  assert.ok(Number(shared.env.BASH_DEFAULT_TIMEOUT_MS) <= 600000)
   assert.ok(!('caveman@caveman' in settings.enabledPlugins), 'caveman stays off')
   assert.match(settings.hooks.Stop[0].hooks[0].command, /agent-stop-hook\.mjs/)
 })

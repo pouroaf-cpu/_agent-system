@@ -1,7 +1,8 @@
 {
   "env": {
     "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku",
+    "BASH_DEFAULT_TIMEOUT_MS": "600000"
   },
   "autoMemoryEnabled": false,
   "remoteControlAtStartup": false,

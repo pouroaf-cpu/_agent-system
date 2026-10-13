@@ -119,7 +119,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
         // agent ends without a handoff (I696/I699/I706 2026-10-03: "I'll continue when it finishes").
         // So commands run in the foreground, with timeouts long enough for full checks.
         // Chats auto-compact at 150k (settings.json autoCompactWindow, 2026-10-09); board agents keep the model's full window.
-        child = spawn(process.execPath, [supervisor, spec], { cwd: row.cwd, detached: true, stdio: ['ignore', fd, fd, 'ipc'], windowsHide: true, env: { ...herdr.cleanEnv(), PATH: herdr.boardAgentPath(), BOARD_AGENT_ID: id, HERDR_PANE_ID: id, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', BASH_DEFAULT_TIMEOUT_MS: '900000', BASH_MAX_TIMEOUT_MS: '1800000', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' } })
+        child = spawn(process.execPath, [supervisor, spec], { cwd: row.cwd, detached: true, stdio: ['ignore', fd, fd, 'ipc'], windowsHide: true, env: { ...herdr.cleanEnv(), PATH: herdr.boardAgentPath(), BOARD_AGENT_ID: id, HERDR_PANE_ID: id, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '1800000', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' } })
         // Record the detached supervisor before waiting for its launch acknowledgement.
         patch(id, { pid: child.pid || null, childPid: null, error: null, startedAt: new Date().toISOString(), endedAt: null, exitCode: null, exitFile: turnExit, sessionId: row.sessionId, closedAt: null })
         const launched = await new Promise((resolve, reject) => { child.once('error', reject); child.once('message', msg => msg.error ? reject(new Error(msg.error)) : resolve(msg)); child.once('exit', code => reject(new Error(`Agent launch exited ${code}`))) })
