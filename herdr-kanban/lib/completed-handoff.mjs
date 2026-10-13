@@ -84,25 +84,33 @@ async function gateIntegration(tasksDir, card, command, io, now) {
 // A second rebase conflict goes back once more to start fresh on the new base and re-apply
 // the change (what the Injectbuddy chat did by hand for I387, I388, I390); a third asks the
 // operator. A failed integration check still asks after two. Never a loop.
-export function returnIntegrationConflict(tasksDir, cardId, { reason, files = [], hunks = '', head, output }) {
+// `blocked`: the board could not even retry (no clean single card commit). That spends no try and
+// goes to the owner, since the worktree was edited by hand.
+export function returnIntegrationConflict(tasksDir, cardId, { reason, files = [], hunks = '', head, output, blocked }) {
   const entry = readWorktrees(tasksDir)[cardId]
-  const failures = (entry.conflictFailures || 0) + 1
+  const failures = (entry.conflictFailures || 0) + (blocked ? 0 : 1)
   const target = head || entry.rebaseTarget || entry.baseCommit
   updateWorktree(tasksDir, cardId, { state: 'conflict', conflictFailures: failures, reason, rebaseTarget: target })
-  const to = failures >= (output ? 2 : 3) ? 'owner' : 'queue'
+  const to = blocked || failures >= (output ? 2 : 3) ? 'owner' : 'queue'
   const moved = moveCard(tasksDir, cardId, to)
   const summary = reason.split('\n')[0]
+  const detail = files.length ? `${summary} (files: ${files.join(', ')})` : summary
+  const base12 = String(entry.baseCommit).slice(0, 12), target12 = String(target).slice(0, 12)
+  const action = blocked ? `Fix it in that worktree: keep exactly one clean card commit on ${base12} (commit or discard the changes to the files above), then drag the card back to Completed.`
+    : output ? 'Fix the failing check in that worktree, keep exactly one card commit, then drag the card back to Completed: the board rebases it onto current master and runs the check again itself.'
+    : `Resolve it by hand in that worktree: git rebase --onto ${target12} ${base12}, fix the files above, keep exactly one card commit, then drag the card back to Completed. Dragging it back unchanged makes the board retry the rebase, and it returns here if it conflicts again.`
   const diff = hunks ? `\n\n\`\`\`diff\n${hunks}\n\`\`\`` : ''
   const log = output ? `\n\n\`\`\`text\n${output}\n\`\`\`` : ''
   const checkoutOverride = "For this return, your worktree is expected at the card's earlier commit or base; this overrides any plan prerequisite or check requiring a clean checkout on current integration HEAD until the rebase/reset is done, then the plan's checks apply again."
   writeCurrentFeedback(tasksDir, moved, to === 'owner' ? 'Needs you' : 'Kicked back', to === 'owner'
-    ? `${cardId} still does not integrate with master after ${failures} tries (${summary}). Its commit and worktree are kept at ${entry.worktreePath}. Should an agent try again with a narrower change, or will you fix it yourself?`
+    ? blocked ? `${cardId} is back with you: the board could not retry it (${detail}). Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again with a narrower change, or will you fix it yourself?`
+      : `${cardId} still does not integrate with master after ${failures} tries (${detail}). Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again with a narrower change, or will you fix it yourself?`
     : output ? `${summary}. Your worktree ${entry.worktreePath} is already rebased onto current master: fix the failures there, keep exactly one card commit, re-run the check, then hkb done.${log}`
     : failures >= 2 ? `Integration conflict with master again: ${summary}. Stop resolving it and start fresh on the new base. ${checkoutOverride} In your worktree ${entry.worktreePath}: git rebase --abort if one is in progress, git branch kanban-backup/${cardId}-${failures} HEAD, git reset --hard ${target}, then re-apply the same change by hand using git show kanban-backup/${cardId}-${failures} as the reference. In shared list files add only your own entry at the end; leave other entries and shared helpers alone unless the card needs them. Keep exactly one card commit, run your check once, then hkb done.${diff}`
     : `Integration conflict with master: ${summary}. ${checkoutOverride} Resolve it in your own worktree ${entry.worktreePath}: git rebase --onto ${target} ${entry.baseCommit}, fix ${files.join(', ') || 'the conflicting files'}, keep exactly one card commit, re-run your check, then hkb done.${diff}`)
   // Not an 'implementation' correction: that would demand the retired Builder pane back.
   updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null })
-  return { id: cardId, status: 'returned', to, reason: summary }
+  return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}. ${action}` : detail }
 }
 
 export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(),

@@ -314,6 +314,8 @@ test('integration conflicts never loop: a Builder resolution, one fresh re-apply
   text = readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')
   assert.match(text, /Needs you: T-1 still does not integrate with master after 3 tries[\s\S]*\?/)
   assert.ok(!text.includes(checkoutOverride))
+  // The ask names the files and an action that works: dragging it back makes the board retry the rebase.
+  for (const out of [text, third.reason]) { assert.match(out, /app\.js/); assert.match(out, /drag the card back to Completed/) }
 
   // Clean rebase: the recorded check gates integration.
   registry({ 'T-2': 'rebased', 'T-3': 'rebased' })
@@ -328,6 +330,22 @@ test('integration conflicts never loop: a Builder resolution, one fresh re-apply
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, true)
   writeFileSync(findCard(tasksDir, 'T-2').path, planned('T-2').replace('process.exit(0)', 'process.exit(3)'))
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, false)
+})
+
+test('a card the board could not retry goes to Owner with the files and action, and spends no try', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'integration-blocked-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- `app.js` — change\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'conflict', worktreePath: root, workspacePath: root, baseCommit: 'b0123456789abcdef' } }))
+  const rebase = () => ({ status: 'conflict', blocked: true, reason: 'expected exactly one card commit; found 2', files: ['app.js'] })
+  const [result] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], integrationCheck: 'node -e ""', io: { agentList: async () => [], rebase } })
+  assert.deepEqual([result.status, result.to], ['returned', 'owner'])
+  assert.ok(!JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].conflictFailures)
+  for (const out of [result.reason, readFileSync(findCard(tasksDir, 'T-1').path, 'utf8')]) {
+    assert.match(out, /expected exactly one card commit; found 2 \(files: app\.js\)/)
+    assert.match(out, /drag the card back to Completed/)
+  }
 })
 
 test('a timed-out integration or recorded check backs off without counting as a conflict; a real failure still returns', async t => {

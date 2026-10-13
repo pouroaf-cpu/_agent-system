@@ -925,14 +925,24 @@ export const updateWorktree = updateEntry
 // A conflict someone resolved by hand (Owner, 2 failed tries) and moved to Completed: the
 // worktree's one card commit now sits on integrated history, so integrate it again instead of
 // skipping the card forever (Injectbuddy I387, 2026-09-28).
-function resumeResolvedConflict(tasksDir, entry) {
+// A conflict-state card seen in Completed was moved back on purpose (every conflict result moves
+// it out in the same poll), so a card still on its old base is retried: the board rebases it
+// itself. returnIntegrationConflict takes it out of Completed again if that fails, so no loop.
+// When it cannot retry (not exactly one clean card commit), `blocked` names why; never persisted.
+function resumeResolvedConflict(tasksDir, entry, card) {
   if (entry?.state !== 'conflict') return entry
   const parent = git(entry.worktreePath, ['rev-parse', 'HEAD^'], { allowFailure: true }).stdout.trim()
   const status = git(entry.worktreePath, ['status', '--porcelain', '--untracked-files=no'], { allowFailure: true })
-  // Still on its old base means nobody resolved it: never retry that in a loop.
-  if (!parent || parent === entry.baseCommit || status.status !== 0 || status.stdout.trim()) return entry
-  if (git(entry.repoRoot, ['merge-base', '--is-ancestor', parent, 'HEAD'], { allowFailure: true }).status !== 0) return entry
-  return updateEntry(tasksDir, entry.cardId, { state: 'building', baseCommit: parent, rebaseTarget: null, reason: null })
+  const handResolved = parent && parent !== entry.baseCommit && status.status === 0 && !status.stdout.trim() &&
+    git(entry.repoRoot, ['merge-base', '--is-ancestor', parent, 'HEAD'], { allowFailure: true }).status === 0
+  if (handResolved) return updateEntry(tasksDir, entry.cardId, { state: 'building', baseCommit: parent, rebaseTarget: null, reason: null })
+  if (!card) return entry
+  try { validateCompleted(card, entry) } catch (err) {
+    const diff = git(entry.worktreePath, ['diff', '--name-only', entry.baseCommit], { allowFailure: true })
+    const files = diff.status === 0 ? diff.stdout.split('\n').map(f => f.trim()).filter(Boolean) : []
+    return { ...entry, blocked: { reason: err.message, files } }
+  }
+  return updateEntry(tasksDir, entry.cardId, { state: 'building', rebaseTarget: null, reason: null })
 }
 
 // Bring a Completed card's one commit up to the integration HEAD in its own
@@ -941,7 +951,8 @@ function resumeResolvedConflict(tasksDir, entry) {
 export function rebaseCompletedOntoIntegration(tasksDir, cardId) {
   const card = readBoard(tasksDir).completed.find((c) => c.id === cardId)
   let entry = readWorktrees(tasksDir)[cardId]
-  if (card) entry = resumeResolvedConflict(tasksDir, entry)
+  if (card) entry = resumeResolvedConflict(tasksDir, entry, card)
+  if (entry?.blocked) return { status: 'conflict', blocked: true, reason: entry.blocked.reason, files: entry.blocked.files }
   if (!entry || !card || !['building', 'ready', 'issue', 'rebased'].includes(entry.state)) return null
   if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {
     entry = updateEntry(tasksDir, cardId, { baseCommit: entry.rebaseTarget, rebaseTarget: null })
@@ -979,7 +990,11 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
         continue
       }
       const card = completed.get(entry.cardId)
-      if (card) entry = resumeResolvedConflict(tasksDir, entry)
+      if (card) entry = resumeResolvedConflict(tasksDir, entry, card)
+      if (entry.blocked) {
+        results.push({ id: entry.cardId, status: 'conflict', blocked: true, reason: entry.blocked.reason, files: entry.blocked.files })
+        continue
+      }
       if (!card ||!['building', 'ready', 'issue', 'integrating'].includes(entry.state)) continue
       try {
         // A Builder that resolved a conflict rebased its one commit onto rebaseTarget.

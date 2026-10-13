@@ -206,7 +206,11 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
     assert.equal(git(prepared.workspacePath, 'status', '--porcelain'), '')
     assert.equal(readWorktrees(f.tasks)['T-1'].state, 'conflict')
     assert.equal(git(f.integration, 'status', '--porcelain'), '')
-    assert.deepEqual(reconcileCompletedWorktrees({ tasksDir: f.tasks }), [], 'a conflict is never retried in a loop')
+    // Moved back to Completed unchanged: the board retries once per move (the card leaving Completed stops the loop).
+    const [again] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.deepEqual([again.status, again.files], ['conflict', ['app.js']])
+    assert.equal(git(prepared.workspacePath, 'rev-parse', 'HEAD'), commit)
+    assert.equal(git(prepared.workspacePath, 'status', '--porcelain'), '')
 
     // The Builder resolves it in its own worktree, then hands off again: it integrates.
     const head = git(f.integration, 'rev-parse', 'HEAD')
@@ -690,6 +694,72 @@ test('integrationCheck: rebased card passes and integrates, a failure returns to
     assert.equal(second.to, 'owner')
     assert.match(readFileSync(findCard(f.tasks, 'T-2').path, 'utf8'), /Needs you[\s\S]*T-2 still does not integrate with master after 2 tries[\s\S]*\?/)
     assert.equal(git(f.integration, 'rev-parse', 'HEAD'), master)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// HK22: a conflict-state card (the board already tried and moved it out) dragged back to Completed.
+async function conflictCardMovedBack({ masterFile, mutate, failures = 1 }) {
+  const f = fixture()
+  const t1 = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1', 'app.js'), gitSettings: f.settings })
+  writeFileSync(join(f.integration, 'check.mjs'), "import fs from 'node:fs'\nif (!fs.existsSync('check.mjs')) process.exit(1)\n")
+  writeFileSync(join(f.integration, masterFile), 'master\n')
+  git(f.integration, 'add', 'check.mjs', masterFile)
+  git(f.integration, 'commit', '-m', 'master moves on')
+  writeFileSync(join(t1.workspacePath, 'app.js'), 'card\n')
+  git(t1.workspacePath, 'add', 'app.js')
+  git(t1.workspacePath, 'commit', '-m', 'card')
+  mutate?.(t1.workspacePath)
+  f.complete('T-1')
+  const entries = JSON.parse(readFileSync(join(f.tasks, '.board-worktrees.json'), 'utf8'))
+  Object.assign(entries['T-1'], { state: 'conflict', conflictFailures: failures, rebaseTarget: git(f.integration, 'rev-parse', 'HEAD') })
+  writeFileSync(join(f.tasks, '.board-worktrees.json'), JSON.stringify(entries))
+  const run = () => reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test', integrationCheck: 'node check.mjs' })
+  return { f, t1, run }
+}
+
+test('a conflict card moved back to Completed that rebases cleanly is rebased and checked by the board', async () => {
+  const { f, t1, run } = await conflictCardMovedBack({ masterFile: 'other.js' })
+  try {
+    const before = git(t1.workspacePath, 'rev-parse', 'HEAD')
+    const [result] = (await run()).filter(r => r.id === 'T-1')
+    assert.equal(result.status, 'integrated', result.reason)
+    assert.notEqual(readWorktrees(f.tasks)['T-1'].commit, before, 'the board rebased the card commit itself')
+    assert.equal(git(f.integration, 'show', 'HEAD:app.js'), 'card')
+    assert.equal(git(f.integration, 'show', 'HEAD:other.js'), 'master')
+    // check.mjs exists only on master: a PASS proves the check ran on the rebased card.
+    assert.match(readdirSync(join(f.tasks, '.evidence')).map(n => readFileSync(join(f.tasks, '.evidence', n), 'utf8')).join(), /result: PASS/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('a conflict card moved back to Completed that conflicts again stays out and names files and action', async () => {
+  const { f, t1, run } = await conflictCardMovedBack({ masterFile: 'app.js', failures: 2 })
+  try {
+    const head = git(t1.workspacePath, 'rev-parse', 'HEAD'), master = git(f.integration, 'rev-parse', 'HEAD')
+    const [result] = (await run()).filter(r => r.id === 'T-1')
+    assert.deepEqual([result.status, result.to], ['returned', 'owner'])
+    for (const text of [result.reason, readFileSync(findCard(f.tasks, 'T-1').path, 'utf8')]) {
+      assert.match(text, /app\.js/)
+      assert.match(text, /drag the card back to Completed/)
+    }
+    assert.equal(findCard(f.tasks, 'T-1').column, 'owner')
+    assert.equal(git(t1.workspacePath, 'rev-parse', 'HEAD'), head)
+    assert.equal(git(t1.workspacePath, 'status', '--porcelain'), '')
+    assert.equal(git(f.integration, 'rev-parse', 'HEAD'), master, 'nothing integrated')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+for (const [name, mutate, why] of [
+  ['a second commit', dir => { writeFileSync(join(dir, 'app.js'), 'again\n'); git(dir, 'commit', '-am', 'second') }, /expected exactly one card commit; found 2/],
+  ['an uncommitted change', dir => writeFileSync(join(dir, 'app.js'), 'dirty\n'), /uncommitted changes/],
+]) test(`a conflict card moved back with ${name} is not retried: Owner gets the reason and files`, async () => {
+  const { f, run } = await conflictCardMovedBack({ masterFile: 'other.js', mutate })
+  try {
+    const [result] = (await run()).filter(r => r.id === 'T-1')
+    assert.deepEqual([result.status, result.to], ['returned', 'owner'])
+    assert.match(result.reason, why)
+    assert.match(result.reason, /app\.js/)
+    assert.equal(readWorktrees(f.tasks)['T-1'].conflictFailures, 1, 'nothing was attempted, so no try is spent')
+    assert.match(readFileSync(findCard(f.tasks, 'T-1').path, 'utf8'), /could not retry it[\s\S]*app\.js[\s\S]*drag the card back to Completed/)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
