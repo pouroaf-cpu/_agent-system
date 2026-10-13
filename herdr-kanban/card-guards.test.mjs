@@ -33,7 +33,7 @@ function board(t, column, id, text) {
   writeFileSync(join(tasks, column, `${id}.md`), `# ${id} — card\n${text}`)
   return tasks
 }
-const hkb = (tasks, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8' })
+const hkb = (tasks, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8', windowsHide: true })
 
 test('a handoff restores dropped required sections, leaving previously empty sections alone', t => {
   const tasks = board(t, 'queue', 'T-1', PLAN.replace('## Acceptance criteria\n- Measurement saved.', '## Acceptance criteria\n<!-- empty in the saved copy -->'))
@@ -141,7 +141,7 @@ test('hkb found sends an out-of-scope finding to the Kanban Manager inbox and le
   try {
     mkdirSync(join(tasks, 'working'), { recursive: true })
     writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')
-    const run = (...a) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...a], { encoding: 'utf8', env: { ...process.env, KANBAN_MANAGER_INBOX: inbox } })
+    const run = (...a) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...a], { encoding: 'utf8', windowsHide: true, env: { ...process.env, KANBAN_MANAGER_INBOX: inbox } })
     assert.notEqual(run('found', 'T-1').status, 0)
     const ok = run('found', 'T-1', 'e2e/i201.spec.ts fails on base too: timeout at Bacteriostatic water')
     assert.equal(ok.status, 0, ok.stderr)

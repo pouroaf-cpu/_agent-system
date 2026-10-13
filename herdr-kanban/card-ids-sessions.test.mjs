@@ -111,7 +111,7 @@ test('an empty herdr workspace list fails instead of reading as "no workspaces"'
       import assert from 'node:assert/strict';
       import { workspaceList } from ${JSON.stringify(moduleUrl)};
       await assert.rejects(() => workspaceList(), /malformed/);
-    `], { cwd: root, env: { ...process.env, HERDR_BIN_PATH: process.execPath }, encoding: 'utf8' })
+    `], { cwd: root, env: { ...process.env, HERDR_BIN_PATH: process.execPath }, encoding: 'utf8', windowsHide: true })
     assert.equal(result.status, 0, result.stderr)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

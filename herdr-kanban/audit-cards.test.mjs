@@ -61,7 +61,7 @@ test('finding counts ignore indented wrapped version numbers and require a space
 
 test('hkb audit: FINDINGS without valid JSON is INCOMPLETE; valid JSON lands in Owner', () => {
   const dir = fixture()
-  const hkb = (id, note) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', dir, 'audit', id, note], { encoding: 'utf8' })
+  const hkb = (id, note) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', dir, 'audit', id, note], { encoding: 'utf8', windowsHide: true })
   try {
     const card = createCard(dir, { title: 'Journey', brief: 'Visual flow', audit: 'general' })
     fill(card, report([finding(1)], 'not json'))

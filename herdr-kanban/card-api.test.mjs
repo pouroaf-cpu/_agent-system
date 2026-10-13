@@ -31,6 +31,7 @@ before(async () => {
     cwd: new URL('.', import.meta.url),
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'missing-herdr-for-card-api-test' },
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   base = `http://127.0.0.1:${port}`
   for (let i = 0; ; i++) {

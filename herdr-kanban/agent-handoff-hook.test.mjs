@@ -19,7 +19,7 @@ function setup(agent, handoff) {
   ].map(e => JSON.stringify(e)).join('\n') + '\n')
   if (handoff) appendFileSync(join(tasks, '.history', 'T-1.jsonl'), JSON.stringify({ event: 'handoff', stage: 'x', outcome: handoff.outcome, at: new Date(Date.now() - (handoff.ageMs ?? 0)).toISOString() }) + '\n')
   const run = (command, input = {}) => spawnSync(process.execPath, [hook], {
-    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, duration_ms: 1500, transcript_path: transcript, ...input }), encoding: 'utf8',
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, duration_ms: 1500, transcript_path: transcript, ...input }), encoding: 'utf8', windowsHide: true,
   })
   return { tasks, run, hkb: `node 'C:\\x\\hkb.mjs' --tasks '${tasks}' done T-1` }
 }
@@ -58,7 +58,7 @@ test('AC3: a non-hkb command, a Reviewer, and garbage stdin all leave the agent 
   assert.equal(setup('b-t-1', { outcome: 'done' }).run('npm test').stdout, '')
   const reviewer = setup('r-t-1', { outcome: 'done' })
   assert.equal(reviewer.run(reviewer.hkb).stdout, '')
-  const r = spawnSync(process.execPath, [hook], { input: 'not json', encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [hook], { input: 'not json', encoding: 'utf8', windowsHide: true })
   assert.equal(r.status, 0)
   assert.equal(r.stdout, '')
 })

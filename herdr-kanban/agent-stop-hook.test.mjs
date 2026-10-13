@@ -19,7 +19,7 @@ test('a board agent stopping on a question is blocked once, then routed to the m
     { type: 'user', timestamp: new Date(Date.now() - 60000).toISOString(), message: { role: 'user', content: `hand off with node 'hkb.mjs' --tasks '${tasks}' move T-1 queue` } },
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Should the card use (a) or (b)?' }] } },
   ].map(e => JSON.stringify(e)).join('\n') + '\n')
-  const stop = active => spawnSync(process.execPath, [hook], { input: JSON.stringify({ transcript_path: transcript, stop_hook_active: active }), env: { ...process.env, KANBAN_CONFIG: config }, encoding: 'utf8' })
+  const stop = active => spawnSync(process.execPath, [hook], { input: JSON.stringify({ transcript_path: transcript, stop_hook_active: active }), env: { ...process.env, KANBAN_CONFIG: config }, encoding: 'utf8', windowsHide: true })
 
   const first = stop(false)
   assert.equal(JSON.parse(first.stdout).decision, 'block')

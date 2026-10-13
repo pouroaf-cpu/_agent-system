@@ -62,7 +62,7 @@ test('missing/changed policies and malformed hook input fail closed within the s
   const f = fixture()
   assert.ok(denied(guardEvent(f.path, 'wrong', f.event({ op: 'read', path: f.source }))))
   assert.ok(denied(guardEvent(`${f.path}.missing`, f.hash, f.event({ op: 'read', path: f.source }))))
-  const child = spawnSync(process.execPath, [guardScript, 'hook', f.path, f.hash], { input: '{', encoding: 'utf8' })
+  const child = spawnSync(process.execPath, [guardScript, 'hook', f.path, f.hash], { input: '{', encoding: 'utf8', windowsHide: true })
   assert.equal(child.status, 2)
 })
 

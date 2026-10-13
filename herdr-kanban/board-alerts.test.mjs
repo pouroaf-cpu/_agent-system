@@ -51,7 +51,7 @@ test('board alerts fire at each threshold, persist cooldowns across restarts, an
     // A fresh Node process cannot fall back on module memory for deduplication.
     execFileSync(process.execPath, ['--input-type=module', '-e',
       "import { checkBoardAlerts } from './lib/board-alerts.mjs'; await checkBoardAlerts({ project: 'Fixture', tasksDir: process.argv[1], now: Number(process.argv[2]), send: () => { throw Error('duplicate push') }, append: () => { throw Error('duplicate inbox') } })",
-      f.tasksDir, String(now)], { cwd: import.meta.dirname })
+      f.tasksDir, String(now)], { cwd: import.meta.dirname, windowsHide: true })
     assert.equal(f.pushes.length, 1)
     assert.equal(Object.keys(JSON.parse(readFileSync(join(f.tasksDir, '.board-alerted.json')))).length, 1)
   }

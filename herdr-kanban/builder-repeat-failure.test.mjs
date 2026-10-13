@@ -14,7 +14,7 @@ test('a second Builder [implementation] failure on the same plan routes to Plann
   try {
     mkdirSync(join(dir, 'working'))
     writeFileSync(join(dir, 'working', 'T-1.md'), '# T-1 — plan stop rule\n## Files\n- `app.mjs`\n')
-    const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, 'issue', 'T-1', '[implementation] plan stop condition hit'], { encoding: 'utf8' })
+    const hkb = () => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, 'issue', 'T-1', '[implementation] plan stop condition hit'], { encoding: 'utf8', windowsHide: true })
     let run = hkb()
     assert.equal(run.status, 0, run.stderr)
     const queued = findCard(dir, 'T-1')
