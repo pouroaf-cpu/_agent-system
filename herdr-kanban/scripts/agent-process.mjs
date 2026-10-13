@@ -7,15 +7,18 @@ import { stopServersIn } from '../lib/orphan-servers.mjs'
 const file = process.argv[2]
 const spec = JSON.parse(readFileSync(file, 'utf8'))
 unlinkSync(file)
+const since = Date.now()
 const child = spawn(spec.exe, spec.args, { cwd: spec.cwd, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true })
 const report = message => { if (process.connected) process.send(message, () => {}) }
 const finished = value => { writeFileSync(spec.exitFile + '.tmp', JSON.stringify(value)); renameSync(spec.exitFile + '.tmp', spec.exitFile) }
 // Agents leave dev servers, browsers and MCP servers running after they exit (efficiency audit
 // 2026-10-03; 52 stale herdr tabs the same day). Track the agent's tree while it runs and kill
 // whatever is left when it exits. ponytail: 30 s snapshots; a grandchild born and orphaned
-// between snapshots is missed.
+// between snapshots is missed. An agent that exits before its first listing is rooted from its
+// leftover children by parent pid and start time (`since`/`until`).
 const trees = new PaneProcessTrees()
-const watch = () => trees.observe([{ key: 'agent', shellPid: child.pid }]).catch(() => {})
+const agent = { key: 'agent', shellPid: child.pid, since }
+const watch = () => trees.observe([agent]).catch(() => {})
 let timer, doneTimer, timesTimer
 // The snapshots miss a server whose parent exited between them, so the card's worktree is swept too.
 const cleanup = async () => {
@@ -47,4 +50,4 @@ child.once('spawn', () => {
   }, spec.donePollMs ?? 5000)
 })
 child.once('error', err => { console.error(err.message); clearInterval(timer); clearInterval(doneTimer); finished({ exitCode: 1, error: err.message }); report({ error: err.message }); process.exitCode = 1 })
-child.once('exit', async (code, signal) => { await cleanup(); finished({ exitCode: code ?? 1, signal, childPid: child.pid }); process.exitCode = code ?? 1 })
+child.once('exit', async (code, signal) => { agent.until = Date.now(); await cleanup(); finished({ exitCode: code ?? 1, signal, childPid: child.pid }); process.exitCode = code ?? 1 })

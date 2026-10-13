@@ -56,3 +56,23 @@ test('pane retirement kills only its tree, including orphans, and tolerates exit
   assert.equal(stuckClosed, true, "cleanup failure must not block pane close")
   assert.equal(stuck.panes.size, 1)
 })
+
+test('an agent gone before its first listing still has its leftover children killed', async () => {
+  const ft = ms => String((BigInt(ms) + 11644473600000n) * 10000n)
+  const p = (pid, parent, ms, name = 'node.exe') => ({ pid, parent, name, started: ft(ms) })
+  const since = 1_000_000
+  const agent = { key: 'agent', shellPid: 40, since }
+  let rows = [
+    p(50, 40, 1_000_200), p(51, 50, 1_000_300), // leftover and its child
+    p(40, 0, 1_004_100, 'powershell.exe'), // pid 40 reused after the agent exited
+    p(60, 40, 1_004_200), p(61, 40, 999_000), // children of the reused pid / of an older process
+  ]
+  const killed = []
+  const trees = new PaneProcessTrees({ boardPid: 1, list: async () => { agent.until = 1_004_000; return rows }, kill: async targets => {
+    for (const row of targets) { killed.push(row.pid); rows = rows.filter(r => r.pid !== row.pid) }
+  } })
+  await trees.observe([agent])
+  await trees.close('agent')
+  assert.deepEqual(killed, [51, 50])
+  assert.deepEqual(rows.map(r => r.pid).sort((a, b) => a - b), [40, 60, 61])
+})

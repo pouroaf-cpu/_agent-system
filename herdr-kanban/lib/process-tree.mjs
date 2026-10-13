@@ -23,6 +23,8 @@ async function killProcesses(rows) {
 
 const identity = p => `${p.pid}:${p.started}`
 const valid = p => Number.isInteger(p.pid) && p.pid > 0 && /^\d+$/.test(String(p.started))
+// Epoch ms to a FILETIME, the unit of `started`.
+const fileTime = ms => (BigInt(ms) + 11644473600000n) * 10000n
 
 // Remember descendants while their pane lives, including children whose parent later exits.
 export class PaneProcessTrees {
@@ -37,14 +39,20 @@ export class PaneProcessTrees {
     const rows = await this.list()
     const protectedPids = new Set(rows.filter(p => /^herdr(?:\.exe)?$/i.test(p.name)).map(p => p.pid))
     for (let pid = this.boardPid; pid && !protectedPids.has(pid); pid = rows.find(p => p.pid === pid)?.parent) protectedPids.add(pid)
-    for (const { key, shellPid } of panes) {
+    for (const { key, shellPid, since, until } of panes) {
       let tree = this.panes.get(key)
+      const from = since === undefined ? undefined : fileTime(since), to = until === undefined ? undefined : fileTime(until)
+      let root = rows.find(p => p.pid === shellPid)
+      // A process that took the pid after the shell exited is not the shell.
+      if (root && valid(root) && to !== undefined && BigInt(root.started) > to) root = undefined
+      // A shell gone before its first listing is rooted from the children it left, by parent pid and start time.
+      const seeds = from === undefined ? [] : rows.filter(row => row.parent === shellPid && valid(row) && !protectedPids.has(row.pid) && BigInt(row.started) >= from && (to === undefined || BigInt(row.started) <= to))
       if (!tree) {
-        const root = rows.find(p => p.pid === shellPid)
-        if (!root || !valid(root) || protectedPids.has(root.pid)) continue
-        tree = new Map([[identity(root), root]])
+        if (root ? !valid(root) || protectedPids.has(root.pid) : !seeds.length) continue
+        tree = new Map(root ? [[identity(root), root]] : [])
         this.panes.set(key, tree)
       }
+      for (const row of seeds) tree.set(identity(row), row)
       // Once reuse is observed, the old PID can never establish ancestry again.
       for (const [id, p] of tree) if (rows.some(row => row.pid === p.pid && identity(row) !== id)) tree.delete(id)
       const owned = new Set(rows.filter(p => tree.has(identity(p))).map(p => p.pid))
