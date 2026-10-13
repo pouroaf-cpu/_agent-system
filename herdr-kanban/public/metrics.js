@@ -1,6 +1,8 @@
 const headings = ['NZ reporting period', 'Integrated', 'Archived', 'Finished', 'Kick-backs', '[planning]', '[implementation]', '[evidence]', '[operational]', 'Untagged', 'Delivery failed', 'No handoff', 'Planner failures', 'Stalls', 'Owner escalations', 'Kick-backs / finished']
 const difficulties = ['tiny', 'easy', 'medium', 'hard']
 headings.push(...difficulties.flatMap(d => [`${d} attempts`, `${d} kick-backs`]))
+const stepHeadings = ['NZ day', 'Role', 'Group', 'Sessions', 'Unknown steps', 'Median steps', 'p90 steps', 'Median tokens']
+const stepGroups = [['all', 'All'], ['child', 'Child of a split'], ['notSplit', 'Not split'], ['parent', 'Split parent']]
 async function get(url) {
   const response = await fetch(url)
   const data = await response.json()
@@ -43,6 +45,34 @@ async function refresh() {
       } catch (error) {
         const message = document.createElement('p')
         message.textContent = `Could not load metrics: ${error.message}`
+        section.append(message)
+      }
+      try {
+        const { rollup } = await get(`/api/session-steps?project=${encodeURIComponent(project)}`)
+        const wrap = document.createElement('div')
+        wrap.className = 'table-wrap'
+        const table = document.createElement('table')
+        table.setAttribute('aria-label', `${project} steps per session`)
+        const head = table.createTHead().insertRow()
+        for (const label of stepHeadings) {
+          const cell = document.createElement('th')
+          cell.scope = 'col'
+          cell.textContent = label
+          head.append(cell)
+        }
+        const body = table.createTBody()
+        const show = value => value == null ? '—' : value
+        for (const row of rollup) for (const role of ['planner', 'builder']) for (const [group, label] of stepGroups) {
+          const g = row[role][group]
+          if (group !== 'all' && !g.sessions) continue
+          const tr = body.insertRow()
+          for (const value of [row.day, role === 'planner' ? 'Planner' : 'Builder', label, g.sessions, g.unknown, g.medianSteps, g.p90Steps, g.medianTokens]) tr.insertCell().textContent = show(value)
+        }
+        wrap.append(table)
+        section.append(wrap)
+      } catch (error) {
+        const message = document.createElement('p')
+        message.textContent = `Could not load step roll-up: ${error.message}`
         section.append(message)
       }
       return section
