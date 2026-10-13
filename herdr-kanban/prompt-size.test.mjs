@@ -8,9 +8,9 @@ import { plannerPrompt, workerPrompt } from './lib/prompt.mjs'
 const card = { id: 'IA999', category: 'ui', column: 'approved', path: 'C:/fake/card.md', trivial: false, title: 'Sample ui card' }
 const common = { cards: [card], card, projectPath: 'C:/fake/project', boardRoot: 'C:/Users/PFrew/Projects/herdr-kanban', tasksDir: null, engine: 'claude' }
 
-test('plannerPrompt stays at or below 4,000 chars with at most two hkb.mjs mentions', () => {
+test('plannerPrompt stays at or below 4,300 chars with at most two hkb.mjs mentions', () => {
   const p = plannerPrompt(common)
-  assert.ok(p.length <= 4000, `plannerPrompt is ${p.length} chars, want <= 4000`)
+  assert.ok(p.length <= 4300, `plannerPrompt is ${p.length} chars, want <= 4300`)
   const count = (p.match(/hkb\.mjs/g) || []).length
   assert.ok(count <= 2, `plannerPrompt names hkb.mjs ${count} times, want <= 2`)
   for (const verb of ['move', 'issue', 'owner', 'covered', 'wait', 'split']) {

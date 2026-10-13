@@ -733,6 +733,8 @@ async function pollProject(project) {
         model: config.models.planning,
         engine: engineFor('planning'),
         maxPlanners: config.maxPlanners ?? 4,
+        // The Finder is on for the live board; "finder": false in board.config.json turns it off.
+        finder: config.finder ?? !process.env.KANBAN_TEST,
         assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
         mission: config.mission,
         onHold: (err) => ambiguousHold(project, err),

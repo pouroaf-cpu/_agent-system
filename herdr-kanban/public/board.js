@@ -375,7 +375,7 @@ function stopPicking() {
 // right now. Comes from /api/board `laneTimes`; without it no timer is shown.
 const TIMED_LANES = { planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', review: 'Review', completed: 'Completed' };
 const ACTIVE_VERB = { planning: 'Planning', working: 'Building', review: 'Reviewing' };
-const ROLE_VERB = { planner: 'Planning', builder: 'Building', reviewer: 'Reviewing', 'plan check': 'Checking plan' };
+const ROLE_VERB = { finder: 'Finding', planner: 'Planning', builder: 'Building', reviewer: 'Reviewing', 'plan check': 'Checking plan' };
 const AGENT_EXPECTED = new Set(['planning', 'working']);
 const IDLE_WARN_MS = 20 * 60000;
 
@@ -434,7 +434,7 @@ function cardStatus(card) {
   if (queued === 0) return timer?.tone === 'active' ? timer : { text: 'Reviewing', tone: 'active' };
   if (queued > 0) return { text: 'Review queued', tone: 'muted' };
   if (timer) return timer;
-  if (ind?.status === 'working') return { text: review ? 'Reviewing' : 'Planning', tone: 'active', title: ind.stage + ': ' + ind.reason };
+  if (ind?.status === 'working') return { text: review ? 'Reviewing' : ind.stage === 'Finder' ? 'Finding' : 'Planning', tone: 'active', title: ind.stage + ': ' + ind.reason };
   const bind = card.column === 'working' && state.bindings?.[card.id];
   if (bind) return { text: 'Building' + (bind.started ? ' · ' + fmtAge(Date.now() - Date.parse(bind.started)) : ''), tone: 'active' };
   return null;
@@ -1267,7 +1267,7 @@ function renderManagerTasksScreen() {
   tiny.append(enabled, ' Enable local tiny Builders (Ollama)'); wrap.append(tiny);
   const stages = state.config?.agentSettings || {};
   const catalog = state.config?.supportedAgentSettings || {};
-  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) {
+  for (const [stage, label] of [['finder', 'Finder'], ['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) {
     const current = stages[stage] || {};
     const line = document.createElement('div'); line.className = 'settings-agent-row';
     const title = document.createElement('strong'); title.textContent = label;
@@ -2822,7 +2822,7 @@ function renderDrawer() {
   const grid = document.createElement('div');
   grid.className = 'override-grid';
   const stagePick = document.createElement('select');
-  for (const [stage, label] of [['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
+  for (const [stage, label] of [['finder', 'Finder'], ['planning', 'Planner'], ['plancheck', 'Plan checker'], ['working', 'Legacy Builder'], ['review', 'Reviewer'], ...['tiny', 'easy', 'medium', 'hard'].map(d => [`builder-${d}`, `Builder ${d}`])]) { const o = document.createElement('option'); o.value = stage; o.textContent = label; stagePick.append(o); }
   const oe = document.createElement('select'), om = document.createElement('select'), or = document.createElement('select'), os = document.createElement('button');
   stagePick.setAttribute('aria-label', 'Stage'); oe.setAttribute('aria-label', 'Engine'); om.setAttribute('aria-label', 'Model'); or.setAttribute('aria-label', 'Reasoning');
   os.type = 'button'; os.className = 'btn'; os.textContent = 'Save override';

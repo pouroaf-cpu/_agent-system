@@ -16,9 +16,9 @@ export function nextCardId(prefix = 'T-', ids = []) {
 // [a-z][a-z0-9_-]{0,31}: b-i149, p-tf40, r-hk14, b-t-11. herdr adds nothing; a
 // clash with a live name gets -2, -3 appended by agentStart. The older kb-* names
 // stay recognised until those agents finish.
-const ROLES = { planner: 'p', builder: 'b', reviewer: 'r', issues: 'i', auditor: 'a' }
+const ROLES = { planner: 'p', builder: 'b', reviewer: 'r', issues: 'i', auditor: 'a', finder: 'f' }
 export const agentName = (role, cardId) => `${ROLES[role]}-${String(cardId).toLowerCase()}`
-const ROLE_NAME = /^([pbria])-(t-\d+|[a-z]{1,3}\d+)(?:-\d+)?$/
+const ROLE_NAME = /^([pbriaf])-(t-\d+|[a-z]{1,3}\d+)(?:-\d+)?$/
 const LEGACY = [[/^kb-review-/, 'r'], [/^kb-plan-/, 'i'], [/^kb-planner-/, 'p'], [/^kb-t-/, 'b']]
 export function agentRole(name = '') {
   return ROLE_NAME.exec(name)?.[1] ?? LEGACY.find(([rx]) => rx.test(name))?.[1] ?? null

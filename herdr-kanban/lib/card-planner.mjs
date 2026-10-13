@@ -10,7 +10,7 @@ import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, as
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
-import { agentName, plannerPrompt } from './prompt.mjs'
+import { agentName, plannerPrompt, finderPrompt } from './prompt.mjs'
 import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
@@ -18,7 +18,7 @@ import { controlState, assertPromptAllowed, projectEnvironment } from './project
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
@@ -104,7 +104,48 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
   operatorRetry(tasksDir, card.id, moved.column)
   return { card: moved, investigation }
 }
-export const busyPlanners = agents => agents.filter(a => agentRole(a.name) === 'p' && !['idle', 'done'].includes(a.agent_status)).length
+// A Finder holds a Planner slot while it runs.
+export const busyPlanners = agents => agents.filter(a => ['p', 'f'].includes(agentRole(a.name)) && !['idle', 'done'].includes(a.agent_status)).length
+
+// Finder (HK29): a read-only Haiku agent lists the code a card touches before the first Planner.
+// It never holds a card: a failure, timeout or empty print moves on to the Planner with no list.
+export const FINDER_TIMEOUT_MS = 5 * 60 * 1000
+const FINDER_LINE = /^\s*(?:[-*]\s+)?`([^`]+)` lines (\d+)-(\d+), `([^`]+)` [—–-] (.+?)\s*$/
+// Keeps only `path` lines A-B, `name` — why lines with a relative path and a sane range.
+export function parseFinderList(text) {
+  const lines = []
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const m = FINDER_LINE.exec(raw)
+    if (!m) continue
+    const [, path, start, end, name, why] = m
+    if (/^[\\/]|^[a-z]:/i.test(path) || path.split(/[\\/]/).includes('..') || +start < 1 || +end < +start) continue
+    const line = `\`${path.trim()}\` lines ${start}-${end}, \`${name.trim()}\` — ${why}`
+    if (!lines.includes(line)) lines.push(line)
+    if (lines.length === 40) break
+  }
+  return lines
+}
+// A headless log tail is stream-json (one event per line); a herdr pane is plain text.
+export function finderText(raw) {
+  return String(raw ?? '').split(/\r?\n/).flatMap(line => {
+    let event
+    try { event = JSON.parse(line) } catch { return [line] }
+    if (event?.type === 'result') return [String(event.result ?? '')]
+    if (event?.type === 'assistant') return (event.message?.content || []).filter(p => p?.type === 'text').map(p => p.text)
+    return typeof event === 'object' ? [] : [line]
+  }).join('\n')
+}
+// Replaces any earlier ## Finder list; sits just before ## Files, or at the end without one.
+export function writeFinderList(card, lines) {
+  const text = readFileSync(card.path, 'utf8')
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const section = ['## Finder list', ...lines.map(l => `- ${l}`), '', ''].join(eol)
+  const old = /^## Finder list\r?\n[\s\S]*?(?=^## |$(?![\s\S]))/m
+  const bare = old.test(text) ? text.replace(old, '') : text
+  const files = /^## Files\r?$/m.exec(bare)
+  writeFileSync(card.path, files ? bare.slice(0, files.index) + section + bare.slice(files.index)
+    : bare.trimEnd() + eol + eol + section.trimEnd() + eol)
+}
 // A card a Codex Planner could not plan is escalated to this Claude model (hkb.mjs sets the flag).
 export const ESCALATION_MODEL = 'claude-opus-5-5'
 // token audit 2026-10-12, F8: amend mode fired in 0 of 461 real sessions because this test
@@ -127,7 +168,7 @@ export function amendment(tasksDir, card) {
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 const plannerEnvFile = project => { try { return projectEnvironment(project)?.path } catch { return undefined } }
 
-export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4 }) {
+export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4, finder = false }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
   const { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead: readPane = paneRead, paneSendKeys: sendKeys = paneSendKeys, deliver, recordUsageStart, recordUsageFinish } = io
@@ -335,6 +376,55 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       if (checkWorkflowLimits(tasksDir, card.id, 'planner')) continue
       if (startRetryHold(readWorkflow(tasksDir)[card.id], 'planner', now)) continue // a transient start failure backs off
       if (mission?.id && card.mission !== mission.id) continue
+      // Finder first, for a card that has never had a Planner. It uses a Planner slot while it
+      // runs; the Planner starts on the poll after it starts, or in this pass once it has ended.
+      const finderDue = finder && !owner && !card.audit && !cardRunContext()
+      const finderState = finderDue ? readWorkflow(tasksDir)[card.id]?.finder : undefined
+      if (finderDue && !finderState?.done) {
+        let paneId = finderState?.paneId
+        try {
+          if (!finderState?.running) {
+            if (busyPlanners(agents) + launched >= maxPlanners) continue
+            if (io === defaultIO) assertPromptAllowed(project)
+            const backend = backendFor('planner')
+            const workspace = backend === 'headless' ? null : await agentWorkspaceOr(projectPath, session)
+            const created = await tabCreate({ cwd: projectPath, label: `${card.id} Finder`, focus: false, workspace, session, backend })
+            paneId = created?.root_pane?.pane_id
+            if (!paneId) throw new Error('Finder launch returned no pane')
+            if (!isHeadless(paneId)) await waitForPrompt(paneId, { session })
+            const picked = assignmentForCard?.(card, 'finder')
+            const finderModel = picked?.model ?? 'claude-haiku-5-5'
+            const started = await agentStart({ name: agentName('finder', card.id), paneId, browser: false, model: finderModel, engine: picked ? engineForAssignment(picked) : { kind: 'claude' }, timeoutMs: START_TIMEOUT_MS, session })
+            const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
+            await deliver(paneId, finderPrompt({ card, projectPath }), session, null, { engine: 'claude', force: isHeadless(paneId) })
+            recordUsageStart({ tasksDir, project, requestId: card.id, cardIds: [card.id], role: 'finder', paneId, name: started?.name ?? agentName('finder', card.id), model: finderModel, agentSession: agent?.agent_session })
+            updateWorkflow(tasksDir, card.id, { finder: { running: true, paneId, startedAt: new Date(now).toISOString() } })
+            appendHistory(tasksDir, card.id, { event: 'finder-started', stage: 'planning', paneId, model: finderModel })
+            launched++
+            continue
+          }
+          const agent = agents.find(a => a.pane_id === paneId)
+          const age = now - Date.parse(finderState.startedAt)
+          const timedOut = age >= FINDER_TIMEOUT_MS
+          // herdr lags before it takes the prompt, so a missing or idle agent is not "exited" in the first 15 s.
+          if (!timedOut && !((!agent || ['idle', 'done'].includes(agent.agent_status)) && age >= 15000)) continue
+          const raw = await readPane(paneId, session).catch(() => '')
+          await recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
+          await paneClose(paneId, session).catch(() => {})
+          if (agent) agents.splice(agents.indexOf(agent), 1) // its slot is free for the Planner below
+          const lines = parseFinderList(finderText(raw))
+          if (lines.length) writeFinderList(card, lines)
+          const log = logAgentOutput(tasksDir, card.id, 'finder-output', raw)
+          const status = timedOut ? 'timeout' : lines.length ? 'listed' : 'empty'
+          updateWorkflow(tasksDir, card.id, { finder: { done: true, status, lines: lines.length } })
+          appendHistory(tasksDir, card.id, { event: 'finder-finished', stage: 'planning', status, lines: lines.length, log: log.log })
+        } catch (error) {
+          if (error.paused) throw error
+          if (paneId) await paneClose(paneId, session).catch(() => {})
+          updateWorkflow(tasksDir, card.id, { finder: { done: true, status: 'failed', error: error.message } })
+          appendHistory(tasksDir, card.id, { event: 'finder-finished', stage: 'planning', status: 'failed', error: error.message })
+        }
+      }
       let fresh = deliveryFailed || !!owner?.startRetry
       if (owner?.lifecycle === 'retiring') continue
       if (owner?.lifecycle === 'retired') {

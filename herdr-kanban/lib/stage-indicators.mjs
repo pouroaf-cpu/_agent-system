@@ -21,6 +21,11 @@ export function stageIndicators({ tasksDir, reviewRoot, board, planners, claims,
   const byPane = new Map(agents.map(agent => [agent.pane_id, agent]))
   for (const card of Object.values(board).flat()) {
     if (card.column === 'planning') {
+      // The Finder runs before any Planner exists; it clears when its `finder` record is replaced.
+      if (workflow[card.id]?.finder?.running) {
+        result[card.id] = { status: 'working', stage: 'Finder', reason: 'Finder listing the code this card touches' }
+        continue
+      }
       const owner = planners[card.id]
       if (!owner || owner.lifecycle !== 'active') continue
       const agent = byPane.get(owner.paneId)

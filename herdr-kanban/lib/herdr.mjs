@@ -67,6 +67,8 @@ const CLAUDE_BROWSER_MCP =fileURLToPath(new URL('../claude-browser-mcp.json', im
 // The built-ins board agents called in 135 audited runs; the rest (Artifact alone ~12.9k
 // tokens) rode along on every call. MCP tools are not affected by --tools.
 const CLAUDE_BOARD_TOOLS = 'Bash,PowerShell,Read,Edit,Write,Grep,Glob,ToolSearch,TaskStop'
+// The Finder only reads: no Bash, PowerShell, Edit or Write, so it cannot edit files or run git.
+const CLAUDE_FINDER_TOOLS = 'Read,Grep,Glob'
 
 // Codex board profile: `codex -p board` layers ~/.codex/board.config.toml on the user config.
 // It turns off the curated Vercel and Google Drive skills (~3.3k tokens a call, never used by
@@ -479,6 +481,7 @@ const BOARD_MODELS = {
   r: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-5-5', 'claude-haiku-4-5', 'claude-sonnet-5'],
   a: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-4-5'],
   i: ['gpt-5.6-luna', 'gpt-6-luna', 'claude-opus-5-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+  f: ['claude-haiku-5-5'],
   p: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5'],
   b: ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5', 'qwen3-coder', 'claude-opus-5-5'],
 }
@@ -540,7 +543,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
   } else {
     args.push('--dangerously-skip-permissions')
     // --disable-slash-commands drops the skill listing; cards name skills by SKILL.md path.
-    args.push('--tools', CLAUDE_BOARD_TOOLS, '--disable-slash-commands')
+    args.push('--tools', agentRole(name) === 'f' ? CLAUDE_FINDER_TOOLS : CLAUDE_BOARD_TOOLS, '--disable-slash-commands')
     // Same rule as the Codex branch: no user MCPs or claude.ai connectors, and the browser MCP
     // only when the card browses.
     args.push('--strict-mcp-config')
@@ -548,7 +551,7 @@ export function agentStartArgs({ name, paneId, model, engine, kind, workspacePat
     // HERDR started from a Claude session passes on its CLAUDE_CODE_CHILD_SESSION
     // marker, which turns off transcript saving, and the transcript is where the
     // board reads a Claude agent's token usage.
-    args.push('--settings', agentRole(name) === 'p' ? CLAUDE_PLANNER_SETTINGS : CLAUDE_AGENT_SETTINGS)
+    args.push('--settings', ['p', 'f'].includes(agentRole(name)) ? CLAUDE_PLANNER_SETTINGS : CLAUDE_AGENT_SETTINGS)
     // "user" and "project" settings both walk up to the operator's home directory and
     // load ~/.claude/CLAUDE.md on every call (audit 2026-10-12-herdr-kanban-planner-token-
     // efficiency, Finding 1): that file is written for the operator's interactive chats and
