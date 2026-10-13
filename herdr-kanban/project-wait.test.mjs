@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inboxLog } from './lib/inbox.mjs'
-import { wakeDecision, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom, settled, inboxWake, askWake } from './scripts/project-wait.mjs'
+import { wakeDecision, parseArgs, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom, settled, inboxWake, askWake } from './scripts/project-wait.mjs'
 
 test('planFails returns recent plan-check FAIL lines from recently changed history files', () => {
   const root = mkdtempSync(join(tmpdir(), 'km-planfails-'))
@@ -47,6 +47,27 @@ test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly d
   assert.equal(digest(3, 3, 'x.md'), 'RE-ARM')
   assert.equal(digest(3, 1, 'x.md'), 'RE-ARM')
   assert.equal(digest(3, 5, 'x.md'), 'INBOX 2 new ASK/FOUND line(s) in x.md: read and handle them')
+})
+
+test('--wake-inbox: any new inbox line wakes at once', () => {
+  const before = { project: 'TokenManager', cards: [], inbox: ['old'], stuck: 0 }
+  const wake = now => wakeDecision(before, { ...before, ...now }, true)
+  assert.equal(wake({ inbox: ['old', 'ALERT run over 13 steps'] }), 'INBOX ALERT run over 13 steps')
+  assert.equal(wake({}), null)
+  assert.equal(wake({ inbox: [] }), null)
+  assert.equal(wake({ inbox: ['ALERT new'] }), 'INBOX ALERT new')
+  assert.equal(wake({ inbox: ['old', 'x ASK P I1 (a)', 'FOUND P I1: problem'] }), 'INBOX x ASK P I1 (a)\nFOUND P I1: problem')
+  assert.equal(wake({ inbox: ['old', 'ALERT new'], cards: ['TokenManager/owner/T1.md'] }), 'OWNER/POU TokenManager/owner/T1.md')
+})
+
+test('without --wake-inbox, plain inbox lines still wait for the hourly digest', () => {
+  const before = { project: 'Tradeflow', cards: [], inbox: ['old'], stuck: 0 }
+  const now = { ...before, inbox: ['old', 'ALERT new', 'FOUND T1: problem', 'x ASK P I1 (a)'] }
+  assert.equal(wakeDecision(before, now), null)
+  assert.equal(wakeDecision(before, now, false), null)
+  assert.deepEqual(parseArgs(['--project', 'X']), { project: 'X', wakeInbox: false })
+  assert.deepEqual(parseArgs(['--project', 'X', '--wake-inbox']), { project: 'X', wakeInbox: true })
+  for (const bad of [[], ['--project'], ['--project', 'X', '--other'], ['--project', 'X', '--wake-inbox', 'y'], ['--project', 'a/b']]) assert.equal(parseArgs(bad), null)
 })
 
 test('an inbox burst settles into one wake with every line', async () => {

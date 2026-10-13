@@ -4,6 +4,7 @@
 // either: each wake is a BOARD EVENT on the operator's phone (Remote Control), so they wait in the
 // inbox and the hourly re-arm reports only their count (operator via Injectbuddy work, 2026-10-09).
 // ASK lines do wake it: a Planner question sat unanswered for up to an hour (operator, 2026-10-10).
+// --wake-inbox makes every new inbox line wake it at once (Token Manager: its HK43 alerts are plain lines).
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -100,19 +101,30 @@ async function checkCards(project) {
   } catch { return null }
 }
 
-export function wakeDecision(before, now) {
+export function wakeDecision(before, now, wakeInbox = false) {
   const added = now.cards.filter(c => !before.cards.includes(c))
   if (added.length) return `OWNER/POU ${added.join(', ')}`
+  // Lines, not counts: the chat trims handled lines. lines() already drops blank ones.
+  const fresh = wakeInbox ? now.inbox.filter(l => !before.inbox.includes(l)) : []
+  if (fresh.length) return `INBOX ${fresh.join('\n')}`
   if (now.stuck != null && before.stuck != null && now.stuck > before.stuck) return `STUCK ${now.project}=${now.stuck}`
   return null
 }
 
+export function parseArgs(argv) {
+  const [flag, project, ...extra] = argv
+  if (flag !== '--project' || !project || /[\\/]|^\.{1,2}$/.test(project)) return null
+  if (extra.length > 1 || (extra.length && extra[0] !== '--wake-inbox')) return null
+  return { project, wakeInbox: extra.length === 1 }
+}
+
 async function main() {
-  const [flag, project, ...extra] = process.argv.slice(2)
-  if (flag !== '--project' || !project || extra.length || /[\\/]|^\.{1,2}$/.test(project)) {
-    console.error('Usage: project-wait.mjs --project <name>')
+  const args = parseArgs(process.argv.slice(2))
+  if (!args) {
+    console.error('Usage: project-wait.mjs --project <name> [--wake-inbox]')
     process.exit(1)
   }
+  const { project, wakeInbox } = args
   const root = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
   const inbox = process.env.KM_INBOX || `C:/Users/PFrew/Projects/_roles/inbox/${project}-INBOX.md`
   const tasks = join(root, project, 'TASKS')
@@ -139,7 +151,7 @@ async function main() {
   for (let tick = 0; ; tick++) {
     await new Promise(r => setTimeout(r, 10000))
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
-    const wake = wakeDecision(before, now)
+    const wake = wakeDecision(before, now, wakeInbox)
     if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
     if (newAsks().length) {
       const added = await settled(newAsks, 0)
