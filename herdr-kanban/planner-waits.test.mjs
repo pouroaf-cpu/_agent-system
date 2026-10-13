@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, existsSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url'
 
 const root = mkdtempSync(join(tmpdir(), 'planner-waits-'))
 process.env.KANBAN_CONFIG = join(root, 'board.config.json') // delivery records live beside it
-writeFileSync(process.env.KANBAN_CONFIG, JSON.stringify({ projects: ['uncertain', 'missing', 'blocked'], projectsRoot: root }))
+writeFileSync(process.env.KANBAN_CONFIG, JSON.stringify({ projects: ['uncertain', 'missing', 'blocked', 'asked', 'stale'], projectsRoot: root }))
 const { createCard, findCard } = await import('./lib/cards.mjs')
-const { runCardPlanner, readCardPlanners } = await import('./lib/card-planner.mjs')
+const { runCardPlanner, readCardPlanners, operatorRetry } = await import('./lib/card-planner.mjs')
 const saveCardPlanners = (dir, data) => writeFileSync(join(dir, '.card-planners.json'), JSON.stringify(data))
 const { readDelivery, saveDelivery } = await import('./lib/delivery-state.mjs')
 const { readWorkflow, recordOperationalFailure, updateWorkflow } = await import('./lib/workflow-state.mjs')
@@ -120,6 +120,33 @@ try {
     renameSync(join(dir, 'queue', 'T-1-prereq.md'), join(dir, 'archive', 'T-1-prereq.md'))
     const planned = await run(40000)
     assert.equal(planned.spawnedNewAgent, true); assert.equal(log.starts, 2)
+  }
+  // 6. HK36 (Injectbuddy I1233): an open `hkb owner` ask is a decision wait, never a Planner start,
+  // until the operator's note lifts it through operatorRetry (what /api/card-update calls).
+  {
+    const { dir, log, run } = fixture('asked')
+    const section = '\n\n## Current feedback\nNeeds you: Which top bar look, A or B?\nHistory entry: h1\n'
+    const card = createCard(dir, { title: 'Asked', brief: 'Pick the look' })
+    recordOperationalFailure(dir, findCard(dir, card.id), 'Which top bar look, A or B?', dir)
+    appendFileSync(card.path, section)
+    // Stale hold fingerprint: only the new guard can stop the Planner now.
+    updateWorkflow(dir, card.id, { operational: { ...readWorkflow(dir)[card.id].operational, fingerprint: 'plan edited' } })
+    await run(Date.now())
+    assert.equal(log.starts, 0, 'no Planner while the ask is open')
+    assert.deepEqual(log.delivered, [])
+    assert.equal(readWorkflow(dir)[card.id].waitFor.decision, true)
+    assert.ok(history(dir, card.id).some(e => e.event === 'planner-decision-wait'))
+    assert.ok(!history(dir, card.id).some(e => e.event === 'planner-start'))
+    operatorRetry(dir, card.id, 'planning')
+    assert.equal(readWorkflow(dir)[card.id].waitFor, null)
+    await run(Date.now() + 1)
+    assert.equal(log.starts, 1, 'the operator note lifts the wait and the card replans')
+    // Control: a Needs you section with no operational hold is stale, so it plans at once.
+    const stale = fixture('stale')
+    const old = createCard(stale.dir, { title: 'Stale', brief: 'Plan it' })
+    appendFileSync(old.path, section)
+    await stale.run(Date.now())
+    assert.equal(stale.log.starts, 1)
   }
   console.log('Planner waits passed')
 } finally { rmSync(root, { recursive: true, force: true }) }

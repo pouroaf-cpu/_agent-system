@@ -2,7 +2,7 @@ import { builderDifficulty } from './difficulty.mjs'
 import { engineForAssignment } from './agent-settings.mjs'
 import { recordBuilderAttempt, recordBuilderReturn } from './workflow-state.mjs'
 import { formatNZTime } from './nz-time.mjs'
-import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
+import { readCardPlanners, requestPlannerCorrection, openOperatorAsk } from './card-planner.mjs'
 import { assertPromptAllowed, controlState, projectEnvironment } from './project-control.mjs'
 import { cardRunContext, assertCardRunSelection, bindCardRunAssignment } from './card-run.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow, failureCategory, failureDestination, evidenceFingerprint } from './workflow-state.mjs'
@@ -46,6 +46,15 @@ export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '',
   if (card.column !== 'working') return card
   const binding = readBindings(tasksDir)[card.id]
   if (binding?.pane_id && isSpawning(binding.pane_id)) return card
+  // HK36 (Injectbuddy I1233): the Builder's `hkb owner` ask is still open, so its exit is not a
+  // crash. Park the card in Owner with the hold untouched; no Queue retry, no Planning return.
+  // Owner, not Working: an unbound Working card is re-reaped on every grace period.
+  const ask = openOperatorAsk(tasksDir, card)
+  if (ask) {
+    unbind(tasksDir, card.id)
+    appendHistory(tasksDir, card.id, { event: 'builder-exit-open-ask', stage: 'working', reason: String(reason || 'Builder ended without a valid handoff').trim(), ask: ask.text.slice(0, 300) })
+    return moveCard(tasksDir, card.id, 'owner')
+  }
   // The engine (or just its model) ran out of usage: block it board-wide and wait in Queue,
   // where a fresh Builder continues in the same worktree once it resets. Not a failed build.
   const limit = boardRoot && usageLimit(evidence, now)

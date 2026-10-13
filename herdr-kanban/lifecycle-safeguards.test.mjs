@@ -10,7 +10,7 @@ import { syncReviewClaims } from './lib/review-claims.mjs'
 import { routeBuilderNoHandoff } from './lib/autospawn.mjs'
 import { workerPrompt, plannerPrompt } from './lib/prompt.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
-import { operationalHold, readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
+import { operationalHold, readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { runCardPlanner, drainIssues } from './lib/card-planner.mjs'
 
 test('Builder fallback kicks back to Queue once, then to Planning on a second crash in a row (audit #7)', t => {
@@ -45,6 +45,35 @@ test('Builder fallback kicks back to Queue once, then to Planning on a second cr
   assert.equal(JSON.parse(readFileSync(join(tasks, '.board-worktrees.json')))['T-1'].state, 'building')
   assert.match(readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8'), /builder-no-handoff/)
   assert.equal(existsSync(join(tasks, 'issues')), false, 'nothing lands in Issues')
+})
+
+test('Builder exit while its hkb owner ask is open parks the card in Owner with the hold intact (HK36, I1233)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lifecycle-open-ask-'))
+  const tasks = join(root, 'TASKS'), working = join(tasks, 'working')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(working, { recursive: true })
+  const ask = 'Which top bar look, A or B?'
+  const body = '**Workflow:** card-owned\n## Approved brief\nPick the look.\n## Files\n- `app.mjs`\n## Implementation plan\nFix the bar.\n## Acceptance criteria\n- AC1: it works\n## Current feedback\nNeeds you: ' + ask + '\nHistory entry: h1\n'
+  writeFileSync(join(working, 'T-1.md'), '# T-1 — asked\n' + body)
+  writeFileSync(join(working, 'T-2.md'), '# T-2 — stale ask\n' + body)
+  writeFileSync(join(tasks, '.workflow-state.json'), JSON.stringify({ 'T-1': { builder: { pane_id: 'pane-1', name: 'builder' } }, 'T-2': { builder: { pane_id: 'pane-2', name: 'builder' } } }))
+  recordOperationalFailure(tasks, findCard(tasks, 'T-1'), ask, root)
+  updateWorkflow(tasks, 'T-1', { noHandoffStreak: 1 })
+  const hold = readWorkflow(tasks)['T-1'].operational
+  const reason = 'Session pane-1 is missing without a valid Builder handoff from Working'
+
+  // AC1: no Queue retry, no Planning return, hold and streak untouched.
+  const parked = routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-1', reason })
+  assert.equal(parked.column, 'owner')
+  assert.deepEqual(readWorkflow(tasks)['T-1'].operational, hold)
+  assert.equal(readWorkflow(tasks)['T-1'].noHandoffStreak, 1)
+  const events = readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8')
+  assert.match(events, /builder-exit-open-ask/)
+  assert.doesNotMatch(events, /builder-no-handoff/)
+  assert.doesNotMatch(readFileSync(parked.path, 'utf8'), /Kicked back/)
+
+  // Control: a stale Needs you section with no operational hold is an ordinary crash.
+  assert.equal(routeBuilderNoHandoff({ tasksDir: tasks, cardId: 'T-2', reason: reason.replace('pane-1', 'pane-2') }).column, 'queue')
 })
 
 test('Builder that filed hkb issue then exited is kicked back with its own note, not a generic one (I519)', async t => {

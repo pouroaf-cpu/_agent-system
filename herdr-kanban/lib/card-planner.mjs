@@ -1,6 +1,6 @@
 import { backendFor } from './agent-backend.mjs'
 import { isHeadless } from './headless.mjs'
-import { formatNZTime } from './nz-time.mjs'
+import { formatNZTime, formatNZText } from './nz-time.mjs'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -60,6 +60,16 @@ export function requestPlannerCorrection(dir, cardId, { correction = true, failu
 export function operatorRetry(tasksDir, cardId, to) {
   updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null, waitFor: null })
   if (to === 'planning' || to === 'issues') requestPlannerCorrection(tasksDir, cardId)
+}
+// HK36 (Injectbuddy I1233): the open "Needs you" ask an `hkb owner` handoff left, or null. Only
+// a hold whose reason is the ask's own text counts; a hold set by anything else, or an ask the
+// operator already answered (operatorRetry cleared the hold), does not match, so those flows
+// are unchanged.
+export function openOperatorAsk(tasksDir, card) {
+  const reason = readWorkflow(tasksDir)[card.id]?.operational?.reason
+  const flat = text => String(text).replace(/\r/g, '').trim()
+  if (card.ask?.kind !== 'Needs you' || !reason || flat(card.ask.text) !== flat(formatNZText(reason))) return null
+  return card.ask
 }
 // Issues is retired (2026-09-25). A card an older board left there goes to Planning on
 // startup; its held failure is cleared so a fresh Planner takes it. A card that cannot move
@@ -320,6 +330,13 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         askForApproval(tasksDir, card)
         stopCardRun(project, card.id, 'Waiting for investigation approval')
         continue
+      }
+      // HK36: an open `hkb owner` ask holds the card as a decision wait; the operator's note
+      // lifts it through operatorRetry. Never plan over a question nobody has answered.
+      const ask = !cardRunContext() && openOperatorAsk(tasksDir, card)
+      if (ask && !readWorkflow(tasksDir)[card.id]?.waitFor?.decision) {
+        updateWorkflow(tasksDir, card.id, { waitFor: { cards: [], files: [], decision: true, why: ask.text, since: new Date(now).toISOString() } })
+        appendHistory(tasksDir, card.id, { event: 'planner-decision-wait', stage: 'planning', note: ask.text })
       }
       let owner = owners[card.id]
       // Blocked cards are planned ahead (operator, 2026-10-03); the Builder start still waits
