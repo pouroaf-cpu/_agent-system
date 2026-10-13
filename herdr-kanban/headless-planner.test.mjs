@@ -85,3 +85,60 @@ test('Planner launches headlessly, resumes corrections, and recovers exits witho
   }
 })
 
+test('Planner resumes within the prompt-cache hour and starts fresh after it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'headless-planner-cache-'))
+  const config = join(root, 'config.json'), fake = join(root, 'fake.mjs'), driver = join(root, 'driver.mjs')
+  const source = name => new URL(name, import.meta.url).href
+  writeFileSync(config, JSON.stringify({ projects: ['Proof'], projectsRoot: root, agentBackend: { planner: 'headless' } }))
+  writeFileSync(fake, `console.log(JSON.stringify({type:'thread.started',thread_id:'planner-session'})); console.log(JSON.stringify({argv:process.argv.slice(2)})); setTimeout(()=>{},600)`)
+  writeFileSync(driver, `
+    import assert from 'node:assert/strict'
+    import {readFileSync,appendFileSync,readdirSync} from 'node:fs'
+    import {headless,createHeadless} from ${JSON.stringify(source('./lib/headless.mjs'))}
+    import {runCardPlanner,requestPlannerCorrection} from ${JSON.stringify(source('./lib/card-planner.mjs'))}
+    import {createCard,moveCard,findCard} from ${JSON.stringify(source('./lib/cards.mjs'))}
+    import {agentList,paneRead} from ${JSON.stringify(source('./lib/herdr.mjs'))}
+    const root=${JSON.stringify(root)}, tasksDir=root+'/TASKS', MIN=60000
+    Object.assign(headless,createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]}))
+    const card=createCard(tasksDir,{title:'Proof',brief:'A specific approved outcome'})
+    const args={project:'Proof',projectPath:root,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},model:'claude-sonnet-5-5',engine:'claude'}
+    const untilDone=async()=>{for(let n=0;n<600;n++){const rows=await agentList('proof');if(rows.length&&rows.every(a=>a.agent_status==='done'&&a.agent_session))return rows;await new Promise(r=>setTimeout(r,50))}throw Error('Timed out')}
+    const turns=async id=>(await paneRead(id)).split('\\n').flatMap(line=>{try{const e=JSON.parse(line);return e.argv?[e.argv]:[]}catch{return []}})
+    const first=await runCardPlanner(args)
+    await untilDone()
+    const correct=async(text,now)=>{
+      moveCard(tasksDir,card.id,'owner'); await runCardPlanner(args)
+      moveCard(tasksDir,card.id,'planning')
+      appendFileSync(findCard(tasksDir,card.id).path,'\\n\\n**Review feedback**\\n\\n'+text+'\\n')
+      requestPlannerCorrection(tasksDir,card.id)
+      return runCardPlanner({...args,now})
+    }
+    const base=Date.now()
+    // AC2: 59 minutes idle keeps the recorded session.
+    const warm=await correct('Warm correction text',base+59*MIN)
+    assert.equal(warm.spawnedNewAgent,false); assert.equal(warm.pane_id,first.pane_id)
+    await untilDone()
+    assert.deepEqual((await turns(first.pane_id))[1].slice(-2),['--resume','planner-session'])
+    // AC1: 61 minutes idle launches a new Planner without --resume.
+    const cold=await correct('Cold correction text',base+61*MIN)
+    assert.equal(cold.spawnedNewAgent,true); assert.notEqual(cold.pane_id,first.pane_id)
+    await untilDone()
+    const launch=(await turns(cold.pane_id))[0]
+    assert(!launch.includes('--resume'),'fresh Planner is not resumed')
+    // AC4: its own history event and a labelled usage row.
+    const events=readFileSync(tasksDir+'/.history/'+card.id+'.jsonl','utf8').split('\\n').filter(Boolean).map(l=>JSON.parse(l)).filter(e=>e.event==='planner-fresh-start')
+    assert.equal(events.length,1); assert(events[0].idleMinutes>=61); assert.equal(events[0].previousSession,'planner-session')
+    // AC3: the fresh brief carries the correction under Current feedback.
+    const briefs=tasksDir+'/.briefs', name=readdirSync(briefs).find(n=>n.startsWith(card.id)&&n.includes('planner'))
+    assert.match(readFileSync(briefs+'/'+name,'utf8'),/## Current feedback[\\s\\S]*Cold correction text/)
+    console.log('planner cache window passed')
+  `)
+  try {
+    const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-planner' }, timeout: 90000, windowsHide: true })
+    assert.match(result.stdout, /planner cache window passed/)
+  } finally {
+    await new Promise(r => setTimeout(r, 1200))
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+

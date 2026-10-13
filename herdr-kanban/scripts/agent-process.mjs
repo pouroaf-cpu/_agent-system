@@ -10,7 +10,7 @@ unlinkSync(file)
 const since = Date.now()
 const child = spawn(spec.exe, spec.args, { cwd: spec.cwd, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true })
 const report = message => { if (process.connected) process.send(message, () => {}) }
-const finished = value => { writeFileSync(spec.exitFile + '.tmp', JSON.stringify(value)); renameSync(spec.exitFile + '.tmp', spec.exitFile) }
+const finished = value => { writeFileSync(spec.exitFile + '.tmp', JSON.stringify({ ...value, endedAt: new Date().toISOString() })); renameSync(spec.exitFile + '.tmp', spec.exitFile) }
 // Agents leave dev servers, browsers and MCP servers running after they exit (efficiency audit
 // 2026-10-03; 52 stale herdr tabs the same day). Track the agent's tree while it runs and kill
 // whatever is left when it exits. ponytail: 30 s snapshots; a grandchild born and orphaned

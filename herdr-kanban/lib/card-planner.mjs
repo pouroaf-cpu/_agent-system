@@ -178,6 +178,9 @@ export function amendment(tasksDir, card) {
 const defaultIO = { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, deliver, recordUsageStart, recordUsageFinish }
 const plannerEnvFile = project => { try { return projectEnvironment(project)?.path } catch { return undefined } }
 
+// A Claude session's prompt cache lasts an hour; resuming a colder session re-writes its whole transcript.
+const PLANNER_CACHE_MS = 60 * 60 * 1000
+
 export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot, model, engine, mission, onlyIds, assignmentForCard, onHold, onCardError, io = defaultIO, now = Date.now(), handoffGraceMs = 120000, maxPlanners = 4, finder = false }) {
   if (cardRunContext()) assertCardRunSelection(project, onlyIds || [], 'planner')
   if (io === defaultIO && controlState(project).paused && !cardRunContext()) return null
@@ -263,14 +266,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
-    const submit = async (card, owner, agent) => {
+    const submit = async (card, owner, agent, startNote) => {
       assertCardRunSelection(project, [card.id], 'planner')
       assertPlannerAssignment(tasksDir, card.id, owner)
       // Launch can take a minute; an operator may have moved the card meanwhile.
       if (findCard(tasksDir, card.id).column !== 'planning') return false
       bindCardRunAssignment(project, [card.id], 'planner', owner.paneId)
       await recordUsageFinish({ tasksDir, paneId: owner.paneId, agent, status: 'complete' })
-      recordUsageStart({ tasksDir, project, requestId: card.id, cardIds: [card.id], role: 'planner', paneId: owner.paneId, name: owner.name, model: owner.model || model, agentSession: agent?.agent_session })
+      recordUsageStart({ tasksDir, project, requestId: card.id, cardIds: [card.id], role: 'planner', paneId: owner.paneId, name: startNote ? `${owner.name} (${startNote})` : owner.name, model: owner.model || model, agentSession: agent?.agent_session })
       owner.submitted = true
       owner.submittedAt = new Date(now).toISOString()
       delete owner.inactiveSince
@@ -557,12 +560,20 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         appendFileSync(card.path, `\n\n**Planner fallback** ${formatNZTime(now)}\n\n${reason}. A fresh Planner is taking over this card; the previous session's output is saved in the card history.\n`)
         fresh = true
       }
-      let spawnedNewAgent = false
-      // Headless corrections resume the recorded session; no-handoff and failed
-      // delivery retries still use a fresh Planner. Herdr corrections stay fresh.
+      let spawnedNewAgent = false, startNote
+      // Headless corrections resume the recorded session while its prompt cache is warm; no-handoff
+      // and failed delivery retries still use a fresh Planner. Herdr corrections stay fresh.
       const pending = owner && agent && readDelivery(session, owner.paneId)
-      const resume = owner && agent && isHeadless(owner.paneId) && agent.agent_session && !fresh && (!escalation(card) || (owner.engine === 'claude' && owner.model === escalation(card).model))
+      const lastTurnAt = Date.parse(agent?.endedAt || agent?.startedAt || owner?.submittedAt)
+      const stale = !!(owner && agent && agent.agent_status !== 'working' && Number.isFinite(lastTurnAt) && Number(now) - lastTurnAt > PLANNER_CACHE_MS)
+      const resumable = owner && agent && isHeadless(owner.paneId) && agent.agent_session && !fresh && (!escalation(card) || (owner.engine === 'claude' && owner.model === escalation(card).model))
+      const resume = resumable && !stale
       if (owner && agent && !resume && (!pending || ['confirmed', 'cancelled', 'failed'].includes(pending.status))) {
+        if (resumable && stale && !deliveryFailed) {
+          const idleMinutes = Math.round((Number(now) - lastTurnAt) / 60000)
+          startNote = `fresh start, cache expired after ${idleMinutes} min`
+          appendHistory(tasksDir, card.id, { event: 'planner-fresh-start', stage: 'planning', reason: startNote, idleMinutes, previousSession: agent.agent_session, previousPane: owner.paneId })
+        }
         await retire(card, owner, agent, deliveryFailed ? 'Planner prompt delivery failed' : fresh ? 'Planner ended without a handoff' : 'Correction goes to a fresh Planner')
         agent = null
         fresh = true
@@ -591,7 +602,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         }
       }
       try {
-        await submit(card, owner, agent)
+        await submit(card, owner, agent, startNote)
       } catch (error) {
         if (error.paused || error.startFailed) throw error // failStart already closed the pane and counted it
         if (cardRunContext()) { stopCardRun(project, card.id, error.message); throw error }
@@ -608,7 +619,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         try {
           ;({ owner, agent } = await launch(card, previous))
           spawnedNewAgent = true
-          await submit(card, owner, agent)
+          await submit(card, owner, agent, startNote)
         } catch (replacementError) {
           if (!replacementError.startFailed) escalate(replacementError)
           throw replacementError
