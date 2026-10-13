@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { focusedText, writeBrief, writeCurrentFeedback, historyPath } from './lib/card-history.mjs'
+import { focusedText, projectConstraints, writeBrief, writeCurrentFeedback, historyPath } from './lib/card-history.mjs'
 import { workerPrompt, reviewerPrompt, psLiteral } from './lib/prompt.mjs'
 import { createCard } from './lib/cards.mjs'
 
@@ -92,14 +92,20 @@ test('every role brief carries the current PROJECT-CONSTRAINTS.md, not only the 
   writeFileSync(constraints, '## all\nOld rule.\n## ui\nUI rule.\n')
   const card = createCard(tasks, { title: 'Later rule', brief: 'Fix it.', category: 'code' })
   writeFileSync(constraints, '## all\nOld rule.\nCard checkouts have NO .env files.\n## code\nCode rule.\n## ui\nUI rule.\n')
-  for (const role of ['planner', 'builder', 'reviewer']) {
+  for (const role of ['planner', 'reviewer']) {
     const brief = readFileSync(writeBrief(tasks, card, role), 'utf8')
     assert.match(brief, /## Current project constraints\n[\s\S]*Card checkouts have NO \.env files\.[\s\S]*Code rule\./, role)
     assert.doesNotMatch(brief.split('## Current project constraints')[1], /UI rule/, 'other categories stay out')
     assert.doesNotMatch(brief, /^## Project constraints\r?$/m, `${role}: the current copy replaces the card's old one`)
   }
+  // HK47: the Builder brief points at the live file instead of carrying its body.
+  const builder = readFileSync(writeBrief(tasks, card, 'builder'), 'utf8')
+  assert.doesNotMatch(builder, /## Current project constraints/)
+  assert.doesNotMatch(builder, /^## Project constraints\r?$/m)
+  assert.ok(!builder.includes('Card checkouts have NO .env files.'))
+  assert.ok(builder.includes('PROJECT-CONSTRAINTS.md'))
   writeFileSync(constraints, '## all\nNewest rule.\n')
-  assert.match(readFileSync(writeBrief(tasks, card, 'builder'), 'utf8'), /Newest rule/, 'a later edit changes the brief revision')
+  assert.match(readFileSync(writeBrief(tasks, card, 'reviewer'), 'utf8'), /Newest rule/, 'a later edit changes the brief revision')
 })
 
 test('PowerShell literals survive spaces/apostrophes; generated handoff is directly runnable syntax', () => {
@@ -142,11 +148,33 @@ test('a kicked-back Planner brief holds Current feedback and drops the implement
   assert.doesNotMatch(plannerBrief, /## Implementation plan/)
   assert.doesNotMatch(plannerBrief, /Do the exact approved step/)
 
-  for (const role of ['builder', 'reviewer']) {
-    const brief = readFileSync(writeBrief(tasks, card, role), 'utf8')
-    assert.match(brief, /Do the exact approved step/, role)
-  }
+  assert.match(readFileSync(writeBrief(tasks, card, 'reviewer'), 'utf8'), /Do the exact approved step/)
+  const builderBrief = readFileSync(writeBrief(tasks, card, 'builder'), 'utf8')
+  assert.doesNotMatch(builderBrief, /Do the exact approved step/)
+  assert.ok(builderBrief.includes(card.path.replaceAll('\\', '/')))
 
   const history = readFileSync(historyPath(tasks, card.id), 'utf8').trim().split('\n').map(l => JSON.parse(l))
   assert.ok(history.some(e => e.event === 'brief-source' && e.stage === 'planner'))
+})
+
+// HK47 (token audit 2026-10-14, F5): AC1 size and pointers, AC2 verbatim sections, AC3 Reviewer unchanged.
+test('HK47 Builder brief points to the plan and constraints', () => {
+  const tasks = join(mkdtempSync(join(tmpdir(), 'builder-brief-size-')), 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  writeFileSync(join(tasks, 'PROJECT-CONSTRAINTS.md'), `## all\n${'Constraint line.\n'.repeat(300)}`)
+  const card = createCard(tasks, { title: 'Big card', brief: 'Add the thing.', category: 'code' })
+  const files = '- `lib/a.mjs` lines 1-9, `thing` — the change', prereq = '- Node on PATH; `lib/a.mjs` exists', ac = '- AC1: it works\n- AC2: it stays working'
+  appendFileSync(card.path, `\n## Implementation plan\n${'Plan step detail.\n'.repeat(500)}\n## Files\n${files}\n## Prerequisites\n${prereq}\n## Acceptance criteria\n${ac}\n\n**Decision** 2026-10-14T01:00:00.000Z\n\nUse the exact helper.\n`)
+  writeCurrentFeedback(tasks, card, 'Kicked back', '[implementation] Fix the edge case')
+
+  const builder = readFileSync(writeBrief(tasks, card, 'builder'), 'utf8')
+  assert.ok(builder.length < 6000, `${builder.length} chars`)
+  assert.ok(builder.includes(card.path.replaceAll('\\', '/')) && builder.includes('PROJECT-CONSTRAINTS.md'))
+  for (const verbatim of [files, prereq, ac, 'Use the exact helper.','## Current feedback\nKicked back: [implementation] Fix the edge case']) assert.ok(builder.includes(verbatim), verbatim)
+  assert.ok(!builder.includes('Plan step detail.') && !builder.includes('Constraint line.'))
+
+  // The Reviewer brief is the pre-change expression, not a stored copy of the old output.
+  const source = readFileSync(card.path, 'utf8'), constraints = projectConstraints(tasks, 'code')
+  const expected = `${focusedText(source, 'reviewer', { skip: ['Project constraints'] })}\n\n## Current project constraints\n${constraints}\n\nAuthoritative card: ${card.path}\nHistory (read only relevant entries on demand): ${historyPath(tasks, card.id)}\n`
+  assert.equal(readFileSync(writeBrief(tasks, card, 'reviewer'), 'utf8'), expected)
 })

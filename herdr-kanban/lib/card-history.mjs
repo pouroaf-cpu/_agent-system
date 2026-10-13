@@ -250,9 +250,16 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   // the card doesn't already show: current feedback, decisions/notes, and a constraints
   // update only when it differs from the card's own copy (token audit 2026-10-12, F3).
   // The current copy replaces the card's creation-time one (builder audit F8).
+  // A Builder gets the plan and constraints by path, not by value: it re-reads the brief on
+  // every step and the two bodies were about half of it (token audit 2026-10-14, F5).
+  const slash = p => String(p).replaceAll('\\', '/')
   const text = role === 'planner'
     ? focusedText(source, role, { keep: ['Current feedback'] }) + (constraints && constraints !== sectionBody(source, 'Project constraints') ? `\n\n## Current project constraints\n${constraints}` : '')
-    : focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
+    : role === 'reviewer'
+      ? focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
+      : focusedText(source, role, { skip: ['Implementation plan', ...(constraints ? ['Project constraints'] : [])] }) +
+        `\n\n## Where the rest is\nImplementation plan: read the ## Implementation plan section of the authoritative card ${slash(card.path)}` +
+        (constraints ? `\nProject constraints: read ## all${card.category ? ` and ## ${card.category}` : ''} in ${slash(join(tasksDir, 'PROJECT-CONSTRAINTS.md'))}` : '')
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })
