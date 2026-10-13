@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync,readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {recordUsageStart,recordUsageFinish,reconcileUsage,readUsage,usageSummary,mergeUsageSummaries} from './lib/request-usage.mjs'
+import {recordUsageStart,recordUsageFinish,reconcileUsage,readUsage,usageSummary,mergeUsageSummaries,runSteps,tokenSnapshots} from './lib/request-usage.mjs'
 import {agentStartArgs} from './lib/herdr.mjs'
 import {parseManagerTasks} from './lib/manager-tasks.mjs'
 test('late HERDR identity recovers initial zero, final totals and deduplicates double starts',()=>{
@@ -42,6 +42,24 @@ test('Claude runs learn their session from the agent list and read usage from th
   // m1 counts once (its last chunk), cache reads are cached input, usage before the run is excluded.
   assert.deepEqual(done.delta,{input:223,cachedInput:110,uncachedInput:113,output:27,reasoningOutput:8,total:250})
   assert.equal(usageSummary(dir,{root:dir})[0].tokens.total,250)
+  // Steps: m1 streamed twice counts once, m2 once; 'before' is excluded. No agent is started.
+  assert.equal(done.steps,2)
+  const last=tokenSnapshots(id,{root:dir}).at(-1)
+  assert.equal(runSteps({sessionId:id,start:{ordinal:-1},finish:{ordinal:last.ordinal}},{root:dir}),3)
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})
+test('reconcileUsage backfills steps on finished runs; an unreadable session ends as null',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'usage-steps-'))
+ try {
+  const id='c1a0de00-0000-4000-8000-000000000003'
+  const u={input_tokens:1,output_tokens:1}
+  const rows=[{type:'assistant',timestamp:'2026-09-26T00:00:01Z',message:{id:'a',usage:u}},{type:'assistant',timestamp:'2026-09-26T00:00:02Z',message:{id:'a',usage:u}},{type:'assistant',timestamp:'2026-09-26T00:00:03Z',message:{id:'b',usage:u}}]
+  mkdirSync(join(dir,'x'));writeFileSync(join(dir,'x',`${id}.jsonl`),rows.map(r=>JSON.stringify(r)).join('\n')+'\n')
+  const run=(sessionId)=>({runId:sessionId,sessionId,cardIds:['T-1'],status:'complete',delta:{total:2},start:{at:'2026-09-26T00:00:00Z',ordinal:-1},finish:{at:'2026-09-26T00:01:00Z',ordinal:2}})
+  writeFileSync(join(dir,'.request-usage.json'),JSON.stringify({runs:{ok:run(id),gone:run('c1a0de00-0000-4000-8000-0000000000ff')}}))
+  const runs=reconcileUsage(dir,[],{root:dir}).runs
+  assert.equal(runs.ok.steps,2);assert.equal(runs.gone.steps,null)
+  assert.equal(readUsage(dir).runs.ok.steps,2)
  }finally{rmSync(dir,{recursive:true,force:true})}
 })
 test('a finished Claude run never takes a later agent session that reuses its name',async()=>{

@@ -112,7 +112,7 @@ function sessionEvents(sessionId, { root } = {}) {
         const next = claudeCounters(row.message.usage), prev = claude.messages.get(id)
         for (const k of Object.keys(ZERO)) claude.sum[k] += next[k] - (prev?.[k] ?? 0)
         claude.messages.set(id, next)
-        rows.push({ kind: 'token_count', file: path, timestamp: row.timestamp, ordinal, counters: { ...claude.sum } })
+        rows.push({ kind: 'token_count', file: path, timestamp: row.timestamp, ordinal, counters: { ...claude.sum }, steps: claude.messages.size })
       } else if (row.type === 'user' && !row.toolUseResult && !row.isMeta) {
         rows.push({ kind: 'user', timestamp: row.timestamp, ordinal })
       } else if (type === 'token_count') {
@@ -261,26 +261,37 @@ function activeMatches(all, { runId, paneId, sessionId }) {
         : []
 }
 
-function closeRun(run, finish, status, at) {
+// Model turns a Claude run took, from the transcript alone: distinct message ids between
+// its start and finish. A turn with several tool calls counts once. Null when unknown.
+export function runSteps(run, { root } = {}) {
+  if (!run.sessionId || !Number.isFinite(run.finish?.ordinal)) return null
+  const rows = sessionEvents(run.sessionId, { root }).filter((r) => r.kind === 'token_count' && r.steps != null)
+  if (!rows.length) return null
+  const stepsAt = (n) => rows.filter((r) => r.ordinal <= n).at(-1)?.steps ?? 0
+  return stepsAt(run.finish.ordinal) - stepsAt(run.start?.ordinal ?? -1)
+}
+
+function closeRun(run, finish, status, at, root) {
   const delta = usageDelta(run.start, finish)
   Object.assign(run, {
     status: delta.status === 'ok' ? status : delta.status,
     finish: { at, ...finish },
     delta: delta.counters,
   })
+  run.steps = runSteps(run, { root })
   delete run.pendingFinish
   return run
 }
 
 function tryCompleteRun(run, { root, now = new Date() } = {}) {
   const finishSession = run.sessionId
-  if (!finishSession) return closeRun(run, { counters: null, missing: true }, run.status || 'unknown_session', now.toISOString())
+  if (!finishSession) return closeRun(run, { counters: null, missing: true }, run.status || 'unknown_session', now.toISOString(), root)
   // Claude logs no end-of-task marker: the board's finish is the end, and the session
   // may only have been learned now.
   const events = sessionEvents(finishSession, { root })
   if (events[0]?.claude) {
     if (!run.start?.counters || run.start.missing) run.start = startBefore(run.start.at, events)
-    return closeRun(run, events.filter((e) => e.kind === 'token_count').at(-1), 'complete', now.toISOString())
+    return closeRun(run, events.filter((e) => e.kind === 'token_count').at(-1), 'complete', now.toISOString(), root)
   }
   const finish = completionSnapshot(finishSession, run.start?.cursorOrdinal ?? run.start?.ordinal, { root })
   if (!finish) {
@@ -288,7 +299,7 @@ function tryCompleteRun(run, { root, now = new Date() } = {}) {
     run.pendingFinish = { at: now.toISOString(), reason: 'waiting_for_task_complete' }
     return null
   }
-  return closeRun(run, finish, 'complete', now.toISOString())
+  return closeRun(run, finish, 'complete', now.toISOString(), root)
 }
 
 export function refreshPendingUsage(tasksDir, { root } = {}) {
@@ -321,7 +332,7 @@ export async function recordUsageFinish({ tasksDir, runId, paneId, agent, bindin
   if (status === 'complete') tryCompleteRun(run, { root, now })
   else {
     const finish = finishSession ? latestTokenSnapshot(finishSession, { root }) : { counters: null, missing: true }
-    closeRun(run, finish, status, now.toISOString())
+    closeRun(run, finish, status, now.toISOString(), root)
   }
   write(tasksDir, all)
   return run
@@ -428,6 +439,14 @@ export function reconcileUsage(tasksDir, agents, { root } = {}) {
       }
     }
   }
+  // Backfill runs closed before steps were recorded. A few per tick, so no tick parses
+  // every old transcript; a stored null means "tried, unknown" and is not retried.
+  let backfilled = 0
+  for (const run of Object.values(all.runs)) {
+    if (backfilled >= 10) break
+    if (!run.finish || run.duplicateOf || run.steps !== undefined) continue
+    run.steps = runSteps(run, { root }); backfilled++; changed = true
+  }
   if (changed) write(tasksDir, all)
   return all
 }
@@ -466,7 +485,8 @@ export function cardUsageSummary(tasksDir) {
       else row.unknown++
       row.agents.push({ runId: run.runId, name: run.name, role: run.role, model: run.model,
         startedAt: run.start?.at, finishedAt: run.finish?.at, status: run.status,
-        tokens: confirmed ? run.delta : null, shared: !!run.shared || ids.length > 1 })
+        tokens: confirmed ? run.delta : null, steps: confirmed ? (run.steps ?? null) : null,
+        shared: !!run.shared || ids.length > 1 })
     }
   }
   return out

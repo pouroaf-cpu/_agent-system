@@ -2859,9 +2859,9 @@ function usageBreakdown(card, usage) {
   const table = document.createElement('table'); table.className = 'usage-table';
   table.setAttribute('aria-label', 'Recorded token usage by agent');
   const head = table.createTHead().insertRow();
-  for (const [index, label] of ['Agent / role', 'Fresh input', 'Cached input', 'Output', 'Total', 'Attribution / status'].entries()) {
+  for (const [index, label] of ['Agent / role', 'Fresh input', 'Cached input', 'Output', 'Total', 'Steps', 'Attribution / status'].entries()) {
     const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label;
-    if (index > 0 && index < 5) cell.className = 'usage-number';
+    if (index > 0 && index < 6) cell.className = 'usage-number';
     head.append(cell);
   }
   const appendTokenCells = (row, tokens) => {
@@ -2879,16 +2879,19 @@ function usageBreakdown(card, usage) {
     detail.textContent = `${run.model || 'Unknown model'} · Started: ${run.startedAt ? formatNZTime(run.startedAt) : 'Unknown'} · Finished: ${run.finishedAt ? formatNZTime(run.finishedAt) : 'Pending'}`;
     agent.append(detail); row.append(agent);
     appendTokenCells(row, run.tokens);
+    const steps = row.insertCell(); steps.className = 'usage-number';
+    steps.textContent = run.steps == null ? '—' : fmtNum(run.steps);
     row.insertCell().textContent = `${run.shared ? 'Shared — excluded from card total' : run.tokens ? 'Attributed to this card' : 'Missing / unverified — excluded'} · ${run.status || 'Unknown status'}`;
   }
   if (!usage?.agents?.length) {
-    const cell = body.insertRow().insertCell(); cell.colSpan = 6;
+    const cell = body.insertRow().insertCell(); cell.colSpan = 7;
     cell.textContent = 'No recorded agent runs. Missing usage is not zero.';
   }
   const footer = table.createTFoot().insertRow();
   const label = document.createElement('th'); label.scope = 'row'; label.textContent = 'Recorded card total'; footer.append(label);
   // Display the existing authoritative summary; never sum shared/unknown rows here.
   appendTokenCells(footer, usage?.tokens);
+  footer.insertCell(); // no steps total per card
   footer.insertCell().textContent = usage?.tokens ? (usage.unknown ? 'Partial — shared / unverified runs excluded' : 'Recorded attributable runs only') : 'Unverified — not zero';
   scroll.append(table);
   wrap.append(scroll);
