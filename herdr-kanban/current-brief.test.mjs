@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { focusedText, projectConstraints, writeBrief, writeCurrentFeedback, historyPath } from './lib/card-history.mjs'
+import { focusedText, projectConstraints, writeBrief, writeCurrentFeedback, historyPath, appendHistory } from './lib/card-history.mjs'
 import { workerPrompt, reviewerPrompt, psLiteral } from './lib/prompt.mjs'
 import { createCard } from './lib/cards.mjs'
 
@@ -155,6 +155,34 @@ test('a kicked-back Planner brief holds Current feedback and drops the implement
 
   const history = readFileSync(historyPath(tasks, card.id), 'utf8').trim().split('\n').map(l => JSON.parse(l))
   assert.ok(history.some(e => e.event === 'brief-source' && e.stage === 'planner'))
+})
+
+// HK48 (token audit 2026-10-14, F7): a rerun Builder brief points at the recorded baseline.
+function baselineBrief({ evidence, rerun }) {
+  const tasks = join(mkdtempSync(join(tmpdir(), 'baseline-brief-')), 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  const card = createCard(tasks, { title: 'Baseline card', brief: 'Add the thing.', category: 'code' })
+  // The card template already has an ## Evidence placeholder; a Builder fills that section in.
+  writeFileSync(card.path, readFileSync(card.path, 'utf8').replace(/^## Evidence\r?\n<!--[\s\S]*?-->/m, () => `## Evidence\n${evidence}`))
+  assert.ok(readFileSync(card.path, 'utf8').includes(`## Evidence\n${evidence}`), 'evidence placed in the card')
+  if (rerun) appendHistory(tasks, card.id, { event: 'builder-return', difficulty: 'easy', attempt: 1 })
+  assert.doesNotMatch(readFileSync(writeBrief(tasks, card, 'reviewer'), 'utf8'), /Baseline already recorded/)
+  return readFileSync(writeBrief(tasks, card, 'builder'), 'utf8')
+}
+
+test('HK48 AC1 a rerun Builder brief names the recorded baseline and says to reuse it', () => {
+  const brief = baselineBrief({ evidence: 'Base check: node check.mjs -> AC1 FAIL (before fix)', rerun: true })
+  assert.match(brief, /Baseline already recorded/)
+  assert.ok(brief.includes('Base check: node check.mjs -> AC1 FAIL'))
+  assert.match(brief, /do not rebuild or rerun the baseline unless the revised plan changes/)
+})
+
+test('HK48 AC2 a first-run Builder brief has no baseline pointer', () => {
+  assert.doesNotMatch(baselineBrief({ evidence: 'Base check: node check.mjs -> AC1 FAIL (before fix)', rerun: false }), /Baseline already recorded/)
+})
+
+test('HK48 AC3 a rerun with no recorded baseline has no baseline pointer', () => {
+  assert.doesNotMatch(baselineBrief({ evidence: 'Check: node check.mjs\nResult: pass', rerun: true }), /Baseline already recorded/)
 })
 
 // HK47 (token audit 2026-10-14, F5): AC1 size and pointers, AC2 verbatim sections, AC3 Reviewer unchanged.

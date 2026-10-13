@@ -241,6 +241,15 @@ export function projectConstraints(tasksDir, category) {
   const text = readFileSync(path, 'utf8')
   return [sectionBody(text, 'all'), category && sectionBody(text, category)].filter(Boolean).join('\n\n') || null
 }
+// A rerun Builder rebuilt and reran the baseline the prior run had already recorded (token audit
+// 2026-10-14, F7). Labels vary ("Base check:", "Baseline:", "- Base proof:"), so match a line
+// starting Base/Baseline, a few label words, then a colon.
+export function rerunBaseline(tasksDir, id, source) {
+  if (!previousBuilderAttempt(tasksDir, id)) return null
+  const line = sectionBody(source, 'Evidence').split('\n').find(l => /^[ \t]*(?:[-*][ \t]+)?\**Base(?:line)?\b[^:\n*]{0,30}:/i.test(l))
+  if (!line) return null
+  return `## Baseline already recorded\n${line.trim().slice(0, 300)}\nReuse this result from the card's ## Evidence; do not rebuild or rerun the baseline unless the revised plan changes the baseline files or the check.`
+}
 export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   const source = readFileSync(card.path, 'utf8')
   // The card's own copy is taken at creation; rules added later reach live cards
@@ -253,13 +262,15 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
   // A Builder gets the plan and constraints by path, not by value: it re-reads the brief on
   // every step and the two bodies were about half of it (token audit 2026-10-14, F5).
   const slash = p => String(p).replaceAll('\\', '/')
-  const text = role === 'planner'
+  const body = role === 'planner'
     ? focusedText(source, role, { keep: ['Current feedback'] }) + (constraints && constraints !== sectionBody(source, 'Project constraints') ? `\n\n## Current project constraints\n${constraints}` : '')
     : role === 'reviewer'
       ? focusedText(source, role, { skip: constraints ? ['Project constraints'] : [] }) + (constraints ? `\n\n## Current project constraints\n${constraints}` : '')
       : focusedText(source, role, { skip: ['Implementation plan', ...(constraints ? ['Project constraints'] : [])] }) +
         `\n\n## Where the rest is\nImplementation plan: read the ## Implementation plan section of the authoritative card ${slash(card.path)}` +
         (constraints ? `\nProject constraints: read ## all${card.category ? ` and ## ${card.category}` : ''} in ${slash(join(tasksDir, 'PROJECT-CONSTRAINTS.md'))}` : '')
+  const baseline = role === 'builder' ? rerunBaseline(tasksDir, card.id, source) : null
+  const text = baseline ? `${body}\n\n${baseline}` : body
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })
