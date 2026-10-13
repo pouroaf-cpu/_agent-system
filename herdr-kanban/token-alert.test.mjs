@@ -99,6 +99,28 @@ test('AC5: the line is one NZ-time line naming project, card, title, role, steps
   assert.doesNotMatch(line, /\d{4}-\d{2}-\d{2}T|\dZ\b/)
 })
 
+// Replaces only the card's first line, as a hand-written heading would look.
+function setHeading(f, heading) {
+  const text = readFileSync(f.card.path, 'utf8')
+  writeFileSync(f.card.path, heading + text.slice(text.search(/\r?\n/)))
+}
+
+test('AC7: a heading ID of more than one word still gives the card title', async (t) => {
+  const f = fixture(t)
+  setHeading(f, '# I1250 part 2 — Alert me now')
+  await finish(f, run(f, { role: 'planner', steps: 14 }))
+  assert.equal(lines(f).length, 1)
+  assert.ok(lines(f)[0].includes(' "Alert me now" planner '), lines(f)[0])
+})
+
+test('AC8: a card with no title still writes the alert and says "(no title)"', async (t) => {
+  const f = fixture(t)
+  setHeading(f, '# Untitled')
+  await finish(f, run(f, { role: 'planner', steps: 14 }))
+  assert.equal(lines(f).length, 1)
+  assert.ok(lines(f)[0].includes(' "(no title)" planner '), lines(f)[0])
+})
+
 test('AC6: finishing, refreshing and reconciling the same run again writes one line only', async (t) => {
   const f = fixture(t)
   const rec = run(f, { steps: 14 })

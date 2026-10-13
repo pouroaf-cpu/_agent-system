@@ -39,6 +39,6 @@ export function tokenAlertLine(run, { title = '', settings, now = Date.now(), fi
   const over = (settings.steps != null && steps != null && steps > settings.steps)
     || (settings.tokens != null && tokens != null && tokens > settings.tokens)
   if (!over) return null
-  const name = one(title).slice(0, 60)
+  const name = one(title).slice(0, 60) || '(no title)'
   return `- ${formatNZTime(now)} TOKEN ALERT ${one(run.project || project)} ${(run.cardIds || []).join(',')} "${name}" ${run.role} steps ${steps ?? 'unknown'} tokens ${tokens ?? 'unknown'} ended ${run.status} session ${one(file) || 'unknown'}\n`
 }

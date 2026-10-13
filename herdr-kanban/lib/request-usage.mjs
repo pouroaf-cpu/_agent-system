@@ -307,7 +307,7 @@ function flushTokenAlerts(tasksDir, all, { root } = {}) {
   for (const run of due) {
     try {
       const path = cardFile(tasksDir, run.cardIds?.[0])
-      const title = path ? readFileSync(path, 'utf8').split(/\r?\n/, 1)[0].match(/^#\s+\S+\s+[—-]\s+(.+)$/)?.[1] || '' : ''
+      const title = path ? readFileSync(path, 'utf8').split(/\r?\n/, 1)[0].match(/^#\s+.+?\s+[—-]\s+(.+)$/)?.[1] || '' : ''
       const file = run.finish.file || run.start?.file || sessionFile(run.sessionId, root)
       const line = tokenAlertLine(run, { title, settings, file, project: basename(dirname(tasksDir)) })
       if (line && settings.inbox) { postInbox(settings.inbox, line); run.tokenAlert = 'sent' }
