@@ -15,7 +15,7 @@ test('operator waiver is per-card, integrated/self-verified only, preserves coun
   writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': { state: 'issue', commit: 'kept' } }))
   const config = join(root, 'config.json'); writeFileSync(config, JSON.stringify({ projects: ['Proof'], projectsRoot: root, maxConcurrentAgents: 0, projectControls: { Proof: { paused: true } } }))
   const report = join(tasks, 'reports', 'result.json'); writeFileSync(report, JSON.stringify({ cardId: 'T-1', status: 'SELF-VERIFIED', independentReview: 'WAIVED BY USER', checks: [{ status: 'PASS' }] }))
-  const run = () => spawnSync(process.execPath, ['operator-complete.mjs', 'Proof', 'T-1', report, 'Explicit test operator waiver'], { cwd: new URL('.', import.meta.url), env: { ...process.env, KANBAN_CONFIG: config }, encoding: 'utf8' })
+  const run = () => spawnSync(process.execPath, ['operator-complete.mjs', 'Proof', 'T-1', report, 'Explicit test operator waiver'], { cwd: new URL('.', import.meta.url), env: { ...process.env, KANBAN_CONFIG: config }, encoding: 'utf8', windowsHide: true })
   assert.notEqual(run().status, 0)
   writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': { state: 'integrated', commit: 'kept' } }))
   const result = run(); assert.equal(result.status, 0, result.stderr)

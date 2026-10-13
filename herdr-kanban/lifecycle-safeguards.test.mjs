@@ -258,7 +258,7 @@ test('a Builder whose prompt never landed gets a fresh start, not a Planner roun
 test('locks whose PID was reused by a later process are reclaimed past their bound; a live owner keeps its lock', { skip: process.platform !== 'win32' }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'lock-reuse-'))
   const tasks = join(root, 'TASKS'); mkdirSync(tasks)
-  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'])
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { windowsHide: true })
   t.after(() => { other.kill(); rmSync(root, { recursive: true, force: true }) })
   await new Promise(done => other.once('spawn', done))
   const minutesAgo = m => new Date(Date.now() - m * 60000)

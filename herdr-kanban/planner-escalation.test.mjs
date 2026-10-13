@@ -17,7 +17,7 @@ const handoff = (dir, id, n, engine, ...args) => {
   const owners = readCardPlanners(dir)
   owners[id] = { ...(owners[id] || {}), assignmentId: `a${n}`, lifecycle: 'active', paneId: `p${n}`, submitted: true, revokedPaneIds: [], engine }
   saveCardPlanners(dir, owners)
-  return spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8' })
+  return spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8', windowsHide: true })
 }
 
 // Operator 2026-09-27: a Codex Planner gets one try, then claude-opus-5-5 gets the other two.
@@ -109,7 +109,7 @@ test('a plan accepted into Planned clears the escalation flag', () => {
     const tasks = join(root, 'TASKS'); mkdirSync(join(tasks, 'planning'), { recursive: true })
     writeFileSync(join(tasks, 'planning', 'T-1.md'), PLAN)
     updateWorkflow(tasks, 'T-1', { plannerIssues: 1, plannerEscalation: { model: 'claude-opus-5-5', at: 'x' } })
-    const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8' })
+    const result = spawnSync(process.execPath, [HKB, '--tasks', tasks, 'move', 'T-1', 'planned'], { encoding: 'utf8', windowsHide: true })
     assert.equal(result.status, 0, result.stderr)
     const saved = readWorkflow(tasks)['T-1']
     assert.equal(saved.plannerIssues, null)

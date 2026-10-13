@@ -90,7 +90,7 @@ test('UTC metrics count fixture logs once, refresh appended/replaced files, and 
   writeFileSync(configPath, JSON.stringify({ port, mode: 'manual', projectsRoot: root, projects: ['Proj'],
     maxConcurrentAgents: 0, agentPollMs: 3600000, engine: { kind: 'codex' }, models: {} }))
   const child = spawn(process.execPath, ['server.mjs'], { cwd: import.meta.dirname,
-    env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'missing-herdr-for-metrics-test', KANBAN_LAN_HOST: '' }, stdio: 'ignore' })
+    env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'missing-herdr-for-metrics-test', KANBAN_LAN_HOST: '' }, stdio: 'ignore', windowsHide: true })
   try {
     const base = `http://127.0.0.1:${port}`
     let response

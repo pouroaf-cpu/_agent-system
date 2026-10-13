@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto'
 const tools = 'C:/Users/PFrew/Projects/_tools/open-procs'
 const openProcs = `${tools}/open-procs.ps1`
 const checkOrphans = `${tools}/check-orphans.ps1`
-const pwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' })
+const pwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8', windowsHide: true })
 const skip = pwsh.status !== 0 ? 'pwsh not available' : !existsSync(openProcs) || !existsSync(checkOrphans) ? `${tools} scripts not present (gitignored, outside the checkout)` : false
 
 const tmp = mkdtempSync(join(tmpdir(), 'hk39-ow-'))
@@ -29,7 +29,7 @@ async function until(fn, what, ms = 20000) {
   assert.fail(`timed out waiting for ${what}`)
 }
 const run = args => {
-  const r = spawnSync('pwsh', ['-NoProfile', '-File', ...args], { encoding: 'utf8', env: { ...process.env, OPEN_PROCS_REGISTRY: join(tmp, 'registry.json') }, timeout: 90000 })
+  const r = spawnSync('pwsh', ['-NoProfile', '-File', ...args], { encoding: 'utf8', env: { ...process.env, OPEN_PROCS_REGISTRY: join(tmp, 'registry.json') }, timeout: 90000, windowsHide: true })
   assert.equal(r.status, 0, `${args[0]}: ${r.error?.message || r.stderr}`)
   return r.stdout
 }
@@ -74,7 +74,7 @@ before(async () => {
 
 after(() => {
   // Only the pids this file started, never by name or pattern.
-  for (const pid of pidsToKill) if (pid) spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' })
+  for (const pid of pidsToKill) if (pid) spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
   rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
 })
 
@@ -100,7 +100,7 @@ test('AC1/AC3: no alert for trees whose chat is alive', { skip }, () => {
 
 test('AC2: once the chat is gone the tree is ORPHAN and the Launcher says so', { skip }, async () => {
   for (const variant of ['pid', 'host']) {
-    spawnSync('taskkill', ['/F', '/PID', String(fx[variant].chat)], { stdio: 'ignore' })
+    spawnSync('taskkill', ['/F', '/PID', String(fx[variant].chat)], { stdio: 'ignore', windowsHide: true })
     await until(() => !isAlive(fx[variant].chat), `${variant} chat to exit`)
     assert.ok(isAlive(fx[variant].helper), `${variant}: helper must outlive the chat`)
   }

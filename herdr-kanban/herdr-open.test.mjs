@@ -55,6 +55,7 @@ test('POST route validates projects and returns a stopped-session error', async 
     cwd: workspace,
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: join(root, 'missing-herdr.exe') },
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   t.after(async () => {
     if (child.exitCode !== null) return

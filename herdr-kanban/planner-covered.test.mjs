@@ -21,7 +21,7 @@ function fixture(t, lane = 'archive') {
   const owners = readCardPlanners(dir)
   owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true }
   saveCardPlanners(dir, owners)
-  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', ...args], { encoding: 'utf8' })
+  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', ...args], { encoding: 'utf8', windowsHide: true })
   return { dir, card, run }
 }
 
@@ -90,9 +90,9 @@ for (const lane of ['planned', 'queue']) test(`Planner handoff to ${lane} refuse
 test('Planner handoff refuses a card file left dirty in the integration checkout (IA98)', t => {
   const root = mkdtempSync(join(tmpdir(), 'planner-dirty-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  spawnSync('git', ['init', '-q', root])
+  spawnSync('git', ['init', '-q', root], { windowsHide: true })
   writeFileSync(join(root, '.gitignore'), 'TASKS/\n')
-  spawnSync('git', ['-C', root, 'add', '.gitignore']); spawnSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'])
+  spawnSync('git', ['-C', root, 'add', '.gitignore'], { windowsHide: true }); spawnSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], { windowsHide: true })
   const dir = join(root, 'TASKS'); mkdirSync(dir)
   const card = createCard(dir, { title: 'Dirty draft', brief: 'Log a dose' })
   writeFileSync(card.path, readFileSync(card.path, 'utf8').replace(/## Files[^\n]*\n/, '## Files\n- `scripts/check-x.mjs` (new): check\n'))
@@ -100,7 +100,7 @@ test('Planner handoff refuses a card file left dirty in the integration checkout
   const owners = readCardPlanners(dir)
   owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true }
   saveCardPlanners(dir, owners)
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'move', card.id, 'planned'], { encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'move', card.id, 'planned'], { encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 1)
   assert.match(result.stderr, new RegExp(`scripts/check-x.mjs is changed or untracked in the integration checkout.*TASKS/.evidence/${card.id}/`))
   assert.equal(findCard(dir, card.id).column, 'planning')

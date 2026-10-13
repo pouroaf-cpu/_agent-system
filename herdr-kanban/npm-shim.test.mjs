@@ -14,7 +14,7 @@ test('I569/I572: PowerShell npm forwards script flags like npm.cmd', { skip: pro
   const args = ['run', '--silent', 'test:calc-smoke', '--', '--grep', '/blend-calculator/', '--list', 'two words', '--', '--last']
   const invoke = invocation => {
     const r = spawnSync('pwsh', ['-NoProfile', ...invocation], {
-      cwd: root, encoding: 'utf8', timeout: 15000,
+      cwd: root, encoding: 'utf8', timeout: 15000, windowsHide: true,
       env: { ...process.env, PATH: `${bin};${process.env.PATH}`, npm_config_cache: join(root, '.npm-cache'), npm_config_update_notifier: 'false' },
     })
     assert.equal(r.status, 7, `${invocation.join(' ')}\n${r.error || ''}\n${r.stdout}\n${r.stderr}`)

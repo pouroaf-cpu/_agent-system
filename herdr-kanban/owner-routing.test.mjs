@@ -7,7 +7,7 @@ import { createCard, findCard, moveCard } from './lib/cards.mjs'
 
 const dir = mkdtempSync(join(tmpdir(), 'owner-routing-'))
 const handoff = (verb, id, note) => {
-  const result = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', dir, verb, id, note], { encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', dir, verb, id, note], { encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 0, result.stderr)
   return findCard(dir, id)
 }
