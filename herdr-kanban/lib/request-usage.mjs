@@ -1,7 +1,9 @@
 import { DIFFICULTIES } from './difficulty.mjs'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { postInbox } from './inbox.mjs'
+import { tokenAlertLine, tokenAlertSettings } from './token-alert.mjs'
 
 const HOME = process.env.USERPROFILE || process.env.HOME || ''
 const CODEX_HOME = process.env.CODEX_HOME || join(HOME, '.codex')
@@ -292,7 +294,27 @@ function closeRun(run, finish, status, at, root) {
   })
   run.steps = runSteps(run, { root })
   delete run.pendingFinish
+  if (run.tokenAlert !== 'sent') run.tokenAlert = 'due'
   return run
+}
+
+// Posts the Token Manager line for each closed run marked due, once ('sent' is never re-marked).
+// Alert only: the card, its lane and holds are not touched. A failed post stays due for the next write.
+function flushTokenAlerts(tasksDir, all, { root } = {}) {
+  const due = Object.values(all.runs).filter((r) => r.tokenAlert === 'due' && r.finish)
+  if (!due.length) return false
+  const settings = tokenAlertSettings()
+  for (const run of due) {
+    try {
+      const path = cardFile(tasksDir, run.cardIds?.[0])
+      const title = path ? readFileSync(path, 'utf8').split(/\r?\n/, 1)[0].match(/^#\s+\S+\s+[—-]\s+(.+)$/)?.[1] || '' : ''
+      const file = run.finish.file || run.start?.file || sessionFile(run.sessionId, root)
+      const line = tokenAlertLine(run, { title, settings, file, project: basename(dirname(tasksDir)) })
+      if (line && settings.inbox) { postInbox(settings.inbox, line); run.tokenAlert = 'sent' }
+      else run.tokenAlert = 'checked'
+    } catch { /* stays due; retried on the next write */ }
+  }
+  return true
 }
 
 function tryCompleteRun(run, { root, now = new Date() } = {}) {
@@ -324,6 +346,7 @@ export function refreshPendingUsage(tasksDir, { root } = {}) {
       if (JSON.stringify(run) !== before) changed = true
     }
   }
+  if (flushTokenAlerts(tasksDir, all, { root })) changed = true
   if (changed) write(tasksDir, all)
   return all
 }
@@ -346,6 +369,7 @@ export async function recordUsageFinish({ tasksDir, runId, paneId, agent, bindin
     const finish = finishSession ? latestTokenSnapshot(finishSession, { root }) : { counters: null, missing: true }
     closeRun(run, finish, status, now.toISOString(), root)
   }
+  flushTokenAlerts(tasksDir, all, { root })
   write(tasksDir, all)
   return run
 }
@@ -459,6 +483,7 @@ export function reconcileUsage(tasksDir, agents, { root } = {}) {
     if (!run.finish || run.duplicateOf || run.steps !== undefined) continue
     run.steps = runSteps(run, { root }); backfilled++; changed = true
   }
+  if (flushTokenAlerts(tasksDir, all, { root })) changed = true
   if (changed) write(tasksDir, all)
   return all
 }
