@@ -50,7 +50,7 @@ function board(t, body) {
   writeFileSync(path, body)
   return { tasks, path, root }
 }
-const hkb = (tasks, opts, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8', ...opts })
+const hkb = (tasks, opts, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8', windowsHide: true, ...opts })
 const withoutBodies = s => s.replace(/^(## (?:Implementation|Evidence)\r?\n)[\s\S]*?(?=^## |$(?![\s\S]))/gm, '$1')
 
 test('AC1: result replaces both bodies and leaves every other section byte-identical', t => {

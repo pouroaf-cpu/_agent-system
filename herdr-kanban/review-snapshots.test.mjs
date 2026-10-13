@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { prepareReviewSnapshot } from './lib/review-claims.mjs'
 import { cleanClosedReviewSnapshots } from './lib/review-snapshots.mjs'
 
-const git = (cwd, ...args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).stdout
+const git = (cwd, ...args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true }).stdout
 
 test('a closed claim snapshot is removed with its evidence kept; an open one stays', async t => {
   const root = mkdtempSync(join(tmpdir(), 'hkb-snap-'))

@@ -34,7 +34,7 @@ function fixture(t) {
   saveCardPlanners(dir, owners)
   const partsDir = join(dir, 'parts'); mkdirSync(partsDir, { recursive: true })
   const writePart = (name, text) => { const p = join(partsDir, name); writeFileSync(p, text); return p }
-  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', ...args], { encoding: 'utf8' })
+  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', ...args], { encoding: 'utf8', windowsHide: true })
   return { dir, card, writePart, run }
 }
 
@@ -121,7 +121,7 @@ test('split --parts refuses a caller that is not the assigned Planner', t => {
   const before = idsOf(dir)
   const p1 = writePart('p1.md', part('First piece', { file: 'src/one.mjs' }))
   const p2 = writePart('p2.md', part('Second piece', { file: 'src/two.mjs' }))
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'wrong-token', 'split', card.id, '--parts', p1, p2], { encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'wrong-token', 'split', card.id, '--parts', p1, p2], { encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 1)
   assert.deepEqual(idsOf(dir), before)
   assert.equal(findCard(dir, card.id).column, 'planning')

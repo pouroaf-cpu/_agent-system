@@ -147,7 +147,7 @@ test('a Reviewer that stopped on an engine usage limit blocks that engine, close
 })
 test('isolated snapshots pin committed HEAD and separate build output; non-Git is report-only', t => {
   const f = fixture(t); const repo = join(f.root, 'repo'); mkdirSync(repo)
-  const git = (...args) => { const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
+  const git = (...args) => { const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', windowsHide: true }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
   git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'Test')
   writeFileSync(join(repo, 'page.txt'), 'committed'); git('add', 'page.txt'); git('commit', '-m', 'fixture')
   writeFileSync(join(repo, 'page.txt'), 'uncommitted')

@@ -96,7 +96,7 @@ test('AC2: with maxTokensPerRun null no run is stopped for tokens', async () => 
 test('AC3: a poll-path stop leaves the worktree, its modified, staged and untracked files exactly as they were', async () => {
   const b = board('working')
   const main = join(b.dir, 'main'), tree = join(b.dir, 'tree')
-  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' })
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8', windowsHide: true })
   mkdirSync(main)
   git(main, 'init', '-q'); writeFileSync(join(main, 'a.txt'), 'one\n'); git(main, 'add', 'a.txt'); git(main, 'commit', '-qm', 'init')
   git(main, 'worktree', 'add', '-q', tree)
@@ -186,7 +186,7 @@ test('hook: bad input and a run below the limit print nothing; a run past it pri
   const rows = [{ type: 'agent-name', agentName: 'b-t-1' }, { type: 'user', message: { role: 'user', content: `hkb --tasks '${b.tasks}' done T-1` } }]
   const write = (tokens) => writeFileSync(transcript, [...rows, { type: 'assistant', timestamp: at(1), uuid: 'u', message: { id: 'm', usage: { input_tokens: 0, output_tokens: tokens } } }].map(r => JSON.stringify(r)).join('\n') + '\n')
   writeFileSync(join(b.tasks, '.request-usage.json'), JSON.stringify({ version: 1, runs: { r1: { runId: 'r1', sessionId, project: 'Proj', cardIds: ['T-1'], role: 'builder', paneId: 'p1', start: { at: at(0), counters: { ...ZERO }, ordinal: -1 } } } }))
-  const run = (input) => spawnSync(process.execPath, [hookPath], { input, env, encoding: 'utf8' })
+  const run = (input) => spawnSync(process.execPath, [hookPath], { input, env, encoding: 'utf8', windowsHide: true })
   const call = JSON.stringify({ tool_name: 'Read', transcript_path: transcript, session_id: sessionId })
   assert.deepEqual([run('not json').status, run('not json').stdout], [0, ''])
   write(3999999)

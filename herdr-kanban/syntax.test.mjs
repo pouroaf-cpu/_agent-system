@@ -9,7 +9,7 @@ test('2026-10-03: node --check catches misplaced shebangs in board modules and s
   const files = readdirSync(root).filter(f => f.endsWith('.mjs'))
   for (const dir of ['scripts', 'lib']) files.push(...readdirSync(join(root, dir), { recursive: true }).filter(f => f.endsWith('.mjs')).map(f => join(dir, f)))
   for (const file of files) {
-    const run = spawnSync(process.execPath, ['--check', join(root, file)], { encoding: 'utf8' })
+    const run = spawnSync(process.execPath, ['--check', join(root, file)], { encoding: 'utf8', windowsHide: true })
     assert.equal(run.status, 0, `${file}: ${run.error?.message || run.stderr}`)
   }
 })

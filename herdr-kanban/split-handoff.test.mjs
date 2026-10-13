@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { findCard } from './lib/cards.mjs'
 
-const hkb = (tasks, ...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, ...args], { encoding: 'utf8' })
+const hkb = (tasks, ...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasks, ...args], { encoding: 'utf8', windowsHide: true })
 
 test('an investigation that finds several issues is split: the card stops for the orchestrator to re-card', t => {
   const root = mkdtempSync(join(tmpdir(), 'split-')), tasks = join(root, 'TASKS')

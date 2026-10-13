@@ -753,16 +753,16 @@ test('preflight permits unchanged same-card dirty snapshot and rejects changed c
     mkdirSync(join(root, 'scripts'), { recursive: true })
     writeFileSync(join(root, 'app.js'), 'clean\n')
     writeFileSync(join(root, 'scripts', 'preflight.mjs'), 'process.exit(1)')
-    spawnSync('git', ['init'], { cwd: root })
-    spawnSync('git', ['add', 'app.js'], { cwd: root })
-    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'init'], { cwd: root })
+    spawnSync('git', ['init'], { cwd: root, windowsHide: true })
+    spawnSync('git', ['add', 'app.js'], { cwd: root, windowsHide: true })
+    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'init'], { cwd: root, windowsHide: true })
     writeFileSync(join(root, 'app.js'), 'dirty\n')
     const cardPath = join(tasks, 'queue', 'T-55-dirty.md')
     writeFileSync(cardPath, '# T-55 — Dirty\n\n**Workflow:** card-owned\n**Workspace:** .\n\n## Files\n\n- `app.js` — code\n')
     let card = parseCard(cardPath, 'queue')
     appendDirtySnapshot(card, dirtySnapshotForCard(card, root, { listedOnly: true }), new Date(0))
-    spawnSync('git', ['add', 'scripts/preflight.mjs', 'TASKS/queue/T-55-dirty.md'], { cwd: root })
-    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'card'], { cwd: root })
+    spawnSync('git', ['add', 'scripts/preflight.mjs', 'TASKS/queue/T-55-dirty.md'], { cwd: root, windowsHide: true })
+    spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'card'], { cwd: root, windowsHide: true })
     card = parseCard(cardPath, 'queue')
 
     writeFileSync(join(root, 'unrelated.txt'), 'legacy dirt\n')
@@ -1455,7 +1455,7 @@ test('hkb pass requires an already-current PASS on a Review card and does not wr
   writeFileSync(join(tasks, 'review', 'T-20-mission.md'), '# T-20 — Mission\n\n**Mission:** IB-AUDIT-20260908\n')
 
   let result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), 'pass', 'T-20', 'note is not proof'], {
-    cwd: root, encoding: 'utf8',
+    cwd: root, encoding: 'utf8', windowsHide: true,
   })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /current nonempty Reviewer evidence/)
@@ -1463,7 +1463,7 @@ test('hkb pass requires an already-current PASS on a Review card and does not wr
 
   appendReviewPass(findCard(tasks, 'T-20'), 'Independent browser evidence exists before hkb pass.')
   result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), 'pass', 'T-20'], {
-    cwd: root, encoding: 'utf8',
+    cwd: root, encoding: 'utf8', windowsHide: true,
   })
   assert.equal(result.status, 0, result.stderr)
   assert.ok(readBoard(tasks).completed.some((c) => c.id === 'T-20'))
@@ -1703,7 +1703,7 @@ async function startPollServer({ cards, extra = {}, agents = [], mode = 'auto', 
   const server = spawn(process.execPath, ['--experimental-test-module-mocks', '--import', pathToFileURL(processMock).href, join(process.cwd(), 'server.mjs')], {
     cwd: root,
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: process.execPath, HERDR_TEST_AGENTS: JSON.stringify(resolvedAgents) },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   let output = ''
   server.stdout.on('data', (d) => { output += d })
@@ -1740,7 +1740,7 @@ async function restartPollServer(run, agents = []) {
   const server = spawn(process.execPath, [join(process.cwd(), 'server.mjs')], {
     cwd: run.root,
     env: { ...process.env, KANBAN_CONFIG: run.configPath, HERDR_BIN_PATH: process.execPath, HERDR_TEST_AGENTS: JSON.stringify(agents) },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   let output = ''
   server.stdout.on('data', (d) => { output += d })
@@ -2033,7 +2033,7 @@ test('hkb ambiguous rework preserves Review for evidence diagnosis', () => {
   mkdirSync(join(tasks, 'review'), { recursive: true })
   writeFileSync(join(tasks, 'review', 'T-20-review.md'), '# T-20 — Review\n')
   const result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), 'rework', 'T-20', 'criterion fails'], {
-    cwd: root, encoding: 'utf8',
+    cwd: root, encoding: 'utf8', windowsHide: true,
   })
   assert.equal(result.status, 0, result.stderr)
   assert.ok(readBoard(tasks).review.some((c) => c.id === 'T-20'))
@@ -2275,7 +2275,7 @@ test('blocked managed startup retains the real pane screen instead of a blind re
       import assert from 'node:assert/strict';
       import {agentStart} from ${JSON.stringify(moduleUrl)};
       await assert.rejects(() => agentStart({name:'kb-t-01',paneId:'w1:p1',model:'gpt-5.6-luna',engine:{kind:'codex',sandbox:'workspace-write'}}), e => e.preservePane === true && /trust the contents/.test(e.message));
-    `], {cwd: root, env: {...process.env, HERDR_BIN_PATH: process.execPath}, encoding:'utf8'})
+    `], {cwd: root, env: {...process.env, HERDR_BIN_PATH: process.execPath}, encoding:'utf8', windowsHide: true})
     assert.equal(result.status, 0, result.stderr)
   } finally { rmSync(root, {recursive:true,force:true}) }
 })

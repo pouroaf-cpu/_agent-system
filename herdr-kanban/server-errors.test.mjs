@@ -29,7 +29,7 @@ test('a project with no folder gets a 500 and the board stays up', async () => {
   const child = spawn(process.execPath, ['server.mjs'], {
     cwd: new URL('.', import.meta.url),
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'missing-herdr-for-error-test' },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   const base = `http://127.0.0.1:${port}/api/board?project=`
   try {
