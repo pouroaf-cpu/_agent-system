@@ -68,7 +68,7 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   try { prepareWorktreeEnvironment(entry) } catch (err) { installing ||= !!err.installIn && String(io.startInstall({ folder: err.installIn, tasksDir })).startsWith('installing dependencies in ') }
   const waiting = installing && waitForInstall()
   if (waiting) return waiting
-  const check = await io.runIntegrationCheck(command, entry.workspacePath, 300000)
+  const check = await io.runIntegrationCheck(command, entry.workspacePath, 900000)
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
   writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}\n\n${check.output}\n`)

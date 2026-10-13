@@ -436,6 +436,19 @@ test('an integration check waits while dependencies install instead of failing t
   assert.equal((await run(t0 + 10 * min))[0].status, 'integrated')
 })
 
+test('the integration check gets at least 900000 ms so a full suite is not killed at 300 s (HK58)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'check-timeout-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- `app.js` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', worktreePath: root, workspacePath: root, integrationWorkspace: join(root, 'main'), baseCommit: 'b0' } }))
+  let seen
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit: 'c1' }), installRunning: () => false,
+    runIntegrationCheck: async (command, cwd, timeout) => { seen = timeout; return { ok: true, output: '' } }, reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], integrationCheck: 'npm test', io })
+  assert.ok(seen >= 900000, `timeout ${seen}`)
+})
+
 test('a replacement Builder recorded with the previous pane session is still retired', async t => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-replaced-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
