@@ -91,8 +91,15 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   const failures = (entry.conflictFailures || 0) + (blocked ? 0 : 1)
   const target = head || entry.rebaseTarget || entry.baseCommit
   updateWorktree(tasksDir, cardId, { state: 'conflict', conflictFailures: failures, reason, rebaseTarget: target })
-  const to = blocked || failures >= (output ? 2 : 3) ? 'owner' : 'queue'
-  const moved = moveCard(tasksDir, cardId, to)
+  let to = blocked || failures >= (output ? 2 : 3) ? 'owner' : 'queue', moved, planError
+  try { moved = moveCard(tasksDir, cardId, to) } catch (err) {
+    // The plan no longer passes the queue check (HK25): the card cannot go back to a Builder, so
+    // it goes to Owner with the reason instead of staying silently in Completed.
+    if (to !== 'queue') throw err
+    planError = err.message
+    to = 'owner'
+    moved = moveCard(tasksDir, cardId, to)
+  }
   const summary = reason.split('\n')[0]
   const detail = files.length ? `${summary} (files: ${files.join(', ')})` : summary
   const base12 = String(entry.baseCommit).slice(0, 12), target12 = String(target).slice(0, 12)
@@ -103,26 +110,28 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   const log = output ? `\n\n\`\`\`text\n${output}\n\`\`\`` : ''
   const checkoutOverride = "For this return, your worktree is expected at the card's earlier commit or base; this overrides any plan prerequisite or check requiring a clean checkout on current integration HEAD until the rebase/reset is done, then the plan's checks apply again."
   writeCurrentFeedback(tasksDir, moved, to === 'owner' ? 'Needs you' : 'Kicked back', to === 'owner'
-    ? blocked ? `${cardId} is back with you: the board could not retry it (${detail}). Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again with a narrower change, or will you fix it yourself?`
+    ? planError ? `${cardId} cannot go back to a Builder: its plan fails the plan check (${planError}). Integration failed: ${detail}. Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again once the plan is repaired, or will you fix it yourself?`
+    : blocked ? `${cardId} is back with you: the board could not retry it (${detail}). Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again with a narrower change, or will you fix it yourself?`
       : `${cardId} still does not integrate with master after ${failures} tries (${detail}). Its commit and worktree are kept at ${entry.worktreePath}. ${action} Should an agent try again with a narrower change, or will you fix it yourself?`
     : output ? `${summary}. Your worktree ${entry.worktreePath} is already rebased onto current master: fix the failures there, keep exactly one card commit, re-run the check, then hkb done.${log}`
     : failures >= 2 ? `Integration conflict with master again: ${summary}. Stop resolving it and start fresh on the new base. ${checkoutOverride} In your worktree ${entry.worktreePath}: git rebase --abort if one is in progress, git branch kanban-backup/${cardId}-${failures} HEAD, git reset --hard ${target}, then re-apply the same change by hand using git show kanban-backup/${cardId}-${failures} as the reference. In shared list files add only your own entry at the end; leave other entries and shared helpers alone unless the card needs them. Keep exactly one card commit, run your check once, then hkb done.${diff}`
     : `Integration conflict with master: ${summary}. ${checkoutOverride} Resolve it in your own worktree ${entry.worktreePath}: git rebase --onto ${target} ${entry.baseCommit}, fix ${files.join(', ') || 'the conflicting files'}, keep exactly one card commit, re-run your check, then hkb done.${diff}`)
   // Not an 'implementation' correction: that would demand the retired Builder pane back.
   updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null })
-  return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}. ${action}` : detail }
+  return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}${planError ? ` (not returned to a Builder: ${planError})` : ''}. ${action}` : detail }
 }
 
 export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(),
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees, runCheck: runRecordedCheck } }) {
   io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, startInstall: startDependencyInstall, installRunning, ...io }
-  const results = [], session = sessionOf(project)
+  const results = [], session = sessionOf(project), completedIds = []
   for (const entry of Object.values(readWorktrees(tasksDir))) {
     // One card's problem must never freeze the whole project poll.
     try {
     if (entry.cleaned || (onlyIds && !onlyIds.includes(entry.cardId))) continue
     const card = findCard(tasksDir, entry.cardId)
     if (!['completed', 'review'].includes(card.column)) continue
+    if (card.column === 'completed') completedIds.push(card.id)
     const saved = readWorkflow(tasksDir)[card.id], builder = saved?.builder
     if (builder?.pane_id && (saved.builderRetired?.paneId !== builder.pane_id || saved.builderRetired?.started !== builder.started)) {
       const paneId = builder.pane_id
@@ -193,6 +202,15 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
       results.push(...io.reconcile({ tasksDir, onlyIds: [card.id] }))
     }
     } catch (err) { results.push({ id: entry.cardId, status: 'held', reason: err.message }) }
+  }
+  // A Completed card must never poll silently (HK25 sat in conflict state for 20 minutes): any
+  // card still not integrated with no result above gets a repeating held reason.
+  const worktrees = readWorktrees(tasksDir)
+  for (const id of completedIds) {
+    const state = worktrees[id]?.state
+    if (state === 'integrated' || results.some(r => r.id === id)) continue
+    const why = worktrees[id]?.reason
+    results.push({ id, status: 'held', repeat: true, reason: `integration made no progress this poll (worktree state ${state}${why ? `: ${why}` : ''})` })
   }
   return results
 }

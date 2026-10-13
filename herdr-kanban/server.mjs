@@ -221,7 +221,7 @@ function logIntegrationResults(project, results, waiting = {}) {
       dirty = true
     } else {
       const key = `${project}:${result.id}:handoff`
-      if (lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
+      if (result.repeat || lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
       lastActivityHold.set(key, result.reason)
     }
   }

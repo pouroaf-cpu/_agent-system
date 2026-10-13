@@ -377,6 +377,40 @@ test('a timed-out integration or recorded check backs off without counting as a 
   assert.equal(registry()['T-1'].conflictFailures, 1)
 })
 
+test('a failed integration check on a card whose plan fails the plan check goes to Owner with the reason, not silently stuck in Completed (HK25)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'plan-return-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  // No Acceptance criteria section: moveCard to queue throws "Plan incomplete".
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), '# T-1 — task\n**Workflow:** card-owned\n**Plan readiness:** build-ready\n\n## Approved brief\nDo it\n## Files\n- `app.js` — change\n## Implementation plan\nChange app.js\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', worktreePath: root, workspacePath: root, baseCommit: 'b0' } }))
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit: 'c1' }), runIntegrationCheck: async () => ({ ok: false, output: '1 failing' }) }
+  const results = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], integrationCheck: 'npm test', io })
+  assert.equal(results.length, 1)
+  assert.deepEqual([results[0].status, results[0].to], ['returned', 'owner'])
+  assert.match(results[0].reason, /Plan incomplete/)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'owner')
+  const saved = JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1']
+  assert.deepEqual([saved.state, saved.conflictFailures], ['conflict', 1])
+  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 cannot go back to a Builder: its plan fails the plan check \(Plan incomplete/)
+})
+
+test('a Completed card in conflict state is never silent: one repeating held result per poll; Review cards return none (HK25)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'silent-conflict-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const plan = id => `# ${id} — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n`
+  for (const [column, id] of [['completed', 'T-1'], ['review', 'T-2']]) { mkdirSync(join(tasksDir, column), { recursive: true }); writeFileSync(join(tasksDir, column, `${id}.md`), plan(id)) }
+  const entry = id => ({ cardId: id, state: 'conflict', conflictFailures: 1, worktreePath: root, workspacePath: root, baseCommit: 'b0', reason: 'integration check npm test failed on current master (full output: x.log)' })
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry('T-1'), 'T-2': entry('T-2') }))
+  const io = { agentList: async () => [], rebase: () => null, reconcile: () => [] }
+  for (const poll of [1, 2]) {
+    const results = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', io })
+    assert.equal(results.length, 1, `poll ${poll}`)
+    assert.deepEqual([results[0].id, results[0].status, results[0].repeat], ['T-1', 'held', true])
+    assert.match(results[0].reason, /worktree state conflict.*integration check npm test failed/)
+  }
+})
+
 test('an integration check waits while dependencies install instead of failing the card (InjectbuddyApp IA154, IA155)', async t => {
   const root = mkdtempSync(join(tmpdir(), 'check-install-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
