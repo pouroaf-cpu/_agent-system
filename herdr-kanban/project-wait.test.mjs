@@ -51,10 +51,11 @@ test('project waiter wakes for Owner/Pou and stuck; FOUND waits for the hourly d
 
 test('an inbox burst settles into one wake with every line', async () => {
   const { settled } = await import('./scripts/project-wait.mjs')
-  const inbox = ['old', 'a']
-  setTimeout(() => inbox.push('b'), 15)
-  setTimeout(() => inbox.push('c'), 35)
-  assert.deepEqual(await settled(() => inbox, 1, 50, 1000, 5), ['a', 'b', 'c'])
+  // One inbox state per read, not per timer: a poll delayed past the timer gap skipped a state
+  // under load (13 Oct 2026, HK19 integration check).
+  const states = [['old', 'a'], ['old', 'a', 'b'], ['old', 'a', 'b', 'c']]
+  let reads = 0
+  assert.deepEqual(await settled(() => states[Math.min(reads++, states.length - 1)], 1, 50, 1000, 5), ['a', 'b', 'c'])
 })
 
 test('settled keeps the wake-up line when the file is emptied during the quiet wait (AC1)', async () => {

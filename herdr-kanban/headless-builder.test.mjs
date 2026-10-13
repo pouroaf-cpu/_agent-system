@@ -150,6 +150,9 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     console.log('headless Builder flow passed')
   `)
   try {
+    // The driver runs ~25-30 s alone and 45-110 s beside other suites (git, node and PowerShell spawns).
+    // 120000 stays below this file's 150000 kill limit in run-tests.mjs minus the 1500 ms cleanup sleep
+    // and up to 10 s of EPERM retries, so a slow run fails here with a message, not by SIGTERM.
     const result = await run(process.execPath, [driver], { env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-headless-builder' }, timeout: 120000, windowsHide: true })
     assert.match(result.stdout, /headless Builder flow passed/)
   } finally {
