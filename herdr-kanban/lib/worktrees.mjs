@@ -80,7 +80,8 @@ export const clean = (cwd) => !operationInProgress(cwd) && semanticDirtyFiles(cw
 // runs from. Untracked there, it made the Injectbuddy integration checkout "dirty" and
 // held every merge (2026-09-25). Ignore it locally for all of a repo's worktrees.
 // .codex/hooks.json is the board Stop hook writeCodexWorkspaceHooks drops into each card worktree.
-const TOOL_OUTPUT = ['.playwright-mcp/', '.impeccable/', '.codex/hooks.json']
+// e2e-out/ is the e2e-runner agent's checkpoint/findings folder (HK21, 2026-10-13).
+const TOOL_OUTPUT = ['.playwright-mcp/', '.impeccable/', '.codex/hooks.json', 'e2e-out/']
 export function ignoreToolOutput(repoRoot) {
   try {
     const common = resolve(repoRoot, git(repoRoot, ['rev-parse', '--git-common-dir']).stdout.trim())
