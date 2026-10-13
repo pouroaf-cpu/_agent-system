@@ -1,5 +1,5 @@
 // node run-tests.mjs [files...]
-// Runs test.mjs and every *.test.mjs here, one process per file on half the cores, each killed
+// Runs test.mjs, planner-prompt-check.mjs and every *.test.mjs here, one process per file on half the cores, each killed
 // after 60s. Slow files get longer and start first. worktrees.test.mjs is git processes and no waits
 // (86s alone, 98s in the suite) and release.test.mjs builds three origin/clone repos plus a server
 // (16s alone, 35s beside a second suite): both only get slower as the machine gets busier.
@@ -11,7 +11,7 @@ import { join } from 'node:path'
 
 const dir = import.meta.dirname
 const files = process.argv.slice(2).length ? process.argv.slice(2)
-  : readdirSync(dir).filter(f => f === 'test.mjs' || f.endsWith('.test.mjs')).sort()
+  : readdirSync(dir).filter(f => f === 'test.mjs' || f === 'planner-prompt-check.mjs' || f.endsWith('.test.mjs')).sort()
 // Tests never read the live board.config.json: its night/off switch (maxConcurrentAgents 0) or a
 // project pause made every project count as paused. An empty config pauses nothing and, like no
 // config in KANBAN_TEST, selects the herdr backend.

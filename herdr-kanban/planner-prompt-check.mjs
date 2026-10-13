@@ -4,5 +4,5 @@ const prompt = plannerPrompt({cards:[{id:'T-99',column:'planning',path:'C:/proje
 assert.ok(prompt.includes('Projects/_roles/PLANNER.md'))
 assert.ok(!prompt.includes('ORCHESTRATION.md'))
 assert.ok(!prompt.includes('Grill Me'))
-assert.ok(prompt.includes('After each successful handoff'))
+assert.ok(prompt.includes('After the handoff succeeds, stop that card immediately'))
 console.log('PASS: Planner gets its role guide, no repeat intake, and stops after handoff')
