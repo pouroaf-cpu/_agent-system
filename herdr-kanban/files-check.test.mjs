@@ -29,7 +29,7 @@ test('AC2: missingFromFiles reports exactly the uncovered paths, [] when none', 
   assert.deepEqual(missingFromFiles(CARD, needed.slice(0, 5)), [])
 })
 
-const hkb = (tasks, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8' })
+const hkb = (tasks, ...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, ...args], { encoding: 'utf8', windowsHide: true })
 function board(t, lane = 'working') {
   const root = mkdtempSync(join(tmpdir(), 'files-check-')), tasks = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))

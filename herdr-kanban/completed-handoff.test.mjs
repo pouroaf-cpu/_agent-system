@@ -20,7 +20,7 @@ function putCard(tasksDir, column, id, flag = 'no') {
 }
 
 function runHkb(tasksDir, verb, id, note = '') {
-  return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasksDir, verb, id, ...(note ? [note] : [])], { encoding: 'utf8' })
+  return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasksDir, verb, id, ...(note ? [note] : [])], { encoding: 'utf8', windowsHide: true })
 }
 
 function markUnchangedIntegrated(tasksDir, root, id) {
@@ -252,7 +252,7 @@ test('reviewer snapshot contains the integrated card commit and a real PASS surv
   const { snapshotContains, assertReviewInputs } = await import('./lib/review-claims.mjs')
   const root = mkdtempSync(join(tmpdir(), 'review-snapshot-')), repo = join(root, 'repo'), snap = join(root, 'snap'), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  const git = (cwd, ...args) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
+  const git = (cwd, ...args) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', windowsHide: true }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
   mkdirSync(repo)
   git(repo, 'init', '-q', '-b', 'main')
   writeFileSync(join(repo, 'example.js'), 'base\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'base')

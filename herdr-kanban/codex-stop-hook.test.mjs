@@ -16,6 +16,7 @@ const stop = (hookPath, transcriptPath, message, active, config) => spawnSync(pr
   input: JSON.stringify({ transcript_path: transcriptPath, stop_hook_active: active, last_assistant_message: message }),
   env: { ...process.env, ...(config ? { KANBAN_CONFIG: config } : {}) },
   encoding: 'utf8',
+  windowsHide: true,
 })
 
 test('a board Codex agent stopping on a question is blocked once, then routed to the manager, and released after a handoff', () => {

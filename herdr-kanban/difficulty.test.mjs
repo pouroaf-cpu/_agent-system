@@ -98,7 +98,7 @@ test('returns step up once per attempt, cap at hard and survive replanning and r
 test('hkb issue and later missing handoff count one return; direct failed transitions also step up', t => {
   const f = fixture(t, 'easy', 'working')
   recordBuilderAttempt(f.tasks, f.card(), 'easy')
-  const result = spawnSync(process.execPath, ['hkb.mjs', '--tasks', f.tasks, 'issue', 'T-1', '[implementation] focused check failed'], { cwd: import.meta.dirname, encoding: 'utf8' })
+  const result = spawnSync(process.execPath, ['hkb.mjs', '--tasks', f.tasks, 'issue', 'T-1', '[implementation] focused check failed'], { cwd: import.meta.dirname, encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 0, result.stdout + result.stderr)
   assert.equal(readWorkflow(f.tasks)['T-1'].builderDifficulty, 'medium')
   moveCard(f.tasks, 'T-1', 'working')
@@ -118,7 +118,7 @@ test('hkb issue and later missing handoff count one return; direct failed transi
 test('a reported blocker followed by exit cannot step up the same Builder twice', t => {
   const f = fixture(t, 'easy', 'working')
   recordBuilderAttempt(f.tasks, f.card(), 'easy')
-  const result = spawnSync(process.execPath, ['hkb.mjs', '--tasks', f.tasks, 'issue', 'T-1', '[evidence] missing proof'], { cwd: import.meta.dirname, encoding: 'utf8' })
+  const result = spawnSync(process.execPath, ['hkb.mjs', '--tasks', f.tasks, 'issue', 'T-1', '[evidence] missing proof'], { cwd: import.meta.dirname, encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 0, result.stdout + result.stderr)
   assert.equal(f.card().column, 'working')
   routeBuilderNoHandoff({ tasksDir: f.tasks, cardId: 'T-1', reason: 'process ended' })

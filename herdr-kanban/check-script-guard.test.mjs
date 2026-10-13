@@ -17,7 +17,7 @@ function setup(t, name = 'p-t-1') {
     { type: 'user', message: { role: 'user', content: `node 'hkb.mjs' --tasks '${tasks}' move T-1 queue` } },
   ].map(e => JSON.stringify(e)).join('\n') + '\n')
   const session_id = `s${Date.now()}${Math.random().toString(36).slice(2)}`
-  const run = (flag, extra = {}) => spawnSync(process.execPath, [hook, flag], { input: JSON.stringify({ session_id, tool_use_id: 'toolu_1', transcript_path: transcript, ...extra }), encoding: 'utf8' })
+  const run = (flag, extra = {}) => spawnSync(process.execPath, [hook, flag], { input: JSON.stringify({ session_id, tool_use_id: 'toolu_1', transcript_path: transcript, ...extra }), encoding: 'utf8', windowsHide: true })
   return { dir, run }
 }
 
@@ -49,7 +49,7 @@ test('other roles and garbage input are ignored', t => {
   run('--pre')
   writeFileSync(join(dir, 'check-a.mjs'), 'x\n')
   assert.equal(run('--post').stdout, '')
-  const bad = spawnSync(process.execPath, [hook, '--pre'], { input: 'not json', encoding: 'utf8' })
+  const bad = spawnSync(process.execPath, [hook, '--pre'], { input: 'not json', encoding: 'utf8', windowsHide: true })
   assert.equal(bad.status, 0)
   assert.equal(bad.stdout, '')
 })

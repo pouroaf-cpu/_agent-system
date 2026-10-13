@@ -137,7 +137,7 @@ test('restart retains authorization but interrupted reserved stage fails closed 
   assert.equal(interruptedCardRun({ stages: { reviewer: { status: 'reserved', owner: 'live-maintenance', ownerPid: process.pid } } }), false)
   const f = fixture(t, 'working')
   const script = `import {authorizeCardRun,withCardRunAssignment} from './lib/card-run.mjs'; import {randomUUID} from 'node:crypto'; const r=authorizeCardRun({project:'Proof',cardId:'T-1',autoReview:true,requestId:randomUUID()}); await withCardRunAssignment(r,'builder',async()=>process.exit(0));`
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: new URL('.', import.meta.url), env: process.env, encoding: 'utf8' })
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: new URL('.', import.meta.url), env: process.env, encoding: 'utf8', windowsHide: true })
   assert.equal(child.status, 0, child.stderr)
   assert.ok(activeCardRun())
   await tickCardRun(f.options)

@@ -43,10 +43,10 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
         const tasks=${JSON.stringify(tasks)}, id=argv.join(' ').match(/done (T-\\d+)/)[1], card=findCard(tasks,id)
         writeFileSync('result.mjs','export const result = true\\n')
         for(const args of [['add','result.mjs'],['commit','-qm',id+': result true']]){
-          const r=spawnSync('git',args,{encoding:'utf8'});if(r.status!==0)throw Error(r.stderr)
+          const r=spawnSync('git',args,{encoding:'utf8',windowsHide:true});if(r.status!==0)throw Error(r.stderr)
         }
         appendFileSync(card.path,'\\n## Implementation\\nStage: builder\\nOutcome: PASS\\nFiles: result.mjs\\nBlocker: none\\n\\n## Evidence\\nStage: builder\\nOutcome: PASS\\nCheck: node result.mjs\\nResult: passed\\nEvidence: proof\\nBlocker: none\\n')
-        const r=spawnSync(process.execPath,[fileURLToPath(${JSON.stringify(source('./hkb.mjs'))}),'--tasks',tasks,'done',id],{encoding:'utf8'})
+        const r=spawnSync(process.execPath,[fileURLToPath(${JSON.stringify(source('./hkb.mjs'))}),'--tasks',tasks,'done',id],{encoding:'utf8',windowsHide:true})
         if(r.status!==0)throw Error(r.stdout+r.stderr)
       }
     },300)

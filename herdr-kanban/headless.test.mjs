@@ -93,7 +93,7 @@ test('Claude process tree closes, launch failures surface, pause blocks dispatch
   const root = mkdtempSync(join(tmpdir(), 'headless-tree-')), old = process.env.KANBAN_CONFIG
   const config = join(root, 'config.json'); writeFileSync(config, '{}'); process.env.KANBAN_CONFIG = config
   const script = join(root, 'fake.mjs')
-  writeFileSync(script, `import {spawn} from 'node:child_process'; const child = spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(JSON.stringify({type:'system',subtype:'init',session_id:'claude-session',childPid:child.pid})); setInterval(()=>{},1000)`)
+  writeFileSync(script, `import {spawn} from 'node:child_process'; const child = spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true}); console.log(JSON.stringify({type:'system',subtype:'init',session_id:'claude-session',childPid:child.pid})); setInterval(()=>{},1000)`)
   const opens = []
   let processRows = []
   const trees = new PaneProcessTrees({ list: async () => processRows.filter(p => running(p.pid)), kill: async rows => { for (const row of rows) if (running(row.pid)) process.kill(row.pid); await until(() => rows.every(row => !running(row.pid))) } })

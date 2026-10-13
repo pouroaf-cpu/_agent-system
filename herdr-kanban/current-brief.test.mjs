@@ -110,7 +110,7 @@ test('PowerShell literals survive spaces/apostrophes; generated handoff is direc
   assert.match(worker, /login:false/); assert.match(worker, /never prefix bare -NoProfile/)
   const command = `node ${psLiteral(join(board, 'hkb.mjs'))} --tasks ${psLiteral(tasks)} done T-1`
   assert.ok(worker.includes(command))
-  const run = spawnSync('pwsh', ['-NoProfile', '-Command', command], { encoding: 'utf8' })
+  const run = spawnSync('pwsh', ['-NoProfile', '-Command', command], { encoding: 'utf8', windowsHide: true })
   assert.equal(run.status, 0, run.stderr)
   assert.deepEqual(JSON.parse(run.stdout.trim()), ['--tasks', tasks, 'done', 'T-1'])
   const review = reviewerPrompt({ cards: [card], projectPath: root, boardRoot: board, tasksDir: tasks, reviewClaim: 'exact-claim', reviewRoot: root })

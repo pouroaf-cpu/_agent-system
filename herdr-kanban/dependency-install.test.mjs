@@ -11,7 +11,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'hkb-deps-state-'))
 process.env.KANBAN_CONFIG = join(stateDir, 'board.config.json')
 process.on('exit', () => rmSync(stateDir, { recursive: true, force: true }))
 const installsFile = join(stateDir, '.dependency-installs.json')
-const sleeper = t => { const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)']); t.after(() => child.kill()); return { child, exited: new Promise(r => child.on('exit', r)) } }
+const sleeper = t => { const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { windowsHide: true }); t.after(() => child.kill()); return { child, exited: new Promise(r => child.on('exit', r)) } }
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'hkb-deps-'))
@@ -20,7 +20,7 @@ function fixture(t) {
   mkdirSync(folder); mkdirSync(tasksDir)
   writeFileSync(join(folder, 'package.json'), '{"dependencies":{"dep":"1"}}')
   writeFileSync(join(folder, 'package-lock.json'), '{}')
-  spawnSync('git', ['-C', folder, 'init'])
+  spawnSync('git', ['-C', folder, 'init'], { windowsHide: true })
   const calls = []
   let settle
   const install = (dir, command) => { calls.push(command); return new Promise((ok, fail) => { settle = { ok, fail } }) }
