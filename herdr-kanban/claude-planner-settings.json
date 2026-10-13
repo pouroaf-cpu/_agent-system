@@ -23,7 +23,8 @@
       { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/check-script-guard.mjs --pre", "timeout": 10 }] }
     ],
     "PostToolUse": [
-      { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/check-script-guard.mjs --post", "timeout": 10 }] }
+      { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/check-script-guard.mjs --post", "timeout": 10 }] },
+      { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/agent-handoff-hook.mjs", "timeout": 10 }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "node C:/Users/PFrew/Projects/herdr-kanban/scripts/agent-stop-hook.mjs", "timeout": 30 }] }
