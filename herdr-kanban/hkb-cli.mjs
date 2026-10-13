@@ -14,6 +14,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs wait  T-02 "public/x/y.html, T-03" "the page this plan edits is created by T-03"
 //   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
 //   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
+//   node hkb.mjs files T-02 path [path ...]     (Builder, before the first edit: exit 1 names the needed files ## Files misses)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -24,7 +25,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -89,6 +90,23 @@ if (verb === 'result') {
     writeFileSync(card.path, next)
     console.log(`${cardId}: Implementation and Evidence written; run hkb done ${cardId} when the commit is ready`)
     process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
+// files: read-only Files check a Builder runs before its first edit (HK41); writes nothing, so the issue path and return count are untouched.
+if (verb === 'files') {
+  if (!cardId || !rest.length) fail('usage: hkb files T-02 <path> [<path> ...] (workspace-relative, written as ## Files writes them)')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  const bad = rest.find(p => isAbsolute(p) || /^[a-z]:/i.test(p) || p.split(/[\\/]/).includes('..'))
+  if (bad) fail(`files paths are workspace-relative, as ## Files writes them; "${bad}" is not`)
+  try {
+    const card = findCard(tasksDir, cardId)
+    if (card.column !== 'working') fail(`files checks a Builder's scope; ${cardId} is in ${card.column}`)
+    const missing = missingFromFiles(readFileSync(card.path, 'utf8'), rest)
+    if (!missing.length) { console.log(`FILES OK ${cardId}: all ${rest.length} paths are in ## Files; edit now`); process.exit(0) }
+    const list = missing.join(', ')
+    console.log(`FILES MISSING ${cardId}: ${list}\nHand back now, before any edit: issue ${cardId} "[planning] ## Files misses: ${list}; needed because <why>"`)
+    process.exit(1)
   } catch (err) { fail(err.message) }
 }
 

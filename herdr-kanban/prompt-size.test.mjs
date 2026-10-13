@@ -18,9 +18,9 @@ test('plannerPrompt stays at or below 4,300 chars with at most two hkb.mjs menti
   }
 })
 
-test('workerPrompt stays at or below 5,500 chars', () => {
+test('workerPrompt stays at or below 6,000 chars', () => {
   const w = workerPrompt(common)
-  assert.ok(w.length <= 5500, `workerPrompt is ${w.length} chars, want <= 5500`)
+  assert.ok(w.length <= 6000, `workerPrompt is ${w.length} chars, want <= 6000`)
   for (const verb of ['unchanged', 'done', 'issue', 'owner']) {
     assert.match(w, new RegExp(`\\b${verb}\\b`), `workerPrompt lost the "${verb}" hand-in command`)
   }

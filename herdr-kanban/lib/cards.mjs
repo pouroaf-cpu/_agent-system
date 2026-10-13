@@ -36,6 +36,14 @@ export function planEditedFiles(text) {
   return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
 }
 
+// HK41: the needed paths the plan's `## Files` does not cover (exact, or under a glob entry), de-duplicated, in the order given.
+// A file listed only as unchanged/read-only is not in planEditedFiles, so a needed edit to it is reported missing.
+export function missingFromFiles(text, needed) {
+  const norm = (p) => p.replaceAll('\\', '/').replace(/^\.\//, '')
+  const listed = planEditedFiles(text).map(norm)
+  return [...new Set(needed.map(norm))].filter(path => !listed.some(f => isGlob(f) ? globMatches(f, path) : f.toLowerCase() === path.toLowerCase()))
+}
+
 // HK27: a plan names each place to change as `path` lines START-END, `functionOrSelector`.
 const planPointers = (text) => [...text.matchAll(/\blines?\s+(\d+)\s*[-–]\s*(\d+)\s*,?\s*`([^`]+)`/gi)].map(m => ({ index: m.index, from: +m[1], to: +m[2], name: m[3] }))
 
