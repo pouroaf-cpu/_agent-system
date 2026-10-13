@@ -30,7 +30,7 @@ before(async () => {
   child = spawn(process.execPath, ['server.mjs'], {
     cwd: new URL('.', import.meta.url),
     env: { ...process.env, KANBAN_CONFIG: configPath, HERDR_BIN_PATH: 'missing-herdr-for-project-manager-test' },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   base = `http://127.0.0.1:${port}`
   for (let i = 0; ; i++) {
@@ -267,7 +267,7 @@ test('hkb found goes to the registered manager inbox, to the Kanban Manager with
   mkdirSync(join(tasks, 'working'), { recursive: true })
   writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')
   const managerInbox = join(root, 'inbox', 'Proj-INBOX.md'), kmInbox = join(root, 'km.md')
-  const hkb = (...a) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, 'found', ...a], { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: configPath, KANBAN_MANAGER_INBOX: kmInbox } })
+  const hkb = (...a) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, 'found', ...a], { encoding: 'utf8', windowsHide: true, env: { ...process.env, KANBAN_CONFIG: configPath, KANBAN_MANAGER_INBOX: kmInbox } })
   const read = (file) => existsSync(file) ? readFileSync(file, 'utf8') : ''
 
   let r = hkb('T-1', 'no manager yet')

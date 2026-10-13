@@ -16,7 +16,7 @@ test('a Planner issue that keeps the card in Planning is a handoff, not a no-han
     const owners = readCardPlanners(dir)
     owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [] }
     saveCardPlanners(dir, owners)
-    const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] Returned blocker remains: source list incomplete'], { encoding: 'utf8' })
+    const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] Returned blocker remains: source list incomplete'], { encoding: 'utf8', windowsHide: true })
     assert.equal(hkb.status, 0, hkb.stderr)
     assert.equal(findCard(dir, card.id).column, 'planning')
     // Injectbuddy I152/I178: left submitted, the watchdog later called this a no-handoff.
@@ -92,7 +92,7 @@ test('the third Planner blocker in a row goes to Owner as the question', () => {
       const owners = readCardPlanners(dir)
       owners[card.id] = { ...(owners[card.id] || {}), assignmentId: `a${n}`, lifecycle: 'active', paneId: `p${n}`, submitted: true, revokedPaneIds: [] }
       saveCardPlanners(dir, owners)
-      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, 'issue', card.id, `[planning] blocker remains, attempt ${n}`], { encoding: 'utf8' })
+      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, 'issue', card.id, `[planning] blocker remains, attempt ${n}`], { encoding: 'utf8', windowsHide: true })
     }
     for (const n of [1, 2]) { assert.equal(hkb(n).status, 0); assert.equal(findCard(dir, card.id).column, 'planning') }
     assert.equal(hkb(3).status, 0)
@@ -120,7 +120,7 @@ test('a refused plan handoff does not reset the Planner blocker count', () => {
       const owners = readCardPlanners(dir)
       owners[card.id] = { ...(owners[card.id] || {}), assignmentId: `a${n}`, lifecycle: 'active', paneId: `p${n}`, submitted: true, revokedPaneIds: [] }
       saveCardPlanners(dir, owners)
-      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8' })
+      return spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', `a${n}`, ...args], { encoding: 'utf8', windowsHide: true })
     }
     for (const n of [1, 2]) {
       assert.notEqual(hkb(n, 'move', card.id, 'planned').status, 0, 'the empty plan is refused')

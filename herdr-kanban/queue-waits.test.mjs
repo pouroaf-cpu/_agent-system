@@ -20,7 +20,7 @@ copyFileSync(new URL('./board.config.json', import.meta.url), process.env.KANBAN
 process.on('exit', () => rmSync(stateDir, { recursive: true, force: true }))
 
 const git = (cwd, ...args) => {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })
   assert.equal(r.status, 0, r.stderr)
   return r.stdout.trim()
 }

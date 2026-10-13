@@ -100,7 +100,7 @@ try {
     await run(0); assert.equal(log.starts, 1, 'a blocked card is planned ahead')
     // The Planner declines anyway: recorded as a wait, not a failure.
     saveCardPlanners(dir, { [card.id]: { assignmentId: 'a1', lifecycle: 'active', paneId: 'p-old', submitted: true, inactiveSince: new Date(0).toISOString(), revokedPaneIds: [] } })
-    const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] not build-ready until T-1 lands'], { encoding: 'utf8', env: { ...process.env } })
+    const hkb = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[planning] not build-ready until T-1 lands'], { encoding: 'utf8', windowsHide: true, env: { ...process.env } })
     assert.equal(hkb.status, 0, hkb.stderr)
     assert.equal(findCard(dir, card.id).column, 'planning')
     const events = history(dir, card.id).map(e => e.event)

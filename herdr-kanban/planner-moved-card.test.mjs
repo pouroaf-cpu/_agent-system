@@ -23,7 +23,7 @@ test('a split during a planner pass skips the moved card without reporting a fai
   const errors = []
   let splitAt = 'snapshot', starts = 0
   const split = () => {
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, 'split', card.id, '1. First finding (a.log)\n2. Second finding (b.log)'], { encoding: 'utf8' })
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, 'split', card.id, '1. First finding (a.log)\n2. Second finding (b.log)'], { encoding: 'utf8', windowsHide: true })
     assert.equal(result.status, 0, result.stderr)
   }
   const io = {

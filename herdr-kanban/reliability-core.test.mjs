@@ -41,7 +41,7 @@ test('hkb rework uses explicit --tasks even when cwd belongs to another project'
   mkdirSync(cwd)
   writeFileSync(join(tasks, 'review', 'T-1-card.md'), '# T-1 — Card\n\n**Review feedback** old\n\n**Review feedback** older\n')
   try {
-    const result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), '--tasks', tasks, 'rework', 'T-1', '[planning] omitted criterion'], { cwd, encoding: 'utf8' })
+    const result = spawnSync(process.execPath, [join(process.cwd(), 'hkb.mjs'), '--tasks', tasks, 'rework', 'T-1', '[planning] omitted criterion'], { cwd, encoding: 'utf8', windowsHide: true })
     assert.equal(result.status, 0, result.stderr)
     assert.equal(existsSync(join(tasks, 'planning', 'T-1-card.md')), true)
   } finally { rmSync(root, { recursive: true, force: true }) }

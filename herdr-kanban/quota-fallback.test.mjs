@@ -128,7 +128,7 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   config.maxConcurrentAgents = 0
   await new Promise(resolve => socket.close(resolve))
   writeFileSync(configPath, JSON.stringify(config))
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: import.meta.dirname, env: { ...process.env, HERDR_BIN_PATH: 'missing-herdr-for-fallback-test' }, stdio: 'ignore' })
+  const child = spawn(process.execPath, ['server.mjs'], { cwd: import.meta.dirname, env: { ...process.env, HERDR_BIN_PATH: 'missing-herdr-for-fallback-test' }, stdio: 'ignore', windowsHide: true })
   t.after(() => child.kill())
   const base = `http://127.0.0.1:${config.port}`
   for (let i = 0; ; i++) {

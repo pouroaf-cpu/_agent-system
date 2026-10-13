@@ -24,13 +24,13 @@ function repos(t) {
   const root = mkdtempSync(join(tmpdir(), 'release-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const origin = join(root, 'origin.git'), dev = join(root, 'dev'), integ = join(root, 'integ')
-  spawnSync('git', ['init', '--bare', '-b', 'master', origin])
-  spawnSync('git', ['clone', origin, dev])
+  spawnSync('git', ['init', '--bare', '-b', 'master', origin], { windowsHide: true })
+  spawnSync('git', ['clone', origin, dev], { windowsHide: true })
   for (const cwd of [dev]) { git(cwd, 'config', 'user.email', 't@t'); git(cwd, 'config', 'user.name', 't') }
   writeFileSync(join(dev, 'a.txt'), 'one\n'); git(dev, 'add', '.'); git(dev, 'commit', '-m', 'init'); git(dev, 'push', 'origin', 'master')
   git(dev, 'checkout', '-b', 'kanban-integration')
   writeFileSync(join(dev, 'b.txt'), 'card\n'); git(dev, 'add', '.'); git(dev, 'commit', '-m', 'card'); git(dev, 'push', 'origin', 'kanban-integration')
-  spawnSync('git', ['clone', '-b', 'kanban-integration', origin, integ])
+  spawnSync('git', ['clone', '-b', 'kanban-integration', origin, integ], { windowsHide: true })
   git(integ, 'config', 'user.email', 't@t'); git(integ, 'config', 'user.name', 't')
   // The release: optional sitemap commit on kanban-integration, then a --no-ff merge into master.
   writeFileSync(join(dev, 'sitemap.xml'), '<urlset/>\n'); git(dev, 'add', '.'); git(dev, 'commit', '-m', 'sitemap'); git(dev, 'push', 'origin', 'kanban-integration')
@@ -79,8 +79,8 @@ test('finish merges a partial release in, keeping cards integrated after it; a c
   writeFileSync(join(r.integ, 'd.txt'), 'integrated after release\n'); git(r.integ, 'add', '.'); git(r.integ, 'commit', '-m', 'late card')
   const late = git(r.integ, 'rev-parse', 'HEAD')
   finishRelease({ integrationPath: r.integ, commit: r.release })
-  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', r.release, 'HEAD']).status, 0)
-  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', late, 'HEAD']).status, 0)
+  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', r.release, 'HEAD'], { windowsHide: true }).status, 0)
+  assert.equal(spawnSync('git', ['-C', r.integ, 'merge-base', '--is-ancestor', late, 'HEAD'], { windowsHide: true }).status, 0)
 
   const c = repos(t)
   writeFileSync(join(c.integ, 'sitemap.xml'), '<clash/>\n'); git(c.integ, 'add', '.'); git(c.integ, 'commit', '-m', 'clash')

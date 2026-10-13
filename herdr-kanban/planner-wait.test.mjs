@@ -17,7 +17,7 @@ const wait = (dir, id, ...args) => {
   const owners = readCardPlanners(dir)
   owners[id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
   saveCardPlanners(dir, owners)
-  return spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'wait', id, ...args], { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: join(dir, 'none.json'), KANBAN_MANAGER_INBOX: join(dir, 'inbox.md') } })
+  return spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'wait', id, ...args], { encoding: 'utf8', windowsHide: true, env: { ...process.env, KANBAN_CONFIG: join(dir, 'none.json'), KANBAN_MANAGER_INBOX: join(dir, 'inbox.md') } })
 }
 
 // 11 of 19 Planner hand-backs since 26 Sep were a missing file or card sent as `issue`,
@@ -85,7 +85,7 @@ test('hkb issue [decision] from Planning holds the card for the manager, uncount
     owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
     saveCardPlanners(dir, owners)
     const r = spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[decision] one page or two? A: one page, B: two pages'],
-      { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: inbox } })
+      { encoding: 'utf8', windowsHide: true, env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: inbox } })
     assert.equal(r.status, 0, r.stderr)
     assert.equal(findCard(dir, card.id).column, 'planning')
     const saved = readWorkflow(dir)[card.id]
@@ -130,7 +130,7 @@ test('hkb issue [board] from Planning holds the card and flags the Kanban Manage
     owners[card.id] = { assignmentId: 'a1', lifecycle: 'active', paneId: 'p1', submitted: true, revokedPaneIds: [], engine: 'codex' }
     saveCardPlanners(dir, owners)
     const r = spawnSync(process.execPath, [HKB, '--tasks', dir, '--planner-assignment', 'a1', 'issue', card.id, '[board] plan check demands an AC3 FAIL base line, but AC3 is a guard that passes by design'],
-      { encoding: 'utf8', env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: kmInbox } })
+      { encoding: 'utf8', windowsHide: true, env: { ...process.env, KANBAN_CONFIG: config, KANBAN_MANAGER_INBOX: kmInbox } })
     assert.equal(r.status, 0, r.stderr)
     assert.equal(findCard(dir, card.id).column, 'planning')
     const saved = readWorkflow(dir)[card.id]
@@ -164,7 +164,7 @@ test('/api/move planning -> planning clears a missing-file wait and requests a P
     child = spawn(process.execPath, ['server.mjs'], {
       cwd: new URL('.', import.meta.url),
       env: { ...process.env, KANBAN_CONFIG: config, HERDR_BIN_PATH: 'missing-herdr-for-wait-test' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
     let output = ''
     child.stdout.on('data', chunk => { output += chunk })
