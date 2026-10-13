@@ -68,7 +68,9 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     import {reconcileCompletedHandoffs} from ${JSON.stringify(source('./lib/completed-handoff.mjs'))}
     import {appendHistory} from ${JSON.stringify(source('./lib/card-history.mjs'))}
     const root=${JSON.stringify(root)},repo=${JSON.stringify(repo)},tasksDir=${JSON.stringify(tasks)}
-    Object.assign(headless,createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]}))
+    // The session-end worktree sweep (session-end-servers.test.mjs) costs seconds per session; this flow does not need it.
+    const noSweep=h=>({...h,agentStart:o=>h.agentStart({...o,worktreePath:undefined})})
+    Object.assign(headless,noSweep(createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]})))
     const common={project:'Proof',projectPath:repo,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},max:1,engine:{kind:'codex',reasoningArgs:['-c','model_reasoning_effort="low"']},model:'gpt-6.1-sol',gitSettings:{worktreesRoot:root+'/worktrees'}}
     const put=id=>writeFileSync(tasksDir+'/queue/'+id+'.md','# '+id+' — proof\\n**Workspace:** app\\n## Files\\n- \\x60result.mjs\\x60 result\\n## Acceptance criteria\\nResult is true\\n')
     const waitDone=async id=>{for(let n=0;n<200;n++){const rows=await agentList('proof'),a=rows.find(a=>a.pane_id===id);if(a?.agent_status==='done'&&a.exitCode!=null)return rows;await new Promise(r=>setTimeout(r,50))}throw Error('Timed out')}

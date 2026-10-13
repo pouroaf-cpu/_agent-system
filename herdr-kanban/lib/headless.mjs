@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,7 @@ import { PaneProcessTrees } from './process-tree.mjs'
 import * as herdr from './herdr.mjs'
 import { assertPromptAllowed } from './project-control.mjs'
 import * as bindings from './bindings.mjs'
+import { stopServersIn } from './orphan-servers.mjs'
 
 export const isHeadless = id => String(id).startsWith('headless-')
 export function launchArgs(options, prompt, sessionId) {
@@ -40,6 +41,7 @@ export function agentCommand(engine, env = process.env) {
 }
 
 const alive = pid => { try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' } }
+const within = (path, dir) => !!path && `${resolve(path).toLowerCase()}\\`.startsWith(`${resolve(dir).toLowerCase().replace(/[\\/]+$/, '')}\\`)
 function tail(file, bytes = 128 * 1024) {
   if (!existsSync(file)) return ''
   const size = statSync(file).size, fd = openSync(file, 'r')
@@ -109,7 +111,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
       const spec = join(root, `${id}.${randomUUID()}.launch.json`)
       // Each turn gets its own exit file, so a previous exit cannot mark a resumed turn done.
       const turnExit = spec + '.exit.json'
-      writeFileSync(spec, JSON.stringify({ exe, args: [...prefix, ...argv], cwd: row.options.workspacePath, exitFile: turnExit, log: row.log }))
+      writeFileSync(spec, JSON.stringify({ exe, args: [...prefix, ...argv], cwd: row.options.workspacePath, exitFile: turnExit, log: row.log, stopIn: row.options.worktreePath }))
       const fd = openSync(row.log, 'a')
       let child
       try {
@@ -147,6 +149,11 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
         await trees.observe([{ key, shellPid: pid }]); await trees.close(key)
         if (process.platform !== 'win32' && alive(pid)) process.kill(pid === row.pid ? -pid : pid, 'SIGTERM')
       }
+      // The tree above misses a server whose parent already exited, and the supervisor may be gone
+      // without a record (killed): sweep the card's worktree unless another agent still works in it
+      // (IA93). A recorded exit was written after the supervisor's own sweep.
+      const dir = refresh(row).exitCode == null && row.options?.worktreePath
+      if (dir && !load().some(a => a.id !== id && !a.closedAt && refresh(a).exitCode == null && alive(a.pid) && within(a.options?.workspacePath || a.cwd, dir))) try { stopServersIn(dir) } catch {}
       patch(id, { closedAt: new Date().toISOString() })
     },
     async focusAgent(id) {

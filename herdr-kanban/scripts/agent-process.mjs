@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, unlinkSync, statSync, appendFileSync, openSync, readSync, closeSync } from 'node:fs'
 import { renameSync } from '../lib/fs-retry.mjs'
 import { PaneProcessTrees } from '../lib/process-tree.mjs'
+import { stopServersIn } from '../lib/orphan-servers.mjs'
 const file = process.argv[2]
 const spec = JSON.parse(readFileSync(file, 'utf8'))
 unlinkSync(file)
@@ -16,7 +17,11 @@ const finished = value => { writeFileSync(spec.exitFile + '.tmp', JSON.stringify
 const trees = new PaneProcessTrees()
 const watch = () => trees.observe([{ key: 'agent', shellPid: child.pid }]).catch(() => {})
 let timer, doneTimer, timesTimer
-const cleanup = async () => { clearInterval(timer); clearInterval(doneTimer); clearInterval(timesTimer); stamp(); await watch(); await trees.close('agent').catch(() => {}) }
+// The snapshots miss a server whose parent exited between them, so the card's worktree is swept too.
+const cleanup = async () => {
+  clearInterval(timer); clearInterval(doneTimer); clearInterval(timesTimer); stamp(); await watch(); await trees.close('agent').catch(() => {})
+  if (spec.stopIn) try { stopServersIn(spec.stopIn) } catch {}
+}
 // A finished turn whose process stays up (Codex waiting on a `next start` it launched held I683's
 // integration for 7 minutes, 2026-10-03) is ended 30 s after its completion event.
 const DONE = /"type":"(turn\.completed|turn\.failed|result)"/
