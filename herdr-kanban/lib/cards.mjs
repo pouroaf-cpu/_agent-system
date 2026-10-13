@@ -606,6 +606,55 @@ export const builderResult = text => text.replaceAll('**', '').replace(/^[ \t]*[
   .replace(new RegExp(`[,;][ \\t]*(?=(?:${BUILDER_FIELDS.join('|')}):)`, 'g'), '\n')
 export const builderPassIn = result => /^Stage:\s*builder\s*$/mi.test(result) && /^Outcome:\s*PASS(?:\s*$|\s*[:.;—–-]\s*\S)/mi.test(result)
 
+// The refusal hkb done/unchanged (and hkb result) give a card's Builder result, or '' when it passes.
+// `text` is the card text with headings already unglued.
+export function builderResultError(verb, text) {
+  const sections = []
+  for (const heading of ['Implementation', 'Evidence']) {
+    const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
+    if (!content) return emptySectionError(verb, heading, text)
+    sections.push(content)
+  }
+  if (!/^\*\*Workflow version:\*\* 2$/m.test(text)) return ''
+  const result = builderResult(sections.join('\n'))
+  for (const field of BUILDER_FIELDS) {
+    if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) return `version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`
+  }
+  if (!builderPassIn(result)) return `${verb} requires Stage: builder and Outcome: PASS`
+  // Testing is the Builder's job now, not the Planner's (operator 2026-10-11): for each AC,
+  // run the smallest fitting test and record it here, e.g. "AC1: npm test -> 4 passing".
+  const untested = acceptanceCriteriaIds(text).filter(ac => !new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?${ac}[ \\t]*:[ \\t]*\\S`, 'm').test(result))
+  return untested.length ? `version-2 ${verb} result is missing a recorded test for ${untested.join(', ')} — add a line in ## Implementation or ## Evidence like "${untested[0]}: <command> -> <result>"` : ''
+}
+
+// hkb result: the Builder's "## Implementation" and "## Evidence" text, split on those two heading lines.
+export function parseResultText(input) {
+  const bodies = {}
+  let heading
+  for (const line of input.split(/\r?\n/)) {
+    const next = line.match(/^## (Implementation|Evidence)\s*$/)?.[1]
+    if (next) { heading = next; bodies[heading] ??= ''; continue }
+    if (heading) bodies[heading] += `${line}\n`
+  }
+  const { Implementation = '', Evidence = '' } = bodies
+  if (!Implementation.trim() || !Evidence.trim()) throw new Error('result needs both a ## Implementation and a ## Evidence section in the text')
+  return { Implementation: Implementation.trim(), Evidence: Evidence.trim() }
+}
+
+// Replace the body of each first "## <Heading>" (heading line to the next "## " line) and append a missing
+// heading; every other character is copied through, so no other section moves or changes.
+export function replaceResultSections(text, bodies) {
+  for (const heading of ['Implementation', 'Evidence']) {
+    const body = bodies[heading].trim()
+    const found = new RegExp(`^## ${heading}[ \\t]*(?:\\r?\\n|(?![\\s\\S]))`, 'm').exec(text)
+    if (!found) { text = `${text}${text.endsWith('\n') ? '' : '\n'}\n## ${heading}\n\n${body}\n`; continue }
+    const start = found.index + found[0].length
+    const rel = text.slice(start).search(/^## /m)
+    text = `${text.slice(0, start)}\n${body}\n${rel < 0 ? '' : '\n'}${text.slice(rel < 0 ? text.length : start + rel)}`
+  }
+  return text
+}
+
 export function canArchive(card) {
   return (!card.cardOwned && !card.mission) || card.reviewPassed || !!card.audit || hasOperatorCompletion(card) ||
     (card.cardOwned && !card.autoReview && hasBuilderPass(card) && hasIntegratedWorktree(card))

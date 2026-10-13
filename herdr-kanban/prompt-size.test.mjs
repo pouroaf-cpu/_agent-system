@@ -26,6 +26,13 @@ test('workerPrompt stays at or below 5,500 chars', () => {
   }
 })
 
+test('workerPrompt names hkb result and no longer asks for a scripted section replace', () => {
+  const w = workerPrompt(common)
+  assert.match(w, /hkb\.mjs['"]? result IA999 --file/)
+  assert.doesNotMatch(w, /scripted/)
+  assert.doesNotMatch(w, /\n/)
+})
+
 test('neither prompt carries dead Codex/plan-check wording', () => {
   const p = plannerPrompt(common)
   const w = workerPrompt(common)

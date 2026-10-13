@@ -13,6 +13,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs found --board T-02 "hkb refused a valid handoff: ..."
 //   node hkb.mjs wait  T-02 "public/x/y.html, T-03" "the page this plan edits is created by T-03"
 //   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
+//   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -23,7 +24,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResult, builderPassIn, BUILDER_FIELDS, unglueHeadings, emptySectionError, acceptanceCriteriaIds, createCard, planEditedFiles } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -64,6 +65,29 @@ if (verb === 'show') {
   try {
     const card = findCard(tasksDir, cardId)
     process.stdout.write(`${resolve(card.path)}\n${readFileSync(card.path, 'utf8')}`)
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
+// result: write the Builder's ## Implementation and ## Evidence bodies from text (--file, else stdin),
+// refusing exactly what done would, so no helper script is needed (HK25).
+if (verb === 'result') {
+  if (!cardId) fail('missing card id, e.g. hkb result T-02 --file result.md')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const card = findCard(tasksDir, cardId)
+    if (card.column !== 'working') fail(`result writes the Builder's sections; ${cardId} is in ${card.column}`)
+    const file = rest[rest.indexOf('--file') + 1]
+    let input = ''
+    try { input = readFileSync(rest.includes('--file') && file ? file : 0, 'utf8') } catch {}
+    if (!input.trim()) fail('result needs the text: hkb result T-02 --file <path>, or pipe it on stdin')
+    const bodies = parseResultText(input), next = replaceResultSections(readFileSync(card.path, 'utf8'), bodies)
+    // done splits the card at "## Implementation|Evidence|Reviewer evidence" in mid-line, so refuse text that would be cut.
+    const midLine = Object.values(bodies).some(body => unglueHeadings(body) !== body)
+    const error = midLine ? 'result text has "## Implementation", "## Evidence" or "## Reviewer evidence" in the middle of a line, where hkb done would split the card; reword it without the leading ##' : builderResultError('done', unglueHeadings(next))
+    if (error) fail(error)
+    writeFileSync(card.path, next)
+    console.log(`${cardId}: Implementation and Evidence written; run hkb done ${cardId} when the commit is ready`)
     process.exit(0)
   } catch (err) { fail(err.message) }
 }
@@ -306,7 +330,7 @@ if (verb === 'split' && rest[0] === '--parts') {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show|result> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb result <card-id> --file <path>   (Builder: write the ## Implementation and ## Evidence bodies from text, or pipe it on stdin; refuses what done would)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 
@@ -488,23 +512,8 @@ try {
   if (['done', 'unchanged'].includes(verb) && current.cardOwned) {
     const raw = readFileSync(current.path, 'utf8'), text = unglueHeadings(raw)
     if (text !== raw) writeFileSync(current.path, text)
-    const sections = []
-    for (const heading of ['Implementation', 'Evidence']) {
-      const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
-      if (!content) fail(emptySectionError(verb, heading, text))
-      sections.push(content)
-    }
-    if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
-      const result = builderResult(sections.join('\n'))
-      for (const field of BUILDER_FIELDS) {
-        if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) fail(`version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`)
-      }
-      if (!builderPassIn(result)) fail(`${verb} requires Stage: builder and Outcome: PASS`)
-      // Testing is the Builder's job now, not the Planner's (operator 2026-10-11): for each AC,
-      // run the smallest fitting test and record it here, e.g. "AC1: npm test -> 4 passing".
-      const untested = acceptanceCriteriaIds(text).filter(ac => !new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?${ac}[ \\t]*:[ \\t]*\\S`, 'm').test(result))
-      if (untested.length) fail(`version-2 ${verb} result is missing a recorded test for ${untested.join(', ')} — add a line in ## Implementation or ## Evidence like "${untested[0]}: <command> -> <result>"`)
-    }
+    const error = builderResultError(verb, text)
+    if (error) fail(error)
   }
   const check = (plannerAssignment || current.column === 'planning') && ['planned', 'queue'].includes(target) ? planCheck(current) : {}
   if (check.planWorkspace && current.cardOwned) validatePlan(readFileSync(current.path, 'utf8'), { requireReadiness: !!plannerAssignment, workspace: check.planWorkspace, sharedFiles: check.sharedFiles })
