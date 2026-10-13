@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { checkStalls, laneTimes, recordHealthyPoll } from './lib/stall-watchdog.mjs'
 import { findCard, readBoard } from './lib/cards.mjs'
 import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
-import { readWorkflow, recordOperationalFailure } from './lib/workflow-state.mjs'
+import { readWorkflow, recordOperationalFailure, updateWorkflow } from './lib/workflow-state.mjs'
 import { readCardPlanners } from './lib/card-planner.mjs'
 
 const MIN = 60000
@@ -331,4 +331,16 @@ test('an exited headless Planner is reported as no longer running by the stall w
   assert.equal(stalls.length, 1)
   checkStalls({ tasksDir: tasks, agents, now: T + 40 * MIN })
   assert.match(readFileSync(findCard(tasks, 'T-1').path, 'utf8'), /Planner headless-proof is no longer running and did not hand off/)
+})
+
+test('HK40: a card the Finder held waits for the manager and is not stalled to Owner', t => {
+  const { tasks, put } = board(t)
+  put('planning', 'T-1')
+  put('planning', 'T-2')
+  updateWorkflow(tasks, 'T-1', { finder: { done: true, held: true, status: 'held', reason: 'unbounded scope' }, waitFor: { cards: [], files: [], decision: true, finder: true, why: 'Finder held T-1', since: new Date(T).toISOString() } })
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T }), [])
+  checkStalls({ tasksDir: tasks, agents: [], now: T + 90 * MIN })
+  assert.equal(findCard(tasks, 'T-1').column, 'planning')
+  // Control: the same card without the hold is stalled.
+  assert.equal(findCard(tasks, 'T-2').column, 'owner', 'control card without a wait moves to Owner')
 })

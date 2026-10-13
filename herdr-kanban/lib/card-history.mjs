@@ -304,14 +304,14 @@ export function writeCurrentFeedback(tasksDir, card, heading, note) {
 // operator only hears from Pou. I326's Planner question stayed in Planning and reached
 // the operator through the Planner's own session instead (2026-09-27). Projects without
 // a manager ask the Kanban Manager. Folders that are not board projects (tests) skip it.
-export function askManager(tasksDir, card, note) {
+export function askManager(tasksDir, card, note, max = 600) {
   try {
     const here = dirname(dirname(fileURLToPath(import.meta.url)))
     const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || join(here, 'board.config.json'), 'utf8'))
     const project = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(dirname(tasksDir)).toLowerCase())
     if (!project) return
     const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
-    const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 600)
+    const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, max)
     postInbox(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
 `)
   } catch { /* the question is still on the card; routing is best effort */ }

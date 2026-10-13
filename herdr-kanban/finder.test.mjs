@@ -1,12 +1,12 @@
 // HK29: a read-only Haiku Finder lists the code a card touches before its Planner starts.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createCard, findCard, readBoard } from './lib/cards.mjs'
-import { runCardPlanner, readCardPlanners, busyPlanners, parseFinderList, finderText, writeFinderList, FINDER_TIMEOUT_MS } from './lib/card-planner.mjs'
+import { runCardPlanner, readCardPlanners, busyPlanners, parseFinderList, finderText, writeFinderList, parseFinderSize, operatorRetry, FINDER_TIMEOUT_MS } from './lib/card-planner.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 import { stageIndicators } from './lib/stage-indicators.mjs'
 import { agentStartArgs } from './lib/herdr.mjs'
@@ -152,12 +152,106 @@ test('AC4: a Finder that never exits is cut off at the timeout', async () => {
   })
 })
 
-test('AC4: a Finder that prints only prose leaves no list', async () => {
-  await endsAtPlanner({ status: 'empty', harness: { outputs: { p1: 'I looked through the repository but I am not sure what to list.' } } }, async h => {
-    await h.run(T0)
-    h.setStatus(h.names[0], 'done')
-    await h.run(T0 + 20000)
+// HK40: a project with a manager inbox, so a held card's ASK can be read back.
+function projectBoard() {
+  const root = mkdtempSync(join(tmpdir(), 'finder-hk40-'))
+  const dir = join(root, 'Proj', 'TASKS'), inbox = join(root, 'inbox.md')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(root, 'board.config.json'), JSON.stringify({ projectsRoot: root, projects: ['Proj'], projectSettings: { Proj: { manager: { chat: 'Proj chat', inbox } } } }))
+  process.env.KANBAN_CONFIG = join(root, 'board.config.json')
+  const asks = () => existsSync(inbox) ? readFileSync(inbox, 'utf8').split('\n').filter(l => / ASK Proj /.test(l)) : []
+  return { root, dir, asks, done: () => { delete process.env.KANBAN_CONFIG; rmSync(root, { recursive: true, force: true }) } }
+}
+const finderExits = async h => { await h.run(T0); h.setStatus(h.names[0], 'done'); await h.run(T0 + 20000) }
+
+for (const [name, size] of [['over the limit', 'Size: 14 files, 5 areas'], ['unbounded', 'Size: unbounded'], ['no list and no size', 'I looked through the repository but I am not sure what to list.']]) {
+  test(`HK40 AC1: a Finder reporting "${name}" holds the card, starts no Planner and sends one ASK`, async () => {
+    const b = projectBoard()
+    try {
+      const card = createCard(b.dir, { title: 'Big card', brief: 'x' })
+      const h = harness(b.dir, { outputs: { p1: name === 'no list and no size' ? size : [...LIST, size].join('\n') } })
+      await finderExits(h)
+      await h.run(T0 + 40000)
+      await h.run(T0 + FINDER_TIMEOUT_MS * 3)
+      assert.deepEqual(h.names.filter(n => n.startsWith('p-')), [], 'no Planner')
+      assert.equal(findCard(b.dir, card.id).column, 'planning')
+      const wf = readWorkflow(b.dir)[card.id]
+      assert.equal(wf.finder.status, 'held')
+      assert.equal(wf.waitFor.decision, true)
+      const asks = b.asks()
+      assert.equal(asks.length, 1)
+      assert.match(asks[0], new RegExp(`ASK Proj ${card.id} \\(planning\\):`))
+      if (name !== 'no list and no size') assert.match(asks[0], /lib\/card-planner\.mjs/)
+      else assert.match(asks[0], /none printed/)
+    } finally { b.done() }
   })
+}
+
+test('HK40 AC2: a Finder reporting 10 files and 2 areas starts the Planner, size line first, no ASK', async () => {
+  const b = projectBoard()
+  try {
+    const card = createCard(b.dir, { title: 'Card', brief: 'x' })
+    const h = harness(b.dir, { outputs: { p1: [...LIST, 'Size: 10 files, 2 areas'].join('\n') } })
+    await finderExits(h)
+    assert.ok(h.names.includes(agentName('planner', card.id)))
+    assert.equal(readWorkflow(b.dir)[card.id].finder.status, 'listed')
+    assert.match(readFileSync(findCard(b.dir, card.id).path, 'utf8'), /^## Finder list\r?\nSize: 10 files, 2 areas\r?\n- `herdr-kanban/m)
+    assert.deepEqual(b.asks(), [])
+  } finally { b.done() }
+})
+
+test('HK40 AC3: a timed out Finder that printed an oversize line still reaches the Planner, with no size and no ASK', async () => {
+  const b = projectBoard()
+  try {
+    const card = createCard(b.dir, { title: 'Card', brief: 'x' })
+    const h = harness(b.dir, { outputs: { p1: 'Size: 30 files, 4 areas' } })
+    await h.run(T0)
+    await h.run(T0 + FINDER_TIMEOUT_MS)
+    assert.ok(h.names.includes(agentName('planner', card.id)))
+    const finder = readWorkflow(b.dir)[card.id].finder
+    assert.equal(finder.status, 'timeout')
+    assert.equal(finder.size, undefined)
+    assert.doesNotMatch(readFileSync(findCard(b.dir, card.id).path, 'utf8'), /## Finder list/)
+    assert.deepEqual(b.asks(), [])
+  } finally { b.done() }
+})
+
+test('HK40 AC4: only a line in the Size format is read, the last one wins, and it is written once', () => {
+  const sample = ['I found some code.', 'Size: 3 files', 'Size: many files, 2 areas', 'Size: 4 files, 2 areas', 'Sizes: 9 files, 1 areas', 'size: UNBOUNDED', 'Size: 7 files, 1 flow'].join('\n')
+  assert.deepEqual(parseFinderSize(sample), { files: 7, areas: 1 })
+  assert.deepEqual(parseFinderSize('Size: 4 files, 2 areas\nsize: UNBOUNDED'), { unbounded: true })
+  assert.deepEqual(parseFinderSize('Size: 4 files, 2 areas'), { files: 4, areas: 2 })
+  assert.equal(parseFinderSize('Size: 3 files\nSize: many files, 2 areas\nno size here'), null)
+  const dir = mkdtempSync(join(tmpdir(), 'finder-hk40-size-'))
+  try {
+    const card = createCard(dir, { title: 'Card', brief: 'x' })
+    writeFinderList(findCard(dir, card.id), LIST, { files: 4, areas: 2 })
+    writeFinderList(findCard(dir, card.id), LIST, { files: 5, areas: 2 })
+    const text = readFileSync(findCard(dir, card.id).path, 'utf8')
+    assert.equal((text.match(/^Size: /gm) || []).length, 1)
+    assert.match(text, /^## Finder list\r?\nSize: 5 files, 2 areas\r?\n- /m)
+    writeFinderList(findCard(dir, card.id), LIST)
+    assert.doesNotMatch(readFileSync(findCard(dir, card.id).path, 'utf8'), /^Size: /m)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('HK40 AC6: when the hold is lifted the Finder runs again on the new brief', async () => {
+  const b = projectBoard()
+  try {
+    const card = createCard(b.dir, { title: 'Big card', brief: 'x' })
+    const h = harness(b.dir, { outputs: { p1: 'Size: 14 files, 5 areas' } })
+    await finderExits(h)
+    assert.equal(readWorkflow(b.dir)[card.id].finder.status, 'held')
+    h.outputs.p2 = [...LIST, 'Size: 3 files, 1 areas'].join('\n')
+    operatorRetry(b.dir, card.id, 'planning')
+    assert.equal(readWorkflow(b.dir)[card.id].finder ?? null, null)
+    await h.run(T0 + 60000)
+    assert.equal(h.names.filter(n => n.startsWith('f-')).length, 2, 'a second Finder')
+    h.agents.find(a => a.pane_id === 'p2').agent_status = 'done' // both Finders share one name
+    await h.run(T0 + 90000)
+    assert.ok(h.names.includes(agentName('planner', card.id)))
+    assert.equal(b.asks().length, 1, 'only the first Finder asked')
+  } finally { b.done() }
 })
 
 test('AC5: the Planner prompt and PLANNER.md say to read the Finder list first', () => {

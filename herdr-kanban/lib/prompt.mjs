@@ -168,13 +168,15 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
   )
 }
 
-// The Finder (HK29) only reads. Its list is the Planner's first read, so it prints nothing else.
+// The Finder (HK29) only reads. Its list is the Planner's first read, so it prints only the list
+// and, since HK40, one final Size line the board uses to hold a card too big for one plan.
 export function finderPrompt({ card, projectPath }) {
   const root = resolve(projectPath, card.workspace || '.')
   return oneLine(
     `You are the Finder for card ${card.id}. You are read-only: you have Read, Grep and Glob only; change nothing.`,
     `Read the card at ${psLiteral(card.path.replaceAll('\\', '/'))} (## Approved brief and ## Files only), then search ${psLiteral(root.replaceAll('\\', '/'))} for the code the card's ask touches.`,
-    `Print only the list, one line per place, exactly: \`repository-relative path\` lines START-END, \`function or selector name\` — one line on why. At most 40 lines and at most 25 tool calls. Nothing before or after the list: no headings, no prose. Print nothing when you find nothing.`
+    `Print only the list, one line per place, exactly: \`repository-relative path\` lines START-END, \`function or selector name\` — one line on why. At most 40 lines and at most 25 tool calls.`,
+    `Then print one final line exactly: Size: N files, M areas (N = files the change will edit, M = distinct flows or areas), or exactly: Size: unbounded when you cannot bound the scope within the 25 tool calls. When you find nothing, print only Size: unbounded. Nothing else but the list and that one size line: no headings, no prose.`
   )
 }
 

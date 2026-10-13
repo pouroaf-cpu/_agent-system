@@ -18,7 +18,7 @@ import { controlState, assertPromptAllowed, projectEnvironment } from './project
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput, askManager } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
@@ -58,7 +58,9 @@ export function requestPlannerCorrection(dir, cardId, { correction = true, failu
 // Dragging a card out of Owner is the operator's "try again": clear the held failure,
 // restart the workflow-limit counters, and give Planning a fresh Planner.
 export function operatorRetry(tasksDir, cardId, to) {
-  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null, waitFor: null })
+  // HK40: a lifted Finder hold clears the Finder record so the Finder sizes the new brief.
+  const held = readWorkflow(tasksDir)[cardId]?.finder?.held
+  updateWorkflow(tasksDir, cardId, { operational: null, limitsResetAt: new Date().toISOString(), limitWarning: null, startFailure: null, plannerIssues: null, plannerEscalation: null, waitFor: null, ...(held ? { finder: null } : {}) })
   if (to === 'planning' || to === 'issues') requestPlannerCorrection(tasksDir, cardId)
 }
 // HK36 (Injectbuddy I1233): the open "Needs you" ask an `hkb owner` handoff left, or null. Only
@@ -118,8 +120,12 @@ export function operatorApprove(tasksDir, cardId, now = new Date()) {
 export const busyPlanners = agents => agents.filter(a => ['p', 'f'].includes(agentRole(a.name)) && !['idle', 'done'].includes(a.agent_status)).length
 
 // Finder (HK29): a read-only Haiku agent lists the code a card touches before the first Planner.
-// It never holds a card: a failure, timeout or empty print moves on to the Planner with no list.
+// HK40: a failure, a timeout and a list within the limit move on to the Planner. A Finder that
+// finished and reports more than FINDER_MAX_FILES files, an unbounded scope, or nothing usable
+// (no list and no size) holds the card in Planning with one ASK to the manager, no Planner.
 export const FINDER_TIMEOUT_MS = 5 * 60 * 1000
+export const FINDER_MAX_FILES = 10 // the PLANNER.md split rule
+const FINDER_SIZE = /^\s*Size:\s*(?:(\d+) files?, (\d+) (?:areas?|flows?)|(unbounded))\s*$/i
 const FINDER_LINE = /^\s*(?:[-*]\s+)?`([^`]+)` lines (\d+)-(\d+), `([^`]+)` [—–-] (.+?)\s*$/
 // Keeps only `path` lines A-B, `name` — why lines with a relative path and a sane range.
 export function parseFinderList(text) {
@@ -135,6 +141,15 @@ export function parseFinderList(text) {
   }
   return lines
 }
+// { files, areas }, { unbounded: true } or null. The last matching line wins: a pane may echo the prompt first.
+export function parseFinderSize(text) {
+  let size = null
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const m = FINDER_SIZE.exec(raw)
+    if (m) size = m[3] ? { unbounded: true } : { files: +m[1], areas: +m[2] }
+  }
+  return size
+}
 // A headless log tail is stream-json (one event per line); a herdr pane is plain text.
 export function finderText(raw) {
   return String(raw ?? '').split(/\r?\n/).flatMap(line => {
@@ -146,10 +161,11 @@ export function finderText(raw) {
   }).join('\n')
 }
 // Replaces any earlier ## Finder list; sits just before ## Files, or at the end without one.
-export function writeFinderList(card, lines) {
+export function writeFinderList(card, lines, size = null) {
   const text = readFileSync(card.path, 'utf8')
   const eol = text.includes('\r\n') ? '\r\n' : '\n'
-  const section = ['## Finder list', ...lines.map(l => `- ${l}`), '', ''].join(eol)
+  const sizeLine = !size ? [] : [size.unbounded ? 'Size: unbounded' : `Size: ${size.files} files, ${size.areas} areas`]
+  const section = ['## Finder list', ...sizeLine, ...lines.map(l => `- ${l}`), '', ''].join(eol)
   const old = /^## Finder list\r?\n[\s\S]*?(?=^## |$(?![\s\S]))/m
   const bare = old.test(text) ? text.replace(old, '') : text
   const files = /^## Files\r?$/m.exec(bare)
@@ -432,12 +448,30 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           await recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
           await paneClose(paneId, session).catch(() => {})
           if (agent) agents.splice(agents.indexOf(agent), 1) // its slot is free for the Planner below
-          const lines = parseFinderList(finderText(raw))
-          if (lines.length) writeFinderList(card, lines)
+          const text = finderText(raw)
+          const lines = parseFinderList(text)
+          const size = timedOut ? null : parseFinderSize(text)
+          const reason = timedOut ? null
+            : size?.unbounded ? 'unbounded scope'
+            : size?.files > FINDER_MAX_FILES ? `${size.files} files, over the limit of ${FINDER_MAX_FILES}`
+            : !lines.length && !size ? 'no list and no size' : null
+          if (lines.length || size) writeFinderList(card, lines, size)
           const log = logAgentOutput(tasksDir, card.id, 'finder-output', raw)
-          const status = timedOut ? 'timeout' : lines.length ? 'listed' : 'empty'
-          updateWorkflow(tasksDir, card.id, { finder: { done: true, status, lines: lines.length } })
-          appendHistory(tasksDir, card.id, { event: 'finder-finished', stage: 'planning', status, lines: lines.length, log: log.log })
+          const status = reason ? 'held' : timedOut ? 'timeout' : lines.length ? 'listed' : 'empty'
+          if (!reason) {
+            updateWorkflow(tasksDir, card.id, { finder: { done: true, status, lines: lines.length, ...(size ? { size } : {}) } })
+            appendHistory(tasksDir, card.id, { event: 'finder-finished', stage: 'planning', status, lines: lines.length, log: log.log })
+          } else {
+            const why = `Finder held ${card.id}: ${reason}. No Planner started. Split or narrow the brief, then move the card back to Planning; the Finder runs again on the new brief.`
+            updateWorkflow(tasksDir, card.id, {
+              finder: { done: true, held: true, status, reason, lines: lines.length, ...(size ? { size } : {}) },
+              waitFor: { cards: [], files: [], decision: true, finder: true, why, since: new Date(now).toISOString() },
+            })
+            appendHistory(tasksDir, card.id, { event: 'finder-finished', stage: 'planning', status, reason, lines: lines.length, log: log.log })
+            const list = lines.map(l => l.replace(/ [—–-] .*$/, '')).join('; ') || 'none printed'
+            askManager(tasksDir, card, `${why} Finder list: ${list}`, 2500)
+            continue // no Planner in this pass
+          }
         } catch (error) {
           if (error.paused) throw error
           if (paneId) await paneClose(paneId, session).catch(() => {})
