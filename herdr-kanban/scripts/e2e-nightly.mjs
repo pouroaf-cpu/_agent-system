@@ -33,7 +33,7 @@ if (type !== 'nightly' && !Object.hasOwn(TEST_TYPES, type)) throw new Error('Unk
 const started = new Date().toISOString()
 const stamp = started.replace(/[:.]/g, '-')
 const dir = join(process.env.TEMP || '/tmp', `ib-e2e-${stamp}`)
-const git = (...a) => spawnSync('git', ['-C', INTEG, ...a], { encoding: 'utf8' })
+const git = (...a) => spawnSync('git', ['-C', INTEG, ...a], { encoding: 'utf8', windowsHide: true })
 
 mkdirSync(OUT, { recursive: true })
 const head = git('rev-parse', '--short', 'HEAD').stdout.trim()
@@ -52,7 +52,7 @@ try {
   const serverLog = join(OUT, `${stamp}-server.log`)
   const logTail = () => { try { return readFileSync(serverLog, 'utf8').trim().split(/\r?\n/).slice(-5).join(' | ') } catch { return '(no server output)' } }
   const next = ['--env-file=' + ENV, 'node_modules/next/dist/bin/next']
-  const built = spawnSync(process.execPath, [...next, 'build'], { cwd: dir, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60000 })
+  const built = spawnSync(process.execPath, [...next, 'build'], { cwd: dir, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60000, windowsHide: true })
   appendFileSync(serverLog, `${built.stdout}\n${built.stderr}\n`)
   if (built.status !== 0) throw new Error(`next build failed (${built.error?.message || 'exit ' + built.status}): ${logTail()}`)
   // Staged specs go in after the build: next build type-checks every .ts file, and a type error in an
@@ -60,7 +60,7 @@ try {
   if (existsSync(STAGED)) cpSync(STAGED, join(dir, 'e2e', 'test-lab'), { recursive: true })
   // ponytail: one server for the whole run, no per-file restart. If the production server also dies
   // mid-run, upgrade to one Playwright call per spec file with a health check + restart between files.
-  server = spawn(process.execPath, [...next, 'start', '-H', '127.0.0.1', '-p', String(PORT)], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+  server = spawn(process.execPath, [...next, 'start', '-H', '127.0.0.1', '-p', String(PORT)], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   for (const stream of [server.stdout, server.stderr]) stream.on('data', d => appendFileSync(serverLog, d))
   let up = false
   for (let i = 0; i < 60 && !up && server.exitCode === null; i++) { // wait up to a minute
@@ -72,7 +72,7 @@ try {
   const report = join(OUT, `${stamp}.json`)
   // --env-file gives Playwright the dev test account for signed-in specs (node keeps variables already set).
   const run = spawnSync(process.execPath, [...(existsSync(DEV_ENV) ? ['--env-file=' + DEV_ENV] : []), 'node_modules/@playwright/test/cli.js', 'test', '--reporter=json', `--workers=${workers}`, `--repeat-each=${repeatEach}`, ...filters],
-    { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, env: { ...process.env, E2E_BASE_URL: base } })
+    { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, env: { ...process.env, E2E_BASE_URL: base }, windowsHide: true })
   writeFileSync(report, run.stdout)
   if (run.stderr) writeFileSync(join(OUT, `${stamp}-playwright.log`), run.stderr)
   let parsed
@@ -106,8 +106,8 @@ try {
   console.error(err.message)
   process.exitCode = 1
 } finally {
-  if (server) spawnSync('taskkill', ['/pid', String(server.pid), '/t', '/f'])
-  spawnSync('cmd', ['/c', 'rmdir', join(dir, 'node_modules')]) // unlink the junction only, never delete through it
+  if (server) spawnSync('taskkill', ['/pid', String(server.pid), '/t', '/f'], { windowsHide: true })
+  spawnSync('cmd', ['/c', 'rmdir', join(dir, 'node_modules')], { windowsHide: true }) // unlink the junction only, never delete through it
   git('worktree', 'remove', '--force', dir)
   rmSync(running, { force: true })
 }

@@ -184,7 +184,7 @@ async function source(engine, options) {
     if (!cli) throw new Error('Cannot locate npm/bin/npx-cli.js; use --claude-json and --codex-json')
     args.unshift(cli)
   }
-  const { stdout } = await exec(command, args, { maxBuffer: 64 << 20, timeout: 120000 })
+  const { stdout } = await exec(command, args, { maxBuffer: 64 << 20, timeout: 120000, windowsHide: true })
   return JSON.parse(stdout)
 }
 

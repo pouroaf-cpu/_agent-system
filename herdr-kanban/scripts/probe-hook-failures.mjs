@@ -32,7 +32,7 @@ if (mode === 'stdin-target') {
   const root = mkdtempSync(join(tmpdir(), 'codex-hook-failure-matrix-'))
   const self = fileURLToPath(import.meta.url), quote = s => `'${s.replaceAll("'", "''")}'`
   const results = []
-  console.log(JSON.stringify({ root, runtime: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim() }))
+  console.log(JSON.stringify({ root, runtime: execFileSync(executable, ['--version'], { encoding: 'utf8', windowsHide: true }).trim() }))
   for (const scenario of scenarios) {
     const dir = join(root, scenario), home = join(dir, 'home'); mkdirSync(home, { recursive: true })
     const sentinel = join(dir, 'sentinel.txt'), hookLog = join(dir, 'hook-events.jsonl'), hookFile = join(home, 'hooks.json')

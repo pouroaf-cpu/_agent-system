@@ -4,7 +4,7 @@ import { reconcileUsage, usageSummary } from './lib/request-usage.mjs'
 const output = process.argv.includes('--live') ? 'C:/Users/PFrew/Projects/Injectbuddy/TASKS' : 'C:/Users/PFrew/tmp/usage-proof'
 mkdirSync(output, { recursive:true })
 if (!process.argv.includes('--live')) copyFileSync('C:/Users/PFrew/Projects/Injectbuddy/TASKS/.request-usage.json', output+'/.request-usage.json')
-const agents=JSON.parse(execFileSync('C:/Users/PFrew/AppData/Local/Programs/Herdr/bin/herdr.exe',['--session','injectbuddy','agent','list'],{encoding:'utf8'})).result.agents
+const agents=JSON.parse(execFileSync('C:/Users/PFrew/AppData/Local/Programs/Herdr/bin/herdr.exe',['--session','injectbuddy','agent','list'],{encoding:'utf8',windowsHide:true})).result.agents
 const all=reconcileUsage(output,agents)
 // Explicit original request ownership documented in the approved REQ-024 handoff report.
 const scoped = new Set(['T-33','T-38','T-47','T-60','T-71','T-81','T-87','T-89'])

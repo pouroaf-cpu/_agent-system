@@ -23,7 +23,7 @@ for (const project of projects) {
     console.log(`${r.id.padEnd(6)} ${String(r.min).padStart(4)}m  ${(r.agentRole || '-').padEnd(8)} ${who}`);
     if (tail && r.agentName && status[r.agentName]) {
       try {
-        const out = execFileSync('herdr', ['agent', 'read', r.agentName], { encoding: 'utf8' });
+        const out = execFileSync('herdr', ['agent', 'read', r.agentName], { encoding: 'utf8', windowsHide: true });
         const lines = out.split('\n').filter(l => l.trim());
         const prompt = lines.findLastIndex(l => /^\s*[›❯>]/.test(l)); // drop the input box and status bar
         for (const line of lines.slice(0, prompt >= 0 ? prompt : undefined).slice(-tail)) console.log(`         | ${line.slice(0, 160)}`);

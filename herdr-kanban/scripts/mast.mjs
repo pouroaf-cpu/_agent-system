@@ -12,10 +12,10 @@ const MAST = join(process.env.APPDATA || '', 'npm/node_modules/@spikedpunch/mast
 const EXCLUDE = 'node_modules/**,dist/**,coverage/**,.next/**,**/*.compiled.js,**/*.min.js,**/*.test.*,**/*.spec.*,e2e/**,tests/**'
 const args = process.argv.slice(2)
 if (!args.length) { console.error('usage: mast.mjs <name> [mast search flags]'); process.exit(2) }
-const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
+const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', windowsHide: true })
 const root = git.status === 0 ? git.stdout.trim() : process.cwd()
 const state = join(tmpdir(), 'mast', createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 12))
-const mast = (...a) => spawnSync(process.execPath, [MAST, ...a], { encoding: 'utf8', cwd: root })
+const mast = (...a) => spawnSync(process.execPath, [MAST, ...a], { encoding: 'utf8', cwd: root, windowsHide: true })
 
 const prep = existsSync(join(state, 'index.json'))
   ? mast('index', '--incremental', '--state-dir', state, root)

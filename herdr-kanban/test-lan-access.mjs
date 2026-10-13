@@ -62,6 +62,7 @@ test('loopback and opt-in LAN listener work, and bad-origin writes are refused',
       HERDR_BIN_PATH: 'missing-herdr-for-lan-test',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
 
   try {
