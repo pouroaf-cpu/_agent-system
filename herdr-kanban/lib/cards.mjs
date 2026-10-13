@@ -36,6 +36,9 @@ export function planEditedFiles(text) {
   return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
 }
 
+// HK27: a plan names each place to change as `path` lines START-END, `functionOrSelector`.
+const planPointers = (text) => [...text.matchAll(/\blines?\s+(\d+)\s*[-–]\s*(\d+)\s*,?\s*`([^`]+)`/gi)].map(m => ({ index: m.index, from: +m[1], to: +m[2], name: m[3] }))
+
 // `workspace` (absolute) is passed only at a Planner handoff, so cards already
 // queued or working are never blocked retroactively by the plan check.
 export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null, sharedFiles = [] } = {}) {
@@ -98,6 +101,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     // alone is waiting for the operator, not for more planning (T-148).
     if (!/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])) throw Object.assign(new Error('Plan incomplete: investigation requires explicit approval on the card'), { operatorApproval: true })
   }
+  const pointers = []
   if (readiness === 'build-ready') {
     const plan = section('Implementation plan').replaceAll('**', '')
     const required = [
@@ -115,6 +119,38 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     const cause = plan.match(/(?:^|\n)\s*(?:[-*]\s*)?(?:observed cause|cause)\s*:\s*([^\n]+)/i)?.[1] || ''
     if (/\b(?:unknown|unclear|tbd|todo|investigate)\b/i.test(cause)) throw new Error('Plan incomplete: unknown cause is investigation, not build-ready')
     if ([...section('Files').matchAll(/^[-*]\s+`[^`]+`\s*$/gm)].length) throw new Error('Plan incomplete: each build-ready file needs a concrete target/purpose')
+    if (requireReadiness) {
+      const form = 'Write it as `path` lines START-END, `functionOrSelector` (for example `public/ib-rail.js` lines 2650-2700, `revealSettingsSheet()`)'
+      const ranged = []
+      for (const [line, path, rest] of fileLines) {
+        if (isGlob(path) || /\(new\b[^)]*\)/i.test(rest) || REFERENCE_ONLY.test(line)) continue
+        const found = planPointers(rest)
+        if (!found.length) throw new Error(`Plan incomplete: ## Files entry ${path} has no line range and name. ${form}, or mark a file this card creates (new).`)
+        ranged.push(path.replace(/^\.\//, ''))
+        pointers.push(...found.map(p => ({ ...p, where: 'Files', path })))
+      }
+      // The Changes block runs from its label to the next label line.
+      const lines = plan.split(/\r?\n/)
+      const start = lines.findIndex(l => /^\s*(?:[-*]\s*)?(?:changes?|concrete changes)\s*:/i.test(l))
+      const end = lines.findIndex((l, i) => i > start && /^\s*(?:[-*]\s*)?(?:agreed outcome|outcome|unchanged constraints?|observed cause|cause|evidence|inspected current[^:\n]*|scope|stop rules?|setup[^:\n]*|check[^:\n]*|expected result|callers checked)\s*:/i.test(l))
+      for (const line of lines.slice(start, end < 0 ? undefined : end)) {
+        const ticks = [...line.matchAll(/`([^`]+)`/g)].map(m => ({ index: m.index, token: m[1].trim().replace(/^\.\//, '') }))
+        const paths = ticks.filter(t => ranged.includes(t.token))
+        const calls = ticks.filter(t => /^[\w$.]+\(.*\)$/.test(t.token))
+        const found = planPointers(line)
+        const entry = line.trim().slice(0, 80)
+        if (!found.length) {
+          if (paths.length || calls.length) throw new Error(`Plan incomplete: ## Implementation plan Changes entry "${entry}" names ${(paths[0] || calls[0]).token} with no line range and name. ${form}.`)
+          continue
+        }
+        for (const p of found) {
+          const path = [...paths].reverse().find(t => t.index < p.index) || paths[0]
+          if (path) pointers.push({ ...p, where: 'Implementation plan', path: path.token })
+          // A pointer into a file outside ## Files (an absolute path) cannot be checked here.
+          else if (!ticks.some(t => /^[A-Za-z]:\/|^\//.test(t.token))) throw new Error(`Plan incomplete: ## Implementation plan Changes entry "${entry}" has lines ${p.from}-${p.to} but names no ## Files path. ${form}.`)
+        }
+      }
+    }
   }
   if (planRoot) {
     // Card checkouts share the integration node_modules through a junction, so an install
@@ -135,6 +171,21 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     }
     checkPlanPaths(planRoot, section('Files'), section('Prerequisites'), section('Implementation plan'))
     if (readiness === 'build-ready' && !/^\*\*Callers checked:\*\*[ \t]*\S/m.test(section('Implementation plan'))) throw new Error('Plan check failed: ## Implementation plan needs a **Callers checked:** line listing every file that references each changed function/export (or "none"). Grep for each changed symbol first.')
+    // A card blocked by another is planned against files its blocker still changes: format only.
+    const blocked = (text.split(/^## /m)[0].match(BLOCKED_BY)?.[1] || '').match(new RegExp(String.raw`\b${CARD_ID}\b`, 'i'))
+    if (requireReadiness && !blocked) checkPointers(planRoot, pointers)
+  }
+}
+
+// HK27: each pointer's name must occur inside its line range (checkPlanPaths already proved the file exists).
+function checkPointers(planRoot, pointers) {
+  const cache = new Map()
+  for (const { where, path, from, to, name } of pointers) {
+    if (!cache.has(path)) cache.set(path, readFileSync(resolve(planRoot, path), 'utf8').replace(/\r?\n$/, '').split(/\r?\n/))
+    const lines = cache.get(path), needle = name.replace(/\(.*\)\s*$/, '') || name
+    if (from < 1 || to < from || to > lines.length || !lines.slice(from - 1, to).join('\n').includes(needle)) {
+      throw new Error(`Plan check failed: ## ${where} ${path} lines ${from}-${to}: \`${name}\` does not occur in those lines (file has ${lines.length} lines). Open ${path} and correct the range or the name.`)
+    }
   }
 }
 

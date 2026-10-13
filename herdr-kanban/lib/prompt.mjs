@@ -63,7 +63,7 @@ export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspace
   return oneLine(
     previousAttempt ? 'Your previous attempt\'s changes are already in this worktree; read the kick-back feedback in Current feedback, fix only what the feedback names, then re-run your per-AC tests. Preserve existing commits and files.' : '',
     `Read ${cardPath}, ${BUILDER}, the card's Project constraints section (there is no separate safety file) and only applicable required skills. Ponytail is already loaded by hook: do not open its SKILL.md, Projects/filemap.md, or any README.md/AGENTS.md unless this card names it. Workspace root: ${workspacePath}; file paths are relative to it. Scope is the exact listed files; missing essential scope requires a specific proposed deviation and operator clarification, not self-approved widening or automatic planning restart.`,
-    `Do not run repository-wide searches when the card supplies exact files or selectors.`,
+    `Open each line range the plan lists (file, lines A-B, name) directly; search only when a pointer is wrong.`,
     shellRule(engine),
     `For this assigned workspace use workdir=${psLiteral(workspacePath)}. Read the briefing with Get-Content -LiteralPath ${psLiteral(cardPath.replace(/ \(revision [a-f0-9]{64}\)$/, ''))}. Follow known functions/selectors and bounded source ranges; expand a named range only when required context is missing.`,
     `do not deploy, write production data, purchase anything or send external messages unless this card explicitly authorizes it.`,

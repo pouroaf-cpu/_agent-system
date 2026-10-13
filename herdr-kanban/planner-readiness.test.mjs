@@ -113,8 +113,12 @@ test('HK24: plan labels in bold or bullet form are accepted', () => {
   const rewrite = (text, wrap) => [...labels.map(([l]) => l), 'Stop rules'].reduce((t, l) => t.replace(`\n${l}: `, `\n${wrap(l)} `), text)
   const drop = (text, ...names) => text.split('\n').filter(line => !names.some(n => line.replace(/^[-*\s]*\**/, '').startsWith(`${n}:`))).join('\n')
   const options = { requireReadiness: true }
+  // HK27: a Planner handoff needs a line range and name per existing file (or (new)).
+  const pointed = realistic
+    .replace('- `src/app.mjs` — handleKeyDown(event) and renderStatus()', '- `src/app.mjs` lines 10-20, `handleKeyDown(event)` — handler and status')
+    .replace('- `test/keyboard.test.mjs` — focused', '- `test/keyboard.test.mjs` (new) — focused')
   for (const [form, wrap] of Object.entries(forms)) {
-    const plan = rewrite(realistic, wrap)
+    const plan = rewrite(pointed, wrap)
     assert.doesNotThrow(() => validatePlan(plan, options), `${form} labels pass`) // AC1, AC2, AC4
     if (form === 'bold-bullet') continue
     for (const [label, name] of labels) {
