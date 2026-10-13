@@ -29,7 +29,7 @@ test('headless launch, registry restart, full prompt argv, session resume and ex
   const old = process.env.KANBAN_CONFIG
   const config = join(root, 'config.json'); writeFileSync(config, '{}'); process.env.KANBAN_CONFIG = config
   const script = join(root, 'fake.mjs')
-  writeFileSync(script, `console.log(JSON.stringify({type:'thread.started',thread_id:'fake-session'})); console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({argv:process.argv.slice(2),board:process.env.BOARD_AGENT_ID,herdr:process.env.HERDR_PANE_ID})}})); console.error('fake stderr'); setTimeout(()=>process.exit(7), 800)`)
+  writeFileSync(script, `console.log(JSON.stringify({type:'thread.started',thread_id:'fake-session'})); console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({argv:process.argv.slice(2),board:process.env.BOARD_AGENT_ID,herdr:process.env.HERDR_PANE_ID,compact:process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW})}})); console.error('fake stderr'); setTimeout(()=>process.exit(7), 800)`)
   const command = () => [process.execPath, script]
   const api = createHeadless({ root, command })
   let id
@@ -50,6 +50,7 @@ test('headless launch, registry restart, full prompt argv, session resume and ex
     const data = JSON.parse(message.item.text)
     assert.equal(data.argv.at(-1), prompt)
     assert.equal(data.board, id); assert.equal(data.herdr, id)
+    assert.equal(data.compact, '1000000')
     assert.match(lines.join('\n'), /fake stderr/)
     await restarted.agentPrompt(id, 'Correction', { session: 'project' })
     assert.equal((await restarted.agentList('project'))[0].agent_status, 'working')
@@ -59,6 +60,27 @@ test('headless launch, registry restart, full prompt argv, session resume and ex
     assert.equal(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].exitCode, 7)
     await restarted.paneClose(id)
     assert.deepEqual(await restarted.agentList('project'), [])
+  } finally {
+    if (id) await api.paneClose(id).catch(() => {})
+    if (old === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = old
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('headless Builder run compacts at 100000 tokens', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'headless-'))
+  const old = process.env.KANBAN_CONFIG
+  const config = join(root, 'config.json'); writeFileSync(config, '{}'); process.env.KANBAN_CONFIG = config
+  const script = join(root, 'fake.mjs')
+  writeFileSync(script, `console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW}}))`)
+  const api = createHeadless({ root, command: () => [process.execPath, script] })
+  let id
+  try {
+    id = (await api.tabCreate({ cwd: root, label: 'Build', session: 'project' })).root_pane.pane_id
+    await api.agentStart({ name: 'b-t-01', paneId: id, engine: 'codex', model: 'gpt-6-luna', session: 'project', browser: false })
+    await api.agentPrompt(id, 'Build', { session: 'project' })
+    const text = await until(async () => { const read = await api.paneRead(id); return /agent_message/.test(read) && read })
+    assert.match(text, /"text":"100000"/)
   } finally {
     if (id) await api.paneClose(id).catch(() => {})
     if (old === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = old
