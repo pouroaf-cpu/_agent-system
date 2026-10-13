@@ -33,6 +33,6 @@ export const isRetryHold = hold => /; retrying at \d{4}-\d\d-\d\dT/.test(String(
 // Kill a child and everything it started (Windows test runners and npm spawn grandchildren
 // that would otherwise keep running and holding files).
 export function killTree(pid) {
-  if (process.platform === 'win32') execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {})
+  if (process.platform === 'win32') execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => {})
   else try { process.kill(pid) } catch {} // ponytail: sh grandchildren survive; use a process group if a POSIX board ever needs it
 }

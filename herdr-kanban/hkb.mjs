@@ -11,7 +11,7 @@ export const loadError = stderr => /^\w*Error\b.*\r?\n\s+at [^\n]*node:internal\
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   for (let tries = 1; ; tries++) {
-    const r = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], { stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8' })
+    const r = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], { stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', windowsHide: true })
     if (r.status === 0 || !loadError(r.stderr) || tries > 6) {
       process.stderr.write(r.stderr)
       if (r.status !== 0 && loadError(r.stderr)) console.error('hkb: the board code is being updated. Wait 2 minutes and run the same hkb command again; do not report it unless it still fails then.')

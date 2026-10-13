@@ -31,7 +31,7 @@ const SLOW = {
   'headless-planner.test.mjs': 120000,
 }
 const limit = file => SLOW[file] ?? 120000 // 60s was hit by npm-shim and completed-handoff beside three suites
-const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, `--test-timeout=${limit(file)}`, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20, env: { ...process.env, KANBAN_TEST: '1' } },
+const run = file => { const start = Date.now(); return new Promise(done => execFile(process.execPath, [...args, `--test-timeout=${limit(file)}`, file], { cwd: dir, timeout: limit(file), maxBuffer: 64 << 20, env: { ...process.env, KANBAN_TEST: '1' }, windowsHide: true },
   (err, stdout, stderr) => done({ file, err, out: `${stdout}${stderr}`, secs: Math.round((Date.now() - start) / 1000) }))) }
 
 // Longest first: worktrees.test.mjs started last and alone set the wall time. Half the cores: every

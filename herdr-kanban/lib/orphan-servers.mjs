@@ -16,7 +16,7 @@ export function stopServersIn(dir, { list = () => nodeProcesses({ cwd: true }), 
 }
 
 function killTree(pid) {
-  spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', timeout: 20000 })
+  spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', timeout: 20000, windowsHide: true })
 }
 
 // Operator-chat e2e runs work in C:/Users/PFrew/claude-e2e-* (outside the board) and leave
@@ -69,7 +69,7 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscu
 
 function nodeProcesses({ cwd = false } = {}) {
   if (process.platform !== 'win32') return []
-  const r = spawnSync('powershell', ['-NoProfile', '-Command', cwd ? LIST_NODE_CWD : LIST_NODE], { encoding: 'utf8', timeout: 20000 })
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', cwd ? LIST_NODE_CWD : LIST_NODE], { encoding: 'utf8', timeout: 20000, windowsHide: true })
   let rows = []
   try { rows = [JSON.parse(r.stdout || '[]')].flat() } catch {}
   // Kernel/user times are in 100 ns units.
@@ -102,7 +102,7 @@ const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobje
 
 function allProcesses() {
   if (process.platform !== 'win32') return []
-  const r = spawnSync('powershell', ['-NoProfile', '-Command', LIST_ALL], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 })
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', LIST_ALL], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, windowsHide: true })
   try { return [JSON.parse(r.stdout || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', created: Number(p.Created) || 0 })) } catch { return [] }
 }
 

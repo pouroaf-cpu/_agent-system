@@ -269,7 +269,7 @@ export function startHoldReason({ card, board, projectPath, tasksDir, mission, l
 export function preflightBlocks({ projectPath, card, gitSettings }) {
   const script = join(projectPath, 'scripts', 'preflight.mjs')
   if (!existsSync(script)) return false
-  const result = spawnSync('node', [script, card.path], { cwd: projectPath, timeout: 10000, encoding: 'utf8' })
+  const result = spawnSync('node', [script, card.path], { cwd: projectPath, timeout: 10000, encoding: 'utf8', windowsHide: true })
   if (result.status === 0) return false
   // The documented exit-1 contract is dirty named files. For isolated builds,
   // recheck that signal semantically rather than inheriting raw status/EOL noise.

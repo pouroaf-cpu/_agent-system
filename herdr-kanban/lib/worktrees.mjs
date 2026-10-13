@@ -284,7 +284,7 @@ export function refreshExpoRouteTypes(workspacePath) {
   const appRoot = ['src/app', 'app'].map(d => join(workspacePath, d)).find(d => existsSync(d))
   if (!appRoot) return false
   // ponytail: best effort; a failure leaves the old file and tsc reports it as before
-  return spawnSync(process.execPath, ['-e', ROUTE_TYPES, types], { cwd: workspacePath, env: { ...process.env, EXPO_ROUTER_APP_ROOT: appRoot }, timeout: 60000, stdio: 'ignore' }).status === 0
+  return spawnSync(process.execPath, ['-e', ROUTE_TYPES, types], { cwd: workspacePath, env: { ...process.env, EXPO_ROUTER_APP_ROOT: appRoot }, timeout: 60000, stdio: 'ignore', windowsHide: true }).status === 0
 }
 
 // Next's generated types go stale the same way. The per-route files (.next/types/app/<route>/page.ts)
@@ -298,7 +298,7 @@ export function refreshNextRouteTypes(workspacePath) {
   try {
     rmSync(join(workspacePath, '.next', 'types', 'app'), { recursive: true, force: true })
     // ponytail: best effort; a failure leaves the old routes.d.ts and tsc reports it as before
-    return existsSync(bin) && spawnSync(process.execPath, [bin, 'typegen'], { cwd: workspacePath, timeout: 60000, stdio: 'ignore' }).status === 0
+    return existsSync(bin) && spawnSync(process.execPath, [bin, 'typegen'], { cwd: workspacePath, timeout: 60000, stdio: 'ignore', windowsHide: true }).status === 0
   } catch {
     return false
   }

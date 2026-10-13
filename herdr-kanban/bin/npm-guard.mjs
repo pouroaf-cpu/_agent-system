@@ -59,6 +59,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // Real npm by absolute path next to this node, never via PATH, so the shim cannot recurse.
   // ponytail: assumes npm ships beside node.exe (the Windows installer layout); nvm/volta setups need a lookup.
   const cli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  const r = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit' })
+  const r = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit', windowsHide: true })
   process.exit(r.status ?? 1)
 }
