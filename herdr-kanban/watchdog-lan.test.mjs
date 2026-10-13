@@ -44,7 +44,7 @@ exit $LASTEXITCODE
   for (const scenario of ['bound', 'missing', 'foreign', 'failed']) {
     for (const name of ['ready', 'events.txt', 'watchdog.log', '.watchdog-lan-outage']) rmSync(join(root, name), { force: true })
     const result = await new Promise(done => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'run.ps1')],
-      { env: { ...process.env, TEST_CASE: scenario }, timeout: 30000 }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
+      { env: { ...process.env, TEST_CASE: scenario }, timeout: 30000, windowsHide: true }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
     const log = read('watchdog.log'), events = read('events.txt')
     if (scenario === 'bound') {
       assert.equal(events, '', 'a healthy board must not be killed or relaunched on a LAN HTTP timeout')

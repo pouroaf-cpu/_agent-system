@@ -54,7 +54,7 @@ ${extraAlertFunctions}`)
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^path$/i.test(k)))
   env.Path = [bin, dirname(process.execPath), join(process.env.SystemRoot, 'System32'), join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
   const run = (lanAddress = '') => new Promise(done => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'watch-kanban.ps1')],
-    { env: { ...env, TEST_LAN_ADDRESS: lanAddress }, timeout: 45000 }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
+    { env: { ...env, TEST_LAN_ADDRESS: lanAddress }, timeout: 45000, windowsHide: true }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
   const read = name => existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8') : ''
   const lines = name => read(name).split(/\r?\n/).filter(Boolean)
   return { root, bin, run, read, lines }

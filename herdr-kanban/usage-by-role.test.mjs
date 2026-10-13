@@ -74,7 +74,7 @@ test('CLI uses saved sources and boards without npx or board network', async () 
     await writeFile(join(dir, 'claude.json'), JSON.stringify({ sessions: [{ sessionId: 'claude-builder', projectPath: 'missing', totalCost: 5, totalTokens: 500, lastActivity: '2026-10-04T23:00:00Z' }], totals: { totalCost: 5, totalTokens: 500 } }))
     await writeFile(join(dir, 'codex.json'), JSON.stringify({ sessions: [], totals: { costUSD: 0, totalTokens: 0 } }))
     const args = [join(import.meta.dirname, 'scripts', 'usage-by-role.mjs'), '--claude-json', join(dir, 'claude.json'), '--codex-json', join(dir, 'codex.json'), '--boards-dir', join(dir, 'boards'), '--since', '2026-10-04', '--json']
-    const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }))
+    const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8', windowsHide: true }))
     assert.equal(report.rows[0].role, 'Builder')
     assert.equal(report.check.matches, true)
     assert.equal(report.totals.sessions, 1)

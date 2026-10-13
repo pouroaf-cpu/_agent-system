@@ -64,7 +64,7 @@ function doneOn(t, text) {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(tasksDir, 'working'), { recursive: true })
   writeFileSync(join(tasksDir, 'working', 'T-1.md'), text)
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasksDir, 'done', 'T-1'], { encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', tasksDir, 'done', 'T-1'], { encoding: 'utf8', windowsHide: true })
   return { result, saved: () => readFileSync(findCard(tasksDir, 'T-1').path, 'utf8') }
 }
 

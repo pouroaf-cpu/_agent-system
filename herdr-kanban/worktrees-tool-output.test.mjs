@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { clean, ignoreToolOutput, semanticDirtyFiles } from './lib/worktrees.mjs'
 
-const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, stdio: 'pipe' })
+const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, stdio: 'pipe', windowsHide: true })
 
 // Temp checkout with tracked app.js and sub/keep.js, removed afterwards.
 function withRepo(fn) {

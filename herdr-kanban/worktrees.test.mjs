@@ -15,7 +15,7 @@ import { reconcileCompletedHandoffs, runShell } from './lib/completed-handoff.mj
 import { alertOwnerCards } from './lib/owner-alerts.mjs'
 
 function git(cwd, ...args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 0, result.stderr || result.stdout)
   return result.stdout.trim()
 }
@@ -91,7 +91,7 @@ test('cleanup stops a dev server left running in the card checkout', { skip: pro
     git(prepared.workspacePath, 'add', 'app.js')
     git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
     mkdirSync(join(prepared.workspacePath, '.next'))
-    server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: prepared.workspacePath, stdio: 'ignore' })
+    server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: prepared.workspacePath, stdio: 'ignore', windowsHide: true })
     const exited = new Promise((done) => server.once('exit', done))
     await new Promise((done) => setTimeout(done, 500))
     f.complete('T-1')
@@ -214,7 +214,7 @@ test('an integration conflict aborts cleanly and preserves the card worktree', (
 
     // The Builder resolves it in its own worktree, then hands off again: it integrates.
     const head = git(f.integration, 'rev-parse', 'HEAD')
-    assert.notEqual(spawnSync('git', ['-C', prepared.workspacePath, 'rebase', '--onto', head, prepared.entry.baseCommit]).status, 0)
+    assert.notEqual(spawnSync('git', ['-C', prepared.workspacePath, 'rebase', '--onto', head, prepared.entry.baseCommit], { windowsHide: true }).status, 0)
     writeFileSync(join(prepared.workspacePath, 'app.js'), 'integration\nbuilder\n')
     git(prepared.workspacePath, 'add', 'app.js')
     git(prepared.workspacePath, '-c', 'core.editor=true', 'rebase', '--continue')
@@ -596,7 +596,7 @@ test('semantic guard preserves untracked, staged, deleted, renamed, mode and unm
     git(f.integration, 'checkout', '-b', 'main-conflict', base)
     writeFileSync(join(f.integration, 'app.js'), 'main\n')
     git(f.integration, 'add', 'app.js'); git(f.integration, 'commit', '-m', 'main')
-    assert.notEqual(spawnSync('git', ['-C', f.integration, 'merge', 'conflict']).status, 0)
+    assert.notEqual(spawnSync('git', ['-C', f.integration, 'merge', 'conflict'], { windowsHide: true }).status, 0)
     assert.ok(semanticDirtyFiles(f.integration).includes('app.js'))
     assert.match(integrationStartHoldReason({ repoRoot: f.integration, card: f.addCard('T-1', 'independent.js') }), /operation in progress/)
     assert.throws(() => semanticDirtyFiles(f.root), /git/)
@@ -862,7 +862,7 @@ test('hkb done refuses a commit with out-of-scope files while the Builder can fi
     moveCard(f.tasks, 'T-1', 'working')
     writeFileSync(join(wt, 'app.js'), 'card\n'); writeFileSync(join(wt, 'llms.txt'), 'out of scope\n')
     git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'T-1 change')
-    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8' })
+    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8', windowsHide: true })
     // Tradeflow TF51: the out-of-scope file was only caught at integration, on every poll.
     assert.equal(run.status, 1)
     assert.match(run.stderr, /done refused: commit must change only card-listed files/)
@@ -882,7 +882,7 @@ test('hkb done accepts committed files matching a generated-files glob and refus
     writeFileSync(join(wt, 'gen.mjs'), 'gen\n')
     for (const g of ['a', 'b', 'TRT-Guide']) { mkdirSync(join(wt, 'public', 'legacy', 'guides', g), { recursive: true }); writeFileSync(join(wt, 'public', 'legacy', 'guides', g, 'index.html'), g) }
     git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'T-1 change')
-    const done = () => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8' })
+    const done = () => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8', windowsHide: true })
     // Nested deeper than one segment, or outside the glob: out of scope.
     mkdirSync(join(wt, 'public', 'legacy', 'other'), { recursive: true }); writeFileSync(join(wt, 'public', 'legacy', 'other', 'x.html'), 'x')
     git(wt, 'add', '-A'); git(wt, 'commit', '--amend', '-m', 'T-1 change')
@@ -1134,7 +1134,7 @@ test('hkb done refuses a commit that collapses a file into one line', () => {
     const tasksFile = join(f.tasks, '.board-worktrees.json')
     const all = JSON.parse(readFileSync(tasksFile, 'utf8')); all['T-1'].baseCommit = git(wt, 'rev-parse', 'HEAD'); writeFileSync(tasksFile, JSON.stringify(all))
     writeFileSync(join(wt, 'app.js'), lines.replaceAll('\n', ' ')); git(wt, 'add', '-A'); git(wt, 'commit', '-m', 'T-1 change')
-    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8' })
+    const run = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', f.tasks, 'done', 'T-1'], { encoding: 'utf8', windowsHide: true })
     assert.ok(entry)
     assert.equal(run.status, 1)
     assert.match(run.stderr, /commit rewrites file format \(app\.js: 31 lines became 1\)/)
