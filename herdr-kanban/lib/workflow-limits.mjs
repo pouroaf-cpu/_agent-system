@@ -8,6 +8,14 @@ export function workflowLimits() {
   const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || fileURLToPath(new URL('../board.config.json', import.meta.url)), 'utf8'))
   return config.workflowLimits || {}
 }
+// Per-run token cap (HK42): a Planner or Builder run past it is stopped by the board. A missing
+// key means the default; only an explicit null turns the cap off.
+export const DEFAULT_MAX_TOKENS_PER_RUN = 4000000
+export function maxTokensPerRun(limits = workflowLimits()) {
+  const value = limits.maxTokensPerRun
+  if (value === null && 'maxTokensPerRun' in limits) return null
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_MAX_TOKENS_PER_RUN
+}
 export function checkWorkflowLimits(tasksDir, id, role, now = Date.now()) {
   const limits = workflowLimits()
   // Only runs since the operator's last retry count (limitsResetAt, set when a card is

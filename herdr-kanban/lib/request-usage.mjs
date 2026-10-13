@@ -145,6 +145,18 @@ export function latestTokenSnapshot(sessionId, { root, beforeOrdinal = Infinity 
   return rows.at(-1) ?? { file: sessionFile(sessionId, root), timestamp: null, ordinal: null, counters: null, missing: true }
 }
 
+// Tokens an open run has used so far, in the unit of run.delta.total; null when unknown.
+export function liveRunTokens(run, { sessionId, root } = {}) {
+  const id = run?.sessionId || sessionId
+  if (!id || run.finish) return null
+  const events = sessionEvents(id, { root })
+  const latest = events.filter((r) => r.kind === 'token_count').at(-1)
+  if (!latest) return null
+  const start = run.start?.counters && !run.start.missing ? run.start : startBefore(run.start?.at, events)
+  const delta = usageDelta(start, latest)
+  return delta.status === 'ok' ? delta.counters.total : null
+}
+
 function latestEventOrdinal(sessionId, { root } = {}) {
   return sessionEvents(sessionId, { root }).at(-1)?.ordinal ?? null
 }

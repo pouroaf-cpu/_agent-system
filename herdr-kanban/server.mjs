@@ -15,6 +15,7 @@ import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { tokenWarnings } from './lib/workflow-limits.mjs'
+import { enforceRunCaps } from './lib/run-cap.mjs'
 import { recoveryState } from './lib/recovery.mjs'
 import { controlState, setProjectPaused } from './lib/project-control.mjs'
 import { releaseWaiting, finishRelease, releasedHead } from './lib/release.mjs'
@@ -568,6 +569,12 @@ async function pollProject(project) {
     const { agents, herdrUp } = await pollAgents(project)
     broadcast(project, 'agents', { project, agents, herdrUp })
     if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
+    // Per-run token cap backstop (Codex runs, a failed hook). Not skipped while starts are paused:
+    // a run already going must still be capped.
+    try { await enforceRunCaps({ tasksDir, project, session: sessionOf(project), closePane: paneClose, log: msg => activity(project, '-', 'run-cap', msg) }) } catch (err) {
+      const key = `${project}:run-cap`
+      if (lastActivityHold.get(key) !== err.message) { lastActivityHold.set(key, err.message); activity(project, '-', 'run-cap', `Run cap check failed: ${err.message}`, 'error') }
+    }
     // Scan live lanes every poll, so API/agent moves wake an empty project on the
     // very next poll. Only its otherwise empty housekeeping pass is slowed down.
     if (!agents.length && !COLUMNS.some(c => liveBoard[c.key].length) && !activeCardRun(project) && !controlState(project, CONFIG_PATH).release) {
