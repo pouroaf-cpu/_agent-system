@@ -15,6 +15,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
 //   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
 //   node hkb.mjs files T-02 path [path ...]     (Builder, before the first edit: exit 1 names the needed files ## Files misses)
+//   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -107,6 +108,22 @@ if (verb === 'files') {
     const list = missing.join(', ')
     console.log(`FILES MISSING ${cardId}: ${list}\nHand back now, before any edit: issue ${cardId} "[planning] ## Files misses: ${list}; needed because <why>"`)
     process.exit(1)
+  } catch (err) { fail(err.message) }
+}
+
+// tests: hand a long test command to the board and stop; the board runs it, saves the result in
+// the card's evidence folder and starts a fresh short agent on it (HK64).
+if (verb === 'tests') {
+  const name = rest[0], timeoutAt = rest.indexOf('--timeout')
+  const command = (timeoutAt > 0 ? rest.slice(1, timeoutAt) : rest.slice(1)).join(' ').trim()
+  const timeoutSeconds = timeoutAt > 0 ? Number(rest[timeoutAt + 1]) : undefined
+  if (!cardId || !name || !command) fail('usage: hkb tests T-02 <name> "<command>" [--timeout <seconds>]')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const { submitTestRun } = await import('./lib/test-handoff.mjs')
+    const run = submitTestRun({ tasksDir, cardId, name, command, cwd: process.cwd(), timeoutSeconds })
+    console.log(`TEST RUN HANDED OFF ${cardId} ${name}: result will be at ${run.record}; a fresh agent starts on it. Stop now.`)
+    process.exit(0)
   } catch (err) { fail(err.message) }
 }
 
@@ -348,7 +365,7 @@ if (verb === 'split' && rest[0] === '--parts') {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show|result> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb result <card-id> --file <path>   (Builder: write the ## Implementation and ## Evidence bodies from text, or pipe it on stdin; refuses what done would)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show|result|tests> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb tests <card-id> <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop; a fresh agent reads the saved result)\n       hkb result <card-id> --file <path>   (Builder: write the ## Implementation and ## Evidence bodies from text, or pipe it on stdin; refuses what done would)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 

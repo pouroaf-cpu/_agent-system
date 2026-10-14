@@ -117,6 +117,7 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
     if (paused) return true // paused (low disk, operator or release): nothing may start, so nothing is stuck (I393/I398/I401/I404 went to Owner mid-release, 2026-09-28)
     // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
     if (isRetryHold(holds[card.id]) || inBackoff(workflow[card.id]?.startFailure, now)) return true
+    if (card.column === 'working' && workflow[card.id]?.testRun) return true // HK64: a handed-off test run is running
     if (card.column === 'queue') {
       // The scheduler's own 'slots full' counts too: a slot that freed since its pass is not a
       // stall, the card starts next poll (Injectbuddy I656 went to Owner 10 s after it, 2026-10-02).

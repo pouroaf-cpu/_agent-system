@@ -56,6 +56,7 @@ const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs'
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { dispatchTestResults } = await import('./lib/test-handoff.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
 const { readRetries } = await import('./lib/retries.mjs')
@@ -505,6 +506,13 @@ async function tick(project, agents) {
   // The cap is builders only. Slots are counted from card bindings, so the
   // operator's own panes — kanban manager, planner, reviewer, sweeper — are not
   // builders and never eat one (operator, 2026-08-18: keep 4 builders running).
+  // HK64: a finished handed-off test run starts a fresh short agent before new Builders take the slots.
+  await dispatchTestResults({
+    project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE,
+    model: config.models.working, engine: engineFor('working'), max, agents,
+    gitSettings: projectSettingsOf(project), onChange: () => broadcastBoard(project),
+    log: (msg) => schedulerActivity(project, msg),
+  }).catch(err => schedulerActivity(project, `test result dispatch skipped — ${err.message}`))
   const started = await autoSpawn({
     project,
     projectPath: integrationPathOf(project),

@@ -71,12 +71,35 @@ export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspace
     `Use a ${card.trivial ? 'deterministic' : 'proportional'} check per BUILDER.md's check-type and failure-stop rules.`,
     `Only if the check passes and that workspace is Git-backed, stage only the exact implementation files/paths that changed with git -C ${psLiteral(workspacePath)} add -- <approved-paths>; inspect git -C ${psLiteral(workspacePath)} diff --cached --name-only; then git -C ${psLiteral(workspacePath)} commit -m ${psLiteral(`${card.id} concise title`)}. Quote each approved path individually; never a wildcard or git add .. Never push. Non-Git work needs no commit. If the check fails, the staged set is ambiguous, or the commit fails, leave the work uncommitted and use issue or owner.`,
     `Before declaring the build complete, verify every named prerequisite file, route, selector, dependency and check from the card and plan in the assigned workspace. A missing or unverified prerequisite is a blocker; record the exact path/route, command and observed result instead of assuming it exists. Testing is your job, not the plan's: for each acceptance criterion run the smallest fitting test (an existing project test/command, or a small script you write) and record one line per AC, e.g. AC1: npm test -> 4 passing. Record a short structured result in the card's ## Implementation and ## Evidence sections, one line each: the AC lines above, then Stage: builder, Outcome: PASS or BLOCKED, Files: exact paths, Check: your main command, Result: observed result, Evidence: file/link, Blocker: none or exact blocker. done validates these fields and that every AC has its recorded test. Do not print the authoritative card; the briefing already holds its current text. Write both with one command, not a script: ${cmd} result ${card.id} --file <Implementation and Evidence text> (or stdin); only those bodies change; it refuses what done refuses. Keep full logs in evidence files; history is appended by the board.`,
+    `For a check over 10 minutes run ${cmd} tests ${card.id} <name> "<command>", then stop; the board starts a fresh agent on the result.`,
     `When you are finished, run exactly one of these:`,
     `${cmd} unchanged ${card.id} "passing check and observed result" if the requested implementation was already present and the passing check confirms it; this validates a clean unchanged worktree against integration, so never fabricate an empty commit;`,
     `${cmd} done ${card.id} if it is done;`,
     `${cmd} issue ${card.id} "[planning|implementation|operational|evidence] specific unmet criterion or prerequisite and evidence" for a failure; select exactly one category. A stop condition the plan itself names, or a plan step that cannot work as written, is [planning]. Planning corrects scope; implementation returns to your Builder session; operational/evidence holds the current stage without restarting product work.`,
     `${cmd} owner ${card.id} "Only the operator can grant <access/permission>; verified <failure>; approved methods exhausted; Evidence: <exact check/result>; <specific ask>" for access only the human can supply. Technical failures and missing evidence use issue; the board enforces the fifth failed-return stop.`,
     `For nontrivial code cards, done enters Review and only an independent Reviewer PASS can make the card Completed; explicitly trivial cards may enter Completed after their focused check. Run one of them even if you failed: that command is how the board learns you are done. Commit before done. After the handoff succeeds, stop immediately; do not inspect the board or do more work.`
+  )
+}
+
+// HK64: the fresh short agent that reads a handed-off test run's saved result. Carries the record
+// path and the card's AC lines, never the log text. Single line, like workerPrompt.
+export function testResultPrompt({ card, record, recordPath, workspacePath, boardRoot, tasksDir, engine }) {
+  const cmd = hkb(boardRoot, tasksDir)
+  const text = existsSync(card.path) ? readFileSync(card.path, 'utf8') : ''
+  const section = text.match(/^## Acceptance criteria\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? ''
+  const criteria = [...section.matchAll(/^-\s+AC\d+:\s+\S.+$/gm)].map(m => m[0].trim())
+  const value = v => v ?? 'unknown'
+  const verdict = record.error ? ` error: ${record.error}.` : ''
+  return oneLine(
+    `A test run you handed off for ${card.id} has finished. Read ${briefing(tasksDir, card, 'builder')} and ${BUILDER}; result record: ${recordPath.replaceAll('\\', '/')}.`,
+    `Result: name ${record.name}, exit code ${value(record.exitCode)}, passed ${value(record.passed)}, failed ${value(record.failed)}, timed out ${!!record.timedOut}.${verdict}`,
+    `Log: ${String(record.log || '').replaceAll('\\', '/')} (when something failed read only its tail, never the whole log).`,
+    `Acceptance criteria: ${criteria.join(' ')}`,
+    `Workspace root: ${resolve(workspacePath).replace(/\\/g, '/')}; use it as workdir=${psLiteral(workspacePath)}.`,
+    shellRule(engine),
+    `Do not re-run the handed-off command unless the result is missing or the failure needs a change to your code; if it does, fix, commit and hand off a new run with ${cmd} tests ${card.id} <name> "<command>", then stop.`,
+    `Record each AC as AC1: <command> -> <observed result> and Stage: builder, Outcome: PASS or BLOCKED, Files, Check, Result, Evidence, Blocker, one line each, with ${cmd} result ${card.id} --file <text> (or stdin).`,
+    `Then run exactly one of: ${cmd} done ${card.id} (the work is committed and the result passes); ${cmd} issue ${card.id} "[planning|implementation|operational|evidence] specific unmet criterion and evidence" for a failure; ${cmd} owner ${card.id} "<specific ask>" only for access the operator alone can supply. Commit before done. After the handoff succeeds, stop immediately.`
   )
 }
 

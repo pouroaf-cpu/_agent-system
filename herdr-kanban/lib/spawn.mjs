@@ -251,7 +251,7 @@ export const START_TIMEOUT_MS = 240000
 export async function spawnForCard({
   project, projectPath, tasksDir, boardRoot, card, model, engine,
   startTimeoutMs = START_TIMEOUT_MS, onPane, gitSettings, restrictedBuilder = false,
-  guardArgs,
+  guardArgs, shortPrompt,
 }) {
   // The project's session key: new tabs open in the project's workspace of the
   // shared session, and a resumed legacy pane still resolves in its old session.
@@ -345,7 +345,8 @@ export async function spawnForCard({
     const environment = gitSettings?.envFile
       ? ` Authorized project dev environment: ${gitSettings.envFile}. If the card requires a local Next server, run node --env-file="${gitSettings.envFile}" node_modules/next/dist/bin/next dev -p <card-port> from the isolated checkout. Check the port belongs to that checkout and HTTP succeeds before browser validation. Never print or copy environment values. Signed-in check scripts (DEVTOOLS_TEST_EMAIL) load only .env.devtools.local from the project folder, never together with this envFile: both define the test account and the last --env-file wins. Do not run npm install/ci through a node_modules junction; detach only the junction and install locally when dependencies need changing. ${TEST_DATA_RULE}`
       : ''
-    await deliver(paneId, workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, previousAttempt: prepared.previousAttempt, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
+    // HK64: a handed-off test result starts a fresh short agent, not the full Builder brief.
+    await deliver(paneId, shortPrompt ? shortPrompt({ workspacePath: prepared.workspacePath }) : workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: prepared.workspacePath, previousAttempt: prepared.previousAttempt, engine }) + correctionNote + environment, session, null, { engine, force: !!resume && isHeadless(paneId) })
   } catch (err) {
     if (!err.preservePane) await paneClose(paneId, session).catch(() => {})
     if (!err.preservePane) cleanupPreparedWorktree({ tasksDir, prepared })

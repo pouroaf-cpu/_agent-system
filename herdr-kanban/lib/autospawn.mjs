@@ -10,6 +10,7 @@ import { appendHistory, writeCurrentFeedback, builderIssue, builderHandedOff, lo
 import { looksLikeAQuestion, lastAgentMessage } from './agent-question.mjs'
 import { activityLog } from './activity.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
+import { testRunPending } from './test-handoff.mjs'
 // The spawner. Watches one column — Queue — and nothing else.
 //
 // You put a card in Queue; that is the consent. Everything here is about not
@@ -44,6 +45,9 @@ import { syncReviewClaims, readReviewClaims, reserveReview, updateReviewClaim, f
 export function routeBuilderNoHandoff({ tasksDir, cardId, reason, evidence = '', boardRoot, engine, model, session, io = { readDelivery, saveDelivery }, now = Date.now() }) {
   const card = findCard(tasksDir, cardId)
   if (card.column !== 'working') return card
+  // HK64: the Builder handed a long test run to the board and ended on purpose; the card waits in
+  // Working for dispatchTestResults to start a fresh agent on the saved result.
+  if (testRunPending(tasksDir, cardId)) { unbind(tasksDir, cardId); return card }
   const binding = readBindings(tasksDir)[card.id]
   if (binding?.pane_id && isSpawning(binding.pane_id)) return card
   // HK36 (Injectbuddy I1233): the Builder's `hkb owner` ask is still open, so its exit is not a
@@ -162,7 +166,7 @@ export async function reconcileBuilderExits({ tasksDir, project, agents, boardRo
       if (card.column !== 'working') continue
       const evidence = await paneRead(binding.pane_id, session)
       const handedOff = builderHandedOff(tasksDir, cardId)
-      await recordUsageFinish({ tasksDir, paneId: binding.pane_id, binding, agent, status: handedOff ? 'complete' : 'ambiguous' }).catch(() => {})
+      await recordUsageFinish({ tasksDir, paneId: binding.pane_id, binding, agent, status: handedOff || testRunPending(tasksDir, cardId) ? 'complete' : 'ambiguous' }).catch(() => {})
       let routed
       if (handedOff) {
         routed = moveCard(tasksDir, cardId, 'completed')
