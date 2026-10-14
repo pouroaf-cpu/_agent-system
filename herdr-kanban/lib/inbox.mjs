@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { nextEventId } from './event-id.mjs'
 
 // Chats delete inbox lines once handled; <inbox>.log beside it keeps every line ever sent
 // (operator, 2026-10-09: all board and card findings must be logged).
@@ -28,48 +29,59 @@ function fit(head, sentence, tail, max, min = 0) {
 // (the line count does not rise); 8 shared words of boilerplate can merge two causes wrongly, hence
 // the .log keeps each capped line and the card its full note; differently worded notes for one cause
 // stay separate but capped; a concurrent write between the .md read and rewrite can lose a .md line.
-export function postInbox(inbox, line, now = Date.now()) {
+// The event ID ("BE 12334") is written once, right after the dash. A caller that already took the ID
+// (it also puts it in an alert) passes it as the line's leading "- BE 12334 "; a merged note keeps the
+// first note's ID and takes no new number. Returns the ID. A corrupt counter throws (not caught).
+export function postInbox(inbox, line, now = Date.now(), code = 'GE') {
   mkdirSync(dirname(inbox), { recursive: true })
+  const given = /^- ([A-Z]{2} \d{5,}) /.exec(line)?.[1]
+  if (given) line = '- ' + line.slice(given.length + 3)
+  const withId = (l, eventId) => l.replace(/^(- )?/, `- ${eventId} `)
   const text = line.replace(/\r?\n$/, '')
   const m = text.length > CAP && LINE.exec(text)
   if (!m) {
-    appendFileSync(inbox, line)
-    appendFileSync(inboxLog(inbox), line)
-    return
+    const eventId = given ?? nextEventId(code)
+    appendFileSync(inbox, withId(line, eventId))
+    appendFileSync(inboxLog(inbox), withId(line, eventId))
+    return eventId
   }
   const [, stamp, kind, project, id, lane, note] = m
   const sentence = /^.*?[.!?](?=\s|$)/.exec(note)?.[0] ?? note
   const capped = fit(`- ${stamp} ${kind} ${project} ${id} (${lane}): `, sentence, ` (full note: ${id} history)`, CAP) + '\n'
-  appendFileSync(inboxLog(inbox), capped)
 
   const sidecar = inboxLog(inbox).replace(/\.log$/, '.recent.json')
   const words = causeWords(note)
   let entries = []
   let handled = false
+  let hit
   try {
     try {
       entries = JSON.parse(readFileSync(sidecar, 'utf8')).filter(e => now - e?.at < WINDOW_MS &&
-        Array.isArray(e.words) && Array.isArray(e.ids) && typeof e.line === 'string')
+        Array.isArray(e.words) && Array.isArray(e.ids) && typeof e.line === 'string' && typeof e.eventId === 'string')
     } catch { entries = [] }
     let md = ''
     try { md = readFileSync(inbox, 'utf8') } catch { /* no inbox yet */ }
     const lines = md.split('\n')
-    const hit = entries.find(e => e.kind === kind && e.project === project && lines.includes(e.line) && sharesRun(e.words, words))
-    if (hit) {
-      if (!hit.ids.some(e => e.id === id)) {
-        const ids = [...hit.ids, { id, lane }]
-        const next = fit(`- ${hit.stamp} ${kind} ${project} ${ids.map(e => `${e.id} (${e.lane})`).join(', ')}: `, hit.sentence,
-          " (full notes: each card's history)", MERGED_CAP, MERGED_MIN)
-        lines[lines.indexOf(hit.line)] = next
+    const found = entries.find(e => e.kind === kind && e.project === project && lines.includes(e.line) && sharesRun(e.words, words))
+    if (found) {
+      if (!found.ids.some(e => e.id === id)) {
+        const ids = [...found.ids, { id, lane }]
+        const next = withId(fit(`- ${found.stamp} ${kind} ${project} ${ids.map(e => `${e.id} (${e.lane})`).join(', ')}: `, found.sentence,
+          " (full notes: each card's history)", MERGED_CAP, MERGED_MIN), found.eventId)
+        lines[lines.indexOf(found.line)] = next
         writeFileSync(inbox, lines.join('\n'))
-        Object.assign(hit, { ids, line: next, at: now })
+        Object.assign(found, { ids, line: next, at: now })
       }
+      hit = found
       handled = true
     }
   } catch { handled = false }
+  const eventId = handled ? hit.eventId : given ?? nextEventId(code)
+  appendFileSync(inboxLog(inbox), withId(capped, eventId))
   if (!handled) {
-    appendFileSync(inbox, capped)
-    entries.push({ kind, project, words, at: now, stamp, sentence, ids: [{ id, lane }], line: capped.slice(0, -1) })
+    appendFileSync(inbox, withId(capped, eventId))
+    entries.push({ kind, project, words, at: now, stamp, sentence, ids: [{ id, lane }], line: withId(capped, eventId).slice(0, -1), eventId })
   }
   try { writeFileSync(sidecar, JSON.stringify(entries)) } catch { /* the line is already written */ }
+  return eventId
 }

@@ -6,14 +6,20 @@ import { tmpdir } from 'node:os'
 import { postInbox, inboxLog } from './lib/inbox.mjs'
 import { formatNZTime } from './lib/nz-time.mjs'
 
+// the shim (loaded by inbox.mjs) points BOARD_EVENT_COUNTER at a temp file under KANBAN_TEST
+const counter = () => JSON.parse(readFileSync(process.env.BOARD_EVENT_COUNTER, 'utf8')).next
+const bare = l => l.replace(/^- [A-Z]{2} \d+ /, '- ')
+
 test('an inbox line is also kept in the log after the chat clears the inbox', () => {
   const inbox = join(mkdtempSync(join(tmpdir(), 'inbox-')), 'sub', 'X-INBOX.md')
-  postInbox(inbox, '- a\n')
+  const a = postInbox(inbox, '- a\n')
   writeFileSync(inbox, '')
-  postInbox(inbox, '- b\n')
-  assert.equal(readFileSync(inbox, 'utf8'), '- b\n')
+  const b = postInbox(inbox, '- b\n', Date.now(), 'BE')
+  assert.match(a, /^GE \d+$/)
+  assert.match(b, /^BE \d+$/)
+  assert.equal(readFileSync(inbox, 'utf8'), `- ${b} b\n`)
   assert.equal(inboxLog(inbox), inbox.replace(/\.md$/, '.log'))
-  assert.equal(readFileSync(inboxLog(inbox), 'utf8'), '- a\n- b\n')
+  assert.equal(readFileSync(inboxLog(inbox), 'utf8'), `- ${a} a\n- ${b} b\n`)
 })
 
 // Limits (see lib/inbox.mjs): BOARD/FOUND/WAIT lines over 200 characters are cut to their first
@@ -39,7 +45,8 @@ test('AC1: a 1,700 character BOARD line is cut to one capped line pointing at th
   const [only, ...rest] = mdLines(inbox)
   assert.deepEqual(rest, [])
   assert.ok(only.length <= 210, `${only.length} characters`)
-  assert.ok(only.startsWith(`- ${formatNZTime(T0)} BOARD Injectbuddy I1204 (planning): `))
+  assert.match(only, /^- [A-Z]{2} \d+ /)
+  assert.ok(bare(only).startsWith(`- ${formatNZTime(T0)} BOARD Injectbuddy I1204 (planning): `))
   assert.ok(only.endsWith('(full note: I1204 history)'))
   assert.ok(only.includes('…'))
 })
@@ -72,11 +79,11 @@ test('AC3: five same-cause BOARD lines become one .md line naming every card; th
   })
   const md = mdLines(inbox)
   assert.equal(md.length, 1)
-  assert.ok(md[0].length <= 300, `${md[0].length} characters`)
+  assert.ok(bare(md[0]).length <= 300, `${md[0].length} characters`)
   for (const id of ids) assert.ok(md[0].includes(id), `${id} missing from ${md[0]}`)
   const log = logLines(inbox)
   assert.equal(log.length, 5)
-  assert.ok(log.every(l => l.length <= 200))
+  assert.ok(log.every(l => bare(l).length <= 200))
 })
 
 test('AC4: different causes, same cause more than 10 minutes apart, and same cause after the chat cleared the inbox stay separate', () => {
@@ -98,7 +105,7 @@ test('AC4: different causes, same cause more than 10 minutes apart, and same cau
   assert.ok(mdLines(cleared)[0].includes('I1208') && !mdLines(cleared)[0].includes('I1204'))
 })
 
-test('AC5: short lines, ALERT lines and ASK lines are written byte-for-byte unchanged', () => {
+test('AC5: short lines, ALERT lines and ASK lines are written unchanged after the event ID', () => {
   const inbox = fresh()
   const short = [
     line('BOARD', 'I1204', 'planning', `${ERROR}. ${filler('sh', 6)}`.slice(0, 120)),
@@ -109,11 +116,46 @@ test('AC5: short lines, ALERT lines and ASK lines are written byte-for-byte unch
     `- ${formatNZTime(T0)} ALERT Injectbuddy Usage limit reached for the Claude subscription; ${filler('al', 30)}\n`,
     `- ${formatNZTime(T0)} ASK Injectbuddy I1204 (planning): ${filler('as', 60)}?\n`,
   ]
+  let all = ''
   for (const l of [...short, ...long]) {
     assert.ok(l.length <= 200 === short.includes(l))
-    postInbox(inbox, l, T0)
+    all += l.replace(/^- /, `- ${postInbox(inbox, l, T0)} `)
   }
-  const all = short.concat(long).join('')
   assert.equal(readFileSync(inbox, 'utf8'), all)
   assert.equal(readFileSync(inboxLog(inbox), 'utf8'), all)
+})
+
+test('AC6: the ID is written once before the text in .md and .log; a merge keeps the first ID and takes no number', () => {
+  const inbox = fresh()
+  const before = counter()
+  const first = postInbox(inbox, board('I1204', 'First.', T0), T0, 'BQ')
+  assert.match(first, /^BQ \d+$/)
+  assert.equal(counter(), before + 1)
+  const second = postInbox(inbox, board('I1208', 'Second.', T0 + MIN), T0 + MIN, 'BQ')
+  assert.equal(second, first)
+  assert.equal(counter(), before + 1)
+  const md = mdLines(inbox)
+  assert.equal(md.length, 1)
+  assert.ok(md[0].startsWith(`- ${first} `) && md[0].split(first).length === 2, md[0])
+  assert.ok(md[0].includes('I1204') && md[0].includes('I1208'))
+  const log = logLines(inbox)
+  assert.equal(log.length, 2)
+  assert.ok(log.every(l => l.startsWith(`- ${first} `) && l.split(first).length === 2))
+
+  const other = postInbox(inbox, line('BOARD', 'I9', 'planning', `Cause nine. ${filler('qq', 80)}`), T0, 'BQ')
+  assert.notEqual(other, first)
+  assert.equal(counter(), before + 2)
+})
+
+test('AC6: a leading ID supplied by the caller is kept and no second number is taken', () => {
+  const inbox = fresh()
+  const before = counter()
+  const short = postInbox(inbox, '- BE 12999 ' + line('BOARD', 'I1', 'planning', 'short').slice(2), T0, 'BQ')
+  const long = postInbox(inbox, '- TA 12998 ' + board('I2', 'Lead.', T0).slice(2), T0, 'BQ')
+  assert.equal(short, 'BE 12999')
+  assert.equal(long, 'TA 12998')
+  assert.equal(counter(), before)
+  assert.ok(mdLines(inbox)[0].startsWith('- BE 12999 13 Oct'))
+  assert.ok(mdLines(inbox)[1].startsWith('- TA 12998 '))
+  assert.equal(mdLines(inbox)[1].split('TA 12998').length, 2)
 })
