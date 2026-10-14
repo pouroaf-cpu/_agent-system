@@ -264,13 +264,16 @@ if (verb === 'split' && rest[0] === '--parts') {
     if (!readCardPlanners(tasksDir)[current.id]?.assignmentId) fail('split --parts requires the assigned Planner and --planner-assignment')
     assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
 
+    // Collect every part's failure and refuse once, so a Planner fixes all parts in one pass.
+    const problems = []
+    const broken = (p) => ({ path: p, title: p, head: '', body: '', blockedTokens: [], partRefs: [], broken: true })
     const parts = partPaths.map((p, i) => {
       let raw
-      try { raw = readFileSync(p, 'utf8') } catch { fail(`can't read part ${i + 1}: ${p}`) }
+      try { raw = readFileSync(p, 'utf8') } catch { problems.push(`can't read part ${i + 1}: ${p}`); return broken(p) }
       const title = raw.match(/^#\s+(.+?)\s*\r?$/m)?.[1]?.trim()
-      if (!title) fail(`part ${i + 1} (${p}) needs a title line: # Title`)
+      if (!title) { problems.push(`part ${i + 1} (${p}) needs a title line: # Title`); return broken(p) }
       const bodyStart = raw.search(/^## /m)
-      if (bodyStart < 0) fail(`part ${i + 1} (${p}) has no ## sections`)
+      if (bodyStart < 0) { problems.push(`part ${i + 1} (${p}) has no ## sections`); return broken(p) }
       const head = raw.slice(0, bodyStart)
       const body = raw.slice(bodyStart)
       const blockedLine = head.match(/^\*\*Blocked by:\*\*\s*([^\r\n]+)/im)?.[1]
@@ -280,10 +283,10 @@ if (verb === 'split' && rest[0] === '--parts') {
         const m = t.match(/^part\s+(\d+)$/i)
         if (m) {
           const n = Number(m[1])
-          if (n < 1 || n > partPaths.length || n - 1 === i) fail(`part ${i + 1} (${p}): "${t}" does not refer to one of the other ${partPaths.length - 1} parts`)
+          if (n < 1 || n > partPaths.length || n - 1 === i) { problems.push(`part ${i + 1} (${p}): "${t}" does not refer to one of the other ${partPaths.length - 1} parts`); continue }
           partRefs.push(n - 1)
         } else {
-          try { findCard(tasksDir, t) } catch { fail(`part ${i + 1} (${p}): Blocked by "${t}" does not match an existing card`) }
+          try { findCard(tasksDir, t) } catch { problems.push(`part ${i + 1} (${p}): Blocked by "${t}" does not match an existing card`) }
         }
       }
       return { path: p, title, head, body, blockedTokens, partRefs, difficulty: difficultyFromText(head) }
@@ -293,7 +296,7 @@ if (verb === 'split' && rest[0] === '--parts') {
     const visiting = new Set(), finished = new Set()
     const detectCycle = (i, chain) => {
       if (finished.has(i)) return
-      if (visiting.has(i)) fail(`split --parts: Blocked-by cycle: ${chain.concat(i).map(n => `part ${n + 1}`).join(' -> ')}`)
+      if (visiting.has(i)) { problems.push(`split --parts: Blocked-by cycle: ${chain.concat(i).map(n => `part ${n + 1}`).join(' -> ')}`); return }
       visiting.add(i)
       for (const j of parts[i].partRefs) detectCycle(j, chain.concat(i))
       visiting.delete(i); finished.add(i)
@@ -312,6 +315,7 @@ if (verb === 'split' && rest[0] === '--parts') {
     const check = planCheck(current)
     const workflowVersionLine = readFileSync(current.path, 'utf8').match(/^\*\*Workflow version:\*\*[^\r\n]*/m)?.[0] || '**Workflow version:** 2'
     for (const part of parts) {
+      if (part.broken) continue
       const diffLine = part.difficulty ? `**Difficulty:** ${part.difficulty}` : current.difficulty ? `**Difficulty:** ${current.difficulty}` : ''
       const readinessLine = part.head.match(/^\*\*Plan readiness:\*\*[^\r\n]*/im)?.[0] || ''
       const investigationLine = part.head.match(/^\*\*Investigation approved:\*\*[^\r\n]*/im)?.[0] || ''
@@ -320,16 +324,18 @@ if (verb === 'split' && rest[0] === '--parts') {
         `${current.mission ? `**Mission:** ${current.mission}\n` : ''}${readinessLine}\n${investigationLine}\n**Split from:** ${current.id}\n`
       part.merged = `${newHead}\n${part.body}`
       try { validatePlan(part.merged, { requireReadiness: true, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }) }
-      catch (err) { fail(`part "${part.title}" (${part.path}): ${err.message}`) }
+      catch (err) { problems.push(`part "${part.title}" (${part.path}): ${err.message}`); continue }
       part.files = planEditedFiles(part.merged)
     }
     for (let i = 0; i < parts.length; i++) {
       for (let j = i + 1; j < parts.length; j++) {
-        if (chained(i, j)) continue
+        if (chained(i, j) || !parts[i].files || !parts[j].files) continue
         const shared = parts[i].files.find(f => parts[j].files.includes(f))
-        if (shared) fail(`split --parts: part ${i + 1} ("${parts[i].title}") and part ${j + 1} ("${parts[j].title}") both edit ${shared}. Merge them into one part, or add **Blocked by:** part ${i + 1} (or part ${j + 1}) to the other.`)
+        if (shared) problems.push(`split --parts: part ${i + 1} ("${parts[i].title}") and part ${j + 1} ("${parts[j].title}") both edit ${shared}. Merge them into one part, or add **Blocked by:** part ${i + 1} (or part ${j + 1}) to the other.`)
       }
     }
+    if (problems.length === 1) fail(problems[0])
+    if (problems.length) fail(`split --parts refused, nothing created (${problems.length} problems):\n- ${problems.join('\n- ')}`)
 
     // Nothing above wrote anything. From here on, create the children.
     const project = basename(dirname(tasksDir))

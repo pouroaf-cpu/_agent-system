@@ -116,6 +116,20 @@ test('split --parts refuses a part with no acceptance criteria and makes nothing
   assert.equal(findCard(dir, card.id).column, 'planning')
 })
 
+test('split --parts refuses once and names the failure of every failing part', t => {
+  const { dir, card, writePart, run } = fixture(t)
+  const before = idsOf(dir)
+  const p1 = writePart('p1.md', part('Bad one', { file: 'src/a.mjs', noAc: true }))
+  const p2 = writePart('p2.md', part('Bad two', { file: 'src/b.mjs', blocked: 'part 9' }))
+  const result = run('split', card.id, '--parts', p1, p2)
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /2 problems/)
+  assert.match(result.stderr, /Bad one.*Plan incomplete/s)
+  assert.match(result.stderr, /part 2 .*"part 9" does not refer/)
+  assert.deepEqual(idsOf(dir), before)
+  assert.equal(findCard(dir, card.id).column, 'planning')
+})
+
 test('split --parts refuses a caller that is not the assigned Planner', t => {
   const { dir, card, writePart } = fixture(t)
   const before = idsOf(dir)
