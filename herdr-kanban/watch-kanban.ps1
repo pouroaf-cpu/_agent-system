@@ -97,7 +97,7 @@ try {
         if (-not $ready) {
             try {
                 Update-BoardOutage -Healthy $false -StatePath $herdrState -Send {
-                    Send-Push 'Herdr down' "The watchdog could not start herdr session $session at $(Get-NzAlertTime). Board agents cannot run."
+                    Send-Push 'Herdr down' "The watchdog could not start herdr session $session at $(Get-NzAlertTime). Board agents cannot run." 'HD'
                 }
             } catch {
                 "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log

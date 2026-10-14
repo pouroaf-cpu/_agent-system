@@ -9,6 +9,14 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { inboxLog } from '../lib/inbox.mjs'
+import { nextEventId } from '../lib/event-id.mjs'
+
+// One board event ID per printed wake (HK57); RE-ARM and anything unlisted print unchanged.
+const WAKE_KIND = { 'OWNER/POU': 'CL', STUCK: 'SK', CHECK: 'CK', PLANFAIL: 'PF', INBOX: 'IW', ASK: 'IW' }
+export function withEventId(text) {
+  const kind = WAKE_KIND[text.split(/[ \n]/)[0]]
+  return kind ? `${nextEventId(kind)} ${text}` : text
+}
 
 const LIFETIME_MS = 58 * 60e3 // operator 2026-10-05: wake hourly-ish, not every 30 min (Bash default timeout) or 12 h
 const lines = file => { try { return readFileSync(file, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
@@ -152,20 +160,20 @@ async function main() {
     await new Promise(r => setTimeout(r, 10000))
     const now = snapshot(tick % 6 === 5 ? await stuck() : before.stuck)
     const wake = wakeDecision(before, now, wakeInbox)
-    if (wake) { console.log(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake); return }
+    if (wake) { console.log(withEventId(wake.startsWith('STUCK') ? wake + await stuckDetail([project]) : wake)); return }
     if (newAsks().length) {
       const added = await settled(newAsks, 0)
-      console.log(askWake(added, lines(inboxLog(inbox)).slice(logFrom).filter(isAsk), inbox))
+      console.log(withEventId(askWake(added, lines(inboxLog(inbox)).slice(logFrom).filter(isAsk), inbox)))
       return
     }
     if (Date.now() >= nextCheck) {
       nextCheck = Date.now() + CHECK_MS
       const check = off ? null : await checkCards(project)
-      if (check) { console.log(check); return }
+      if (check) { console.log(withEventId(check)); return }
     }
     if (now.stuck == null) now.stuck = before.stuck
     before = now // after a trim or a card leaving, its next arrival must still wake
-    if (Date.now() - started > LIFETIME_MS) { console.log(digest(inboxAtStart, lines(inbox).length, inbox)); return }
+    if (Date.now() - started > LIFETIME_MS) { console.log(withEventId(digest(inboxAtStart, lines(inbox).length, inbox))); return }
   }
 }
 

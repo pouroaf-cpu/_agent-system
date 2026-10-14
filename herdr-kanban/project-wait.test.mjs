@@ -4,7 +4,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inboxLog } from './lib/inbox.mjs'
-import { wakeDecision, parseArgs, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom, settled, inboxWake, askWake } from './scripts/project-wait.mjs'
+// Dynamic import: the event-ID counter must be a temp file before project-wait loads the helper.
+process.env.BOARD_EVENT_COUNTER ||= join(mkdtempSync(join(tmpdir(), 'pw-event-id-')), 'counter.json')
+const { wakeDecision, parseArgs, digest, stuckCards, isAsk, movable, boardOff, planFails, planSinceFrom, settled, inboxWake, askWake, withEventId } = await import('./scripts/project-wait.mjs')
 
 test('planFails returns recent plan-check FAIL lines from recently changed history files', () => {
   const root = mkdtempSync(join(tmpdir(), 'km-planfails-'))
@@ -135,4 +137,22 @@ test('night stop or a paused project mutes stuck and CHECK', () => {
   assert.equal(boardOff({ maxConcurrentAgents: 8 }, { paused: true }), true)
   assert.equal(boardOff({ maxConcurrentAgents: 8 }, { paused: false }), false)
   assert.equal(boardOff({ maxConcurrentAgents: 8 }, undefined), false)
+})
+
+test('withEventId gives each printed wake one ID of its kind; RE-ARM prints unchanged and takes none (HK57 AC6)', () => {
+  const num = text => Number(text.match(/^[A-Z]{2} (\d+) /)[1])
+  const wakes = { CL: 'OWNER/POU P/owner/X1.md', SK: 'STUCK P=2', CK: 'CHECK P: 1 card(s) could move', PF: 'PLANFAIL P I1: stale-plan', IW: 'ASK 1 new question(s) in f: answer each now' }
+  const ids = Object.entries(wakes).map(([kind, text]) => {
+    const out = withEventId(text)
+    assert.ok(out.startsWith(`${kind} `) && /^[A-Z]{2} \d+ /.test(out), out)
+    assert.ok(out.endsWith(` ${text}`), 'text after the ID is unchanged')
+    return num(out)
+  })
+  ids.slice(1).forEach((n, i) => assert.equal(n, ids[i] + 1, 'one rising number per wake'))
+  const burst = withEventId('INBOX 3 new line(s) in f:\n- BE 12400 a\n- BE 12401 b\n- BE 12402 c')
+  assert.match(burst, /^IW \d+ INBOX 3 /)
+  assert.equal(burst.match(/^IW /gm).length, 1, 'a burst prints one IW ID')
+  assert.equal(num(burst), ids.at(-1) + 1)
+  assert.equal(withEventId('RE-ARM'), 'RE-ARM')
+  assert.equal(num(withEventId('STUCK P=3')), num(burst) + 1, 'RE-ARM took no number')
 })

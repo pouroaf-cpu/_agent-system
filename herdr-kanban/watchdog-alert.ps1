@@ -17,9 +17,12 @@ function Get-BoardFailureStatus {
 }
 # Watchdog alerts go to the Kanban Manager inbox, not Pushover (operator, 2026-10-09).
 function Send-Push {
-    param([string]$Title, [string]$Message)
+    param([string]$Title, [string]$Message, [string]$Kind = 'GE')
     $inbox = Join-Path $PSScriptRoot '../_roles/KANBAN_MANAGER-INBOX.md'
-    $line = "- $(Get-NzAlertTime) $($Title): $Message`n"
+    # Board event ID (HK57) from the shared helper; no ID, no line.
+    $id = ((node (Join-Path $PSScriptRoot '../_roles/board-event-id.mjs') $Kind) -join ' ').Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $id) { throw "board event ID failed for kind $Kind" }
+    $line = "- $id $(Get-NzAlertTime) $($Title): $Message`n"
     [IO.File]::AppendAllText($inbox, $line)
     [IO.File]::AppendAllText(($inbox -replace '\.md$', '.log'), $line) # permanent log, as lib/inbox.mjs
 }
@@ -27,7 +30,7 @@ function Get-NzAlertTime {
     node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { formatNZTime } = await import(pathToFileURL(process.argv[1])); console.log(formatNZTime())" (Join-Path $PSScriptRoot 'lib/nz-time.mjs')
 }
 function Send-BoardDownPush {
-    Send-Push 'Kanban board down' "The Kanban board did not respond at $(Get-NzAlertTime). The watchdog is checking recovery."
+    Send-Push 'Kanban board down' "The Kanban board did not respond at $(Get-NzAlertTime). The watchdog is checking recovery." 'BE'
 }
 # This PC's phone (LAN) address: same rule as kanban.ps1 (DHCP, so it moves).
 function Get-LanAddress {

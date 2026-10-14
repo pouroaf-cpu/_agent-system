@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inboxLog } from '../lib/inbox.mjs'
-import { inboxWake, planFails, planSinceFrom, settled, stuckDetail } from './project-wait.mjs'
+import { inboxWake, planFails, planSinceFrom, settled, stuckDetail, withEventId } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -36,7 +36,7 @@ const stuck = async () => {
   } catch { return null } // board down: the watchdog writes that to the inbox
 }
 
-const done = line => { console.log(line); process.exit(0) }
+const done = line => { console.log(withEventId(line)); process.exit(0) }
 const seen = new Set(cards())
 let lines = inboxLines().length, logFrom = logLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}

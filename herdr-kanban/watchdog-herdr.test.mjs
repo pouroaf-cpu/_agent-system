@@ -44,7 +44,7 @@ async function fixture(t, extraAlertFunctions = '') {
   writeFileSync(join(bin, 'herdr.cmd'), STUB_HERDR)
   copyFileSync(join(HERE, 'watch-kanban.ps1'), join(root, 'watch-kanban.ps1'))
   writeFileSync(join(root, 'watchdog-alert.ps1'), readFileSync(join(HERE, 'watchdog-alert.ps1'), 'utf8') + `
-function Send-Push { param([string]$Title, [string]$Message) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
+function Send-Push { param([string]$Title, [string]$Message, [string]$Kind) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
 function Get-LanAddress { $env:TEST_LAN_ADDRESS }
 function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
 ${extraAlertFunctions}`)
@@ -113,4 +113,29 @@ test('phone listener: with .lan-on, a board not answering on the current LAN add
   await run('127.0.0.1')
   assert.equal(existsSync(join(root, '.watchdog-lan-outage')), false, 'answering on the LAN address ends the outage')
   assert.deepEqual(lines('restarts.txt'), ['restart Lan=True'])
+})
+
+test('the real Send-Push writes "- <KIND> <n> <time> <title>: <message>" to the inbox .md and .log (HK57 AC7)', t => {
+  const base = mkdtempSync(join(tmpdir(), 'watchdog-push-')), kanban = join(base, 'herdr-kanban'), roles = join(base, '_roles')
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  mkdirSync(join(kanban, 'lib'), { recursive: true }); mkdirSync(roles)
+  copyFileSync(join(HERE, 'lib', 'nz-time.mjs'), join(kanban, 'lib', 'nz-time.mjs'))
+  copyFileSync(join(HERE, 'watchdog-alert.ps1'), join(kanban, 'watchdog-alert.ps1'))
+  copyFileSync('C:/Users/PFrew/Projects/_roles/board-event-id.mjs', join(roles, 'board-event-id.mjs'))
+  const counter = join(base, 'counter.json')
+  writeFileSync(counter, '{"next":20000}\n')
+  writeFileSync(join(kanban, 'run.ps1'), `. (Join-Path $PSScriptRoot 'watchdog-alert.ps1')\nSend-Push 'Kanban board down' 'it did not answer' 'BE'`)
+  return new Promise((done, fail) => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(kanban, 'run.ps1')],
+    { env: { ...process.env, BOARD_EVENT_COUNTER: counter }, timeout: 45000, windowsHide: true }, (err, stdout, stderr) => {
+      try {
+        assert.equal(err, null, stdout + stderr)
+        for (const name of ['KANBAN_MANAGER-INBOX.md', 'KANBAN_MANAGER-INBOX.log']) {
+          const lines = readFileSync(join(roles, name), 'utf8').split(/\r?\n/).filter(Boolean)
+          assert.equal(lines.length, 1, name)
+          assert.match(lines[0], /^- BE 20000 \S.* Kanban board down: it did not answer$/, name)
+        }
+        assert.equal(JSON.parse(readFileSync(counter, 'utf8')).next, 20001)
+        done()
+      } catch (e) { fail(e) }
+    }))
 })
