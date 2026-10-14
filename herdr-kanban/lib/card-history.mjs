@@ -250,7 +250,7 @@ export function rerunBaseline(tasksDir, id, source) {
   if (!line) return null
   return `## Baseline already recorded\n${line.trim().slice(0, 300)}\nReuse this result from the card's ## Evidence; do not rebuild or rerun the baseline unless the revised plan changes the baseline files or the check.`
 }
-export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
+export function writeBrief(tasksDir, card, role, { maxChars = null, handover = '' } = {}) {
   const source = readFileSync(card.path, 'utf8')
   // The card's own copy is taken at creation; rules added later reach live cards
   // only through here (Injectbuddy I265). The brief revision hash carries the change.
@@ -270,7 +270,8 @@ export function writeBrief(tasksDir, card, role, { maxChars = null } = {}) {
         `\n\n## Where the rest is\nImplementation plan: read the ## Implementation plan section of the authoritative card ${slash(card.path)}` +
         (constraints ? `\nProject constraints: read ## all${card.category ? ` and ## ${card.category}` : ''} in ${slash(join(tasksDir, 'PROJECT-CONSTRAINTS.md'))}` : '')
   const baseline = role === 'builder' ? rerunBaseline(tasksDir, card.id, source) : null
-  const text = baseline ? `${body}\n\n${baseline}` : body
+  const main = baseline ? `${body}\n\n${baseline}` : body
+  const text = handover && role === 'builder' ? `${handover}\n\n${main}` : main
   if (maxChars && text.length > maxChars) throw new Error(`Brief exceeds configured ${maxChars} characters; compact it without removing requirements`)
   const dir = join(tasksDir, '.briefs')
   mkdirSync(dir, { recursive: true })

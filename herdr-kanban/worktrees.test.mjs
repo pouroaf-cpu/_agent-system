@@ -978,7 +978,7 @@ test('a worktree from an earlier plan is saved to a recovery branch and replaced
     assert.notEqual(fresh.workspacePath, first.workspacePath)
     assert.equal(existsSync(first.workspacePath), false)
     assert.equal(git(fresh.workspacePath, 'rev-parse', 'HEAD'), git(f.integration, 'rev-parse', 'HEAD'))
-    assert.deepEqual(semanticDirtyFiles(fresh.workspacePath), [])
+    assert.deepEqual(semanticDirtyFiles(fresh.workspacePath), ['saved.js']) // HK78: the earlier run's untracked file is carried over
     const recovery = git(f.integration, 'branch', '--list', `recovery/${first.entry.branch}-*`, '--format=%(refname:short)')
     assert.match(recovery, /^recovery\/kanban\/t-1-/)
     assert.equal(git(f.integration, 'show', `${recovery}:saved.js`), 'failed builder work')
@@ -1149,4 +1149,69 @@ test('filesBusyHolder reads the holder from an overlap hold', () => {
   assert.equal(filesBusyHolder('files busy, held by T-1 — app.js'), 'T-1')
   assert.equal(filesBusyHolder('slots full'), null)
   assert.equal(filesBusyHolder(undefined), null)
+})
+
+// HK78: a stopped run's untracked files and a board-written hand-over reach the retry Builder.
+function stoppedRun(f, { evidence = false } = {}) {
+  f.addCard('T-1')
+  moveCard(f.tasks, 'T-1', 'planning')
+  moveCard(f.tasks, 'T-1', 'queue')
+  const card = moveCard(f.tasks, 'T-1', 'working')
+  const prepare = () => prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+  const first = prepare()
+  writeFileSync(join(first.workspacePath, 'app.js'), 'previous changes\n')
+  writeFileSync(join(first.workspacePath, 'e2e.spec.mjs'), 'untracked test\n')
+  writeFileSync(join(first.workspacePath, 'probe.mjs'), 'untracked script\n')
+  if (evidence) {
+    const dir = join(f.tasks, '.evidence', 'T-1')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'testrun-unit.json'), JSON.stringify({ name: 'unit', exitCode: 0, passed: 4, failed: 0, error: null, finishedAt: '2026-10-14T01:00:00Z' }))
+    writeFileSync(join(dir, 'testrun-api.json'), JSON.stringify({ name: 'api', exitCode: 1, passed: 1, failed: 2, error: null, finishedAt: '2026-10-14T02:00:00Z' }))
+  }
+  appendHistory(f.tasks, card.id, { event: 'builder-return', reason: 'stopped mid-run' })
+  return { card, prepare, first }
+}
+
+test('HK78 AC1: a stopped run keeps its untracked test files for the next run on a changed plan', () => {
+  const f = fixture()
+  try {
+    const { card, prepare, first } = stoppedRun(f)
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('Change it.', 'Changed plan.'))
+    const retry = prepare()
+    assert.equal(retry.created, true)
+    assert.notEqual(retry.workspacePath, first.workspacePath)
+    assert.equal(readFileSync(join(retry.workspacePath, 'e2e.spec.mjs'), 'utf8'), 'untracked test\n')
+    const recovery = git(f.integration, 'branch', '--list', `recovery/${first.entry.branch}-*`, '--format=%(refname:short)')
+    assert.equal(git(f.integration, 'show', `${recovery}:e2e.spec.mjs`), 'untracked test')
+    assert.match(retry.handover, new RegExp(`saved on branch ${recovery.replace('/', '\/')}`))
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('HK78 AC2/AC3: the retry brief opens with the hand-over and names the scripts left', () => {
+  const f = fixture()
+  try {
+    const { card, prepare } = stoppedRun(f, { evidence: true })
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('Change it.', 'Changed plan.'))
+    const retry = prepare()
+    const prompt = workerPrompt({ card, projectPath: f.integration, boardRoot: f.root, tasksDir: f.tasks, workspacePath: retry.workspacePath, handover: retry.handover })
+    const brief = readFileSync(prompt.match(/Read (.+?) \(revision/)[1], 'utf8')
+    assert.ok(brief.startsWith('## Hand-over from the earlier run'))
+    assert.match(brief, /Files changed:.*app\.js/)
+    assert.match(brief, /Tests passed:.*unit \(4 passed\)/)
+    assert.match(brief, /Last failure:.*api: exit 1, 2 failed/)
+    assert.match(brief, /Scripts left by the earlier run:.*probe\.mjs/)
+    // Same-plan resume carries the same hand-over without a new worktree.
+    const reuse = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.match(reuse.handover, /Scripts left by the earlier run:.*probe\.mjs/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('HK78: a first Builder run gets no hand-over', () => {
+  const f = fixture()
+  try {
+    f.addCard('T-1')
+    moveCard(f.tasks, 'T-1', 'planning'); moveCard(f.tasks, 'T-1', 'queue')
+    const card = moveCard(f.tasks, 'T-1', 'working')
+    assert.equal(prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).handover, undefined)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
 })

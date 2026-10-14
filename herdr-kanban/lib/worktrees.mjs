@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard, filesOverlap, isGlob, globMatches } from './cards.mjs'
 import { evidenceFingerprint } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
-import { previousBuilderAttempt } from './card-history.mjs'
+import { previousBuilderAttempt, historyPath } from './card-history.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
 import { isTransient, nextRetry, retryHold, inBackoff, killTree } from './transient.mjs'
 import { fileURLToPath } from 'node:url'
@@ -510,6 +510,40 @@ function retryConflicts(entry, repoRoot) {
   } finally { if (existsSync(index)) unlinkSync(index) }
 }
 
+// HK78: a retry Builder's brief opens with what the earlier run left, so it does not rebuild it.
+function retryHandover(tasksDir, id, wt, baseCommit) {
+  if (!previousBuilderAttempt(tasksDir, id)) return null
+  const list = (items, none) => items.length ? items.slice(0, 20).join(', ') + (items.length > 20 ? ` +${items.length - 20} more` : '') : none
+  const split = (r) => r.stdout.split('\0').filter(Boolean)
+  const untracked = split(git(wt, ['ls-files', '--others', '--exclude-standard', '-z'], { allowFailure: true }))
+  const changed = [...new Set([...split(git(wt, ['diff', '--name-only', '-z', baseCommit], { allowFailure: true })), ...untracked])]
+  const records = []
+  try {
+    const dir = join(tasksDir, '.evidence', id)
+    for (const f of readdirSync(dir).filter(f => /^testrun-.+\.json$/.test(f))) {
+      try { const r = JSON.parse(readFileSync(join(dir, f), 'utf8')); if (r.finishedAt) records.push(r) } catch { /* torn record */ }
+    }
+  } catch { /* no evidence folder */ }
+  records.sort((a, b) => String(a.finishedAt).localeCompare(String(b.finishedAt)))
+  const passed = records.filter(r => r.exitCode === 0).map(r => `${r.name} (${r.passed ?? 0} passed)`)
+  const failed = records.filter(r => r.exitCode !== 0 || r.error).pop()
+  let failure = failed && `${failed.name}: exit ${failed.exitCode}, ${failed.failed ?? 0} failed${failed.error ? `, ${failed.error}` : ''}`
+  if (!failure) {
+    try {
+      for (const line of readFileSync(historyPath(tasksDir, id), 'utf8').split('\n')) {
+        try { const e = JSON.parse(line); if (e.event === 'builder-return' && e.reason) failure = String(e.reason).slice(0, 300) } catch { /* torn line */ }
+      }
+    } catch { /* no history */ }
+  }
+  return [
+    '## Hand-over from the earlier run',
+    `Files changed: ${list(changed, 'none')}`,
+    `Tests passed: ${list(passed, 'none recorded')}`,
+    `Last failure: ${(failure || 'none recorded').replace(/\s+/g, ' ')}`,
+    `Scripts left by the earlier run: ${list(untracked.filter(p => /\.(mjs|cjs|js|ts|tsx|ps1|sh|py)$/.test(p)), 'none')}`,
+  ].join('\n')
+}
+
 // Git projects isolate by default; non-Git projects retain their workspace.
 export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }) {
   if (gitSettings?.envFile && !existsSync(gitSettings.envFile)) throw new Error('Required approved environment file is unavailable; restore it before dispatch')
@@ -552,17 +586,27 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   // Reissuing an unchanged plan must not discard the attempt. Older entries without
   // a content revision retain the plan-attempt guard until their first safe resume.
   const changedPlan = existing?.planRevision ? existing.planRevision !== revision : existing?.planAttempt && existing.planAttempt !== plan
+  let handover, carried
   if (existing && (changedPlan || retryConflicts(existing, repoRoot))) {
     const wt = existing.worktreePath
     const unfinished = operationInProgress(wt) || git(wt, ['diff', '--name-only', '--diff-filter=U']).stdout.trim()
+    // HK78: untracked files go to the recovery commit but would not reach the fresh worktree; copy them across.
+    handover = retryHandover(tasksDir, id, wt, existing.baseCommit)
+    carried = new Map()
+    for (const p of handover ? git(wt, ['ls-files', '--others', '--exclude-standard', '-z'], { allowFailure: true }).stdout.split('\0').filter(Boolean) : []) {
+      try { const s = statSync(join(wt, p)); if (s.isFile() && s.size <= 5 * 1024 * 1024) carried.set(p, readFileSync(join(wt, p))) } catch { /* vanished */ }
+    }
     if (!unfinished && !clean(wt)) { git(wt, ['add', '-A']); git(wt, ['commit', '-m', `${id}: work saved from an earlier plan attempt`]) }
     const head = git(wt, ['rev-parse', 'HEAD']).stdout.trim()
+    let saved = existing.branch
     if (head !== existing.baseCommit) {
       const recovery = `recovery/${existing.branch}-${Date.now().toString(36)}`
+      saved = recovery
       git(existing.repoRoot, ['branch', recovery, head])
       if (!unfinished) git(wt, ['checkout', '--detach', existing.baseCommit]) // the work is on the recovery branch; leave the checkout at its base so it can be removed
       appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nThe previous attempt's work is on branch \`${recovery}\`${unfinished ? `; unfinished changes remain in ${wt}` : ''}. This attempt starts from a fresh worktree on integration HEAD.\n`)
     }
+    if (handover) handover += `\nEarlier tracked changes are saved on branch ${saved}; untracked files above were copied into this worktree.`
     if (!unfinished) removeCleanWorktree(tasksDir, existing)
     else appendFileSync(card.path, `\n\n**Earlier plan's work saved** ${formatNZTime()}\n\nUnfinished Git operation preserved in ${wt}; this attempt uses a fresh worktree.\n`)
     existing = null
@@ -581,7 +625,7 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
     prepareWorktreeEnvironment({ workspacePath: existing.workspacePath, integrationWorkspace })
     const resumed = updateEntry(tasksDir, id, { files: [...new Set([...(existing.files || []), ...filesFor(card, integrationWorkspace)])], planRevision: revision, generatedFiles: gitSettings?.generatedFiles, state: 'building', reason: null, resumedAt: new Date().toISOString() })
     const previousAttempt = previousBuilderAttempt(tasksDir, id) && (semanticDirtyFiles(resumed.worktreePath).length > 0 || git(resumed.worktreePath, ['rev-parse', 'HEAD']).stdout.trim() !== resumed.baseCommit)
-    return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false, previousAttempt }
+    return { git: true, workspacePath: resumed.workspacePath, cwd: resumed.workspacePath, entry: resumed, created: false, previousAttempt, handover: retryHandover(tasksDir, id, resumed.worktreePath, resumed.baseCommit) || undefined }
   }
 
   const workspaceRel = relative(repoRoot, integrationWorkspace)
@@ -616,7 +660,13 @@ export function prepareCardWorktree({ projectPath, tasksDir, card, gitSettings }
   }
   updateEntry(tasksDir, id, entry)
   prepareWorktreeEnvironment({ workspacePath, integrationWorkspace })
-  return { git: true, workspacePath, cwd: workspacePath, entry, created: true }
+  for (const [p, data] of carried || []) {
+    const target = join(worktreePath, p)
+    if (!safeInside(worktreePath, target) || existsSync(target)) continue
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, data)
+  }
+  return { git: true, workspacePath, cwd: workspacePath, entry, created: true, handover: handover || undefined }
 }
 
 // Lookup as findCard does (archive never wins; ambiguous or missing is unknown), in the

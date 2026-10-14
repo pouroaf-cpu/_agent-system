@@ -11,9 +11,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { workflowLimits } from './workflow-limits.mjs'
 import { engineKind } from './quota.mjs'
-const briefing = (tasksDir, card, role) => {
+const briefing = (tasksDir, card, role, handover = '') => {
   if (!tasksDir || !existsSync(card.path)) return card.path.replaceAll('\\', '/')
-  const path = writeBrief(tasksDir, card, role, { maxChars: workflowLimits().maxBriefChars })
+  const path = writeBrief(tasksDir, card, role, { maxChars: workflowLimits().maxBriefChars, handover })
   return `${path} (revision ${createHash('sha256').update(readFileSync(path)).digest('hex')})`
 }
 
@@ -54,10 +54,10 @@ const oneLine = (...parts) => parts.join(' ').replace(/\s+/g, ' ').trim()
 // SINGLE LINE, always. Prompts are delivered as keystrokes into a TUI, where a
 // newline is the submit key — a multi-line prompt submits on its first blank line
 // and leaves the rest sitting unsent in the input box.
-export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: explicitWorkspacePath, engine, previousAttempt = false }) {
+export function workerPrompt({ card, projectPath, boardRoot, tasksDir, workspacePath: explicitWorkspacePath, engine, previousAttempt = false, handover = '' }) {
   // Absolute paths, not relative: a relative path sends the agent hunting for the
   // file with a glob/search before it can read it, which costs a turn every spawn.
-  const cardPath = briefing(tasksDir, card, 'builder')
+  const cardPath = briefing(tasksDir, card, 'builder', handover)
   const workspacePath = resolve(explicitWorkspacePath || projectPath, explicitWorkspacePath ? '.' : (card.workspace || '.')).replace(/\\/g, '/')
   const cmd = hkb(boardRoot, tasksDir)
   return oneLine(
