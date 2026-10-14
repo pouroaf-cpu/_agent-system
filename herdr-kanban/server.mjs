@@ -726,7 +726,7 @@ async function pollProject(project) {
     if (gitSettings) {
       const waiting = {} // why each card is not integrated yet, for the stall watchdog's Owner note
       integrationHolds.set(project, waiting)
-      if (handoffs.completed.length || handoffs.review.length) dirty = logIntegrationResults(project, await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck }), waiting) || dirty
+      if (handoffs.completed.length || handoffs.review.length) dirty = logIntegrationResults(project, await reconcileCompletedHandoffs({ tasksDir, project, integrationCheck: gitSettings.integrationCheck, background: true }), waiting) || dirty
     }
       } finally {
         reconciliationPolls.delete(project)

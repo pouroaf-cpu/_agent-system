@@ -50,7 +50,16 @@ function checkTimedOut(tasksDir, cardId, what, now, why = 'timed out (machine un
 // Project integrationCheck (board.config.json projectSettings): the card commit,
 // rebased onto current master in its own worktree, must pass it before the pick.
 // Null means go ahead and integrate; otherwise the card went back.
-async function gateIntegration(tasksDir, card, command, io, now) {
+// `background` (the project poll): the check is started and not awaited, so a check that runs for
+// its whole timeout never holds Builder and Planner starts; the card is held until it settles and
+// the next poll applies the result. Checks in flight, by tasksDir + card id: { commit, result }.
+const runningChecks = new Map()
+
+async function gateIntegration(tasksDir, card, command, io, now, background = false) {
+  const key = `${tasksDir}\n${card.id}`, job = background ? runningChecks.get(key) : null
+  // Never rebase a worktree a running check is using.
+  if (job && !job.result) return { id: card.id, status: 'held', reason: `integration check ${command} is running in the background` }
+  runningChecks.delete(key)
   const up = io.rebase(tasksDir, card.id)
   if (!up) return null
   if (up.status === 'conflict') return returnIntegrationConflict(tasksDir, card.id, up)
@@ -68,7 +77,17 @@ async function gateIntegration(tasksDir, card, command, io, now) {
   try { prepareWorktreeEnvironment(entry) } catch (err) { installing ||= !!err.installIn && String(io.startInstall({ folder: err.installIn, tasksDir })).startsWith('installing dependencies in ') }
   const waiting = installing && waitForInstall()
   if (waiting) return waiting
-  const check = await io.runIntegrationCheck(command, entry.workspacePath, 900000)
+  let check
+  if (!background) check = await io.runIntegrationCheck(command, entry.workspacePath, 900000)
+  else if (job?.commit === up.commit) check = job.result
+  else {
+    const started = { commit: up.commit, result: null }
+    runningChecks.set(key, started)
+    Promise.resolve().then(() => io.runIntegrationCheck(command, entry.workspacePath, 900000))
+      .catch(err => ({ ok: false, output: `${command}\n${err?.message || err}` }))
+      .then(result => { started.result = result })
+    return { id: card.id, status: 'held', reason: `integration check ${command} is running in the background` }
+  }
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
   writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}\n\n${check.output}\n`)
@@ -121,7 +140,7 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}${planError ? ` (not returned to a Builder: ${planError})` : ''}. ${action}` : detail }
 }
 
-export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(),
+export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(), background = false,
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees, runCheck: runRecordedCheck } }) {
   io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, startInstall: startDependencyInstall, installRunning, ...io }
   const results = [], session = sessionOf(project), completedIds = []
@@ -186,7 +205,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     }
     const pending = readWorkflow(tasksDir)[card.id]?.integrationRetry
     if (pending?.nextAt > now) { results.push({ id: card.id, status: 'held', reason: pending.reason }); continue }
-    const gated = integrationCheck && await gateIntegration(tasksDir, card, integrationCheck, io, now)
+    const gated = integrationCheck && await gateIntegration(tasksDir, card, integrationCheck, io, now, background)
     if (gated) { results.push(gated); continue }
     const batch = readWorktrees(tasksDir)[card.id]?.state === 'rebased' ? [{ id: card.id, status: 'rebased' }] : io.reconcile({ tasksDir, onlyIds: [card.id] })
     for (const result of batch) {

@@ -404,6 +404,54 @@ test('a timed-out integration check holds only its own card; the same poll still
   assert.equal(workflow['T-2']?.integrationRetry ?? null, null)
 })
 
+// One completed card, polled in background mode like pollProject (no onlyIds).
+function backgroundFixture(t, runIntegrationCheck) {
+  const root = mkdtempSync(join(tmpdir(), 'check-background-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), `# T-1 — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n`)
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', worktreePath: root, workspacePath: root, baseCommit: 'b0' } }))
+  const calls = { rebase: 0, check: 0 }
+  const io = { agentList: async () => [], rebase: () => { calls.rebase++; return { status: 'rebased', commit: 'c1' } },
+    runIntegrationCheck: (...args) => { calls.check++; return runIntegrationCheck(...args) },
+    reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const poll = (now = Date.now()) => Promise.race([
+    reconcileCompletedHandoffs({ tasksDir, project: 'Proof', integrationCheck: 'npm test', io, now, background: true }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('poll waited for the integration check')), 2000).unref())])
+  return { tasksDir, calls, poll }
+}
+
+test('a running integration check does not hold the poll, and is not started or rebased again (HK72 AC1)', async t => {
+  const { calls, poll } = backgroundFixture(t, () => new Promise(() => {}))
+  const [first] = await poll()
+  assert.equal(first.status, 'held'); assert.match(first.reason, /running in the background/)
+  const [second] = await poll()
+  assert.match(second.reason, /running in the background/)
+  assert.deepEqual(calls, { rebase: 1, check: 1 })
+})
+
+test('a timing-out integration check returns the poll first, then holds its own card with backoff (HK72 AC2)', async t => {
+  const { tasksDir, calls, poll } = backgroundFixture(t, () => new Promise(done => setTimeout(() => done({ ok: false, timedOut: true, output: 'npm test\ntimed out after 300s' }), 200)))
+  const now = Date.now(), start = performance.now()
+  const [first] = await poll(now)
+  assert.ok(performance.now() - start < 200, 'poll returned before the check timed out')
+  assert.match(first.reason, /running in the background/)
+  await new Promise(done => setTimeout(done, 300))
+  const [second] = await poll(now)
+  assert.equal(second.status, 'held'); assert.match(second.reason, /integration check npm test timed out.*; retrying at \d{4}-/)
+  assert.equal(readWorkflow(tasksDir)['T-1'].integrationRetry.tries, 1)
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].conflictFailures, undefined)
+  assert.equal(calls.check, 1)
+})
+
+test('a background integration check that passes integrates its card on the next poll (HK72)', async t => {
+  const { calls, poll } = backgroundFixture(t, async () => ({ ok: true, output: '' }))
+  assert.equal((await poll())[0].status, 'held')
+  await new Promise(done => setImmediate(done))
+  assert.equal((await poll())[0].status, 'integrated')
+  assert.equal(calls.check, 1)
+})
+
 test('a failed integration check on a card whose plan fails the plan check goes to Owner with the reason, not silently stuck in Completed (HK25)', async t => {
   const root = mkdtempSync(join(tmpdir(), 'plan-return-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
