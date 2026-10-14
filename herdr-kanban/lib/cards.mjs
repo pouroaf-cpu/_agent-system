@@ -1086,7 +1086,8 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   const template = readFileSync(audit ? AUDIT_TEMPLATES[audit] : TEMPLATE, 'utf8')
   // The project copy is a reference; creation always uses the board's canonical template.
   if (!audit) writeFileSync(join(tasksDir, 'TASK-TEMPLATE.md'), template)
-  const values = { ID: id, TITLE: title.trim(), CREATED: now.toISOString(), CATEGORY: category, WORKSPACE: workspace, AUDIT: audit, TOOLS: tools.trim(), MISSION: mission ? `**Mission:** ${mission}` : '', BRIEF: brief.trim(), PROJECT_CONSTRAINTS: constraintsFor(tasksDir, category) }
+  // Level-2 headings in the brief are lowered so they cannot split the card's own sections.
+  const values = { ID: id, TITLE: title.trim(), CREATED: now.toISOString(), CATEGORY: category, WORKSPACE: workspace, AUDIT: audit, TOOLS: tools.trim(), MISSION: mission ? `**Mission:** ${mission}` : '', BRIEF: brief.trim().replace(/^##(?= )/gm, '###'), PROJECT_CONSTRAINTS: constraintsFor(tasksDir, category) }
   let text = template.replace(/\{\{(ID|TITLE|CREATED|CATEGORY|WORKSPACE|AUDIT|TOOLS|MISSION|BRIEF|PROJECT_CONSTRAINTS)\}\}/g, (_, key) => values[key])
   if (priority !== undefined) text = withPriority(text, priority)
   if (blockedBy?.length) text = withBlockers(text, blockedBy)

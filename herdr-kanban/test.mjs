@@ -11,7 +11,7 @@ import { createServer as createNetServer } from 'node:net'
 import { readFileSync, utimesSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { readBoard, moveCard, parseCard, createCard, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
+import { readBoard, moveCard, parseCard, createCard, acceptanceCriteriaIds, columnByKey, setAutoReview, COLUMNS, findCard, isParked, appendBuildAttempt, appendReviewPass, canArchive, hasCurrentReviewPass, currentReviewDecision, appendDirtySnapshot, dirtySnapshotForCard } from './lib/cards.mjs'
 import { bind, readBindings, unbind, liveBindings, reap } from './lib/bindings.mjs'
 import { promoteAutoReview, promotePlanned, routeReviewVerdicts, slotsFree, reviewerRunning, spawnReviewer, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason, holdsFor } from './lib/autospawn.mjs'
 import { workerPrompt, reviewerPrompt, plannerPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
@@ -162,6 +162,24 @@ test('audit templates create evidence-gated cards directly in Review', () => {
   assert.match(text, /390px, 768px, and 1440px/)
   assert.match(text, /scrollWidth.*clientWidth/)
   assert.match(text, /Status: CLEAR, FINDINGS, or INCOMPLETE/)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('createCard lowers brief level-2 headings to level 3 and keeps AC lines', () => {
+  const { tasks, root } = fixture()
+  const brief = 'Why: x\n\n## Files\n- a\n\n## Acceptance criteria\n- AC1: does y\n\n### Keep\n```\n#comment\n```'
+  const card = createCard(tasks, { title: 'Lower headings', brief })
+  const text = readFileSync(card.path, 'utf8')
+  // AC1: brief level-2 headings become level 3; deeper headings and single-# lines are untouched
+  assert.match(text, /^### Files$/m)
+  assert.match(text, /^### Acceptance criteria$/m)
+  assert.match(text, /^### Keep$/m)
+  assert.match(text, /^#comment$/m)
+  for (const h of ['Approved brief', 'Files', 'Acceptance criteria']) assert.equal(text.match(new RegExp(`^## ${h}\\s*$`, 'gm')).length, 1, h)
+  // AC2: the AC line survives byte-identical and the real section is still the one read
+  assert.ok(text.split('\n').includes('- AC1: does y'))
+  const filled = text.replace(/(^## Acceptance criteria\r?\n)[\s\S]*?(?=^## )/m, '$1- AC1: does y\n\n')
+  assert.deepEqual(acceptanceCriteriaIds(filled), ['AC1'])
   rmSync(root, { recursive: true, force: true })
 })
 
