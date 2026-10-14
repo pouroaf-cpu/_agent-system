@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCard, findCard, moveCard } from './lib/cards.mjs'
@@ -69,6 +69,21 @@ test('create rejects unknown blockers, bad priority, missing AC and bad titles',
   assert.equal(r.status, 400); assert.match(r.body.error, /title/i)
   r = await post('/api/cards', { title: 'Bad cat', brief, category: 'nope' })
   assert.equal(r.status, 400); assert.match(r.body.error, /Category/)
+})
+
+test('create refuses a Workspace folder missing from the project', async () => {
+  const count = () => readdirSync(join(tasks, 'planning')).length
+  createCard(tasks, { title: 'Seed', brief: 'x', prefix: 'P' })
+  const before = count()
+  let r = await post('/api/cards', { title: 'Bad workspace', brief, workspace: 'no-such-folder' })
+  assert.equal(r.status, 400)
+  assert.match(r.body.error, /no-such-folder/); assert.match(r.body.error, /Proj/)
+  assert.equal(count(), before, 'no card file is written')
+  mkdirSync(join(root, 'Proj', 'app'))
+  r = await post('/api/cards', { title: 'Existing folder', brief, workspace: 'app' })
+  assert.equal(r.status, 201, r.body.error)
+  r = await post('/api/cards', { title: 'Project root', brief, workspace: '.' })
+  assert.equal(r.status, 201, r.body.error)
 })
 
 test('card-update changes priority, blockers and appends a dated note', async () => {

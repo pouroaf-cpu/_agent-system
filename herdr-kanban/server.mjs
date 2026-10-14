@@ -1281,7 +1281,7 @@ const handleRequest = async (req, res) => {
       // Only API cards need ACs: internal creators (audit findings, fixtures) write their own briefs.
       if (typeof brief === 'string' && brief.trim() && !/AC\d+:/.test(brief)) throw new Error('The brief needs at least one acceptance criterion line, e.g. "AC1: <observable outcome>"')
       const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''
-      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, priority, blockedBy, prefix: config.cardPrefixes?.[p] })
+      const card = createCard(tasksDirOf(p), { title, brief, category, workspace, audit, tools, mission, priority, blockedBy, prefix: config.cardPrefixes?.[p], projectPath: integrationPathOf(p) })
       broadcastBoard(p)
       return json(res, 201, { ok: true, card })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
@@ -1305,7 +1305,7 @@ const handleRequest = async (req, res) => {
         return json(res, 200, { ok: true, audit: { id: audit.id, title: audit.title, column: audit.column }, findings, links })
       }
       const mission = missionAllowsProject(p) ? config.mission?.id || '' : ''
-      const result = cardsFromAudit(tasksDirOf(p), { ...input, mission, prefix: config.cardPrefixes?.[p] })
+      const result = cardsFromAudit(tasksDirOf(p), { ...input, mission, prefix: config.cardPrefixes?.[p], projectPath: integrationPathOf(p) })
       for (const { n, id } of result.created) activity(p, id, 'create', `from ${result.audit} finding ${n}`)
       if (result.archivedNow) {
         operatorArchiveRelease(p, result.audit)

@@ -1089,9 +1089,18 @@ export function waitingOnPrerequisites(card, board, integrated = {}) {
   return states.length && states.every(([, s]) => s === 'waiting') ? states.map(([id]) => id) : []
 }
 
+// '' when the Workspace folder is a directory under the project (or no project path
+// is given); otherwise the refusal message.
+export function missingWorkspace(projectPath, workspace) {
+  if (!projectPath) return ''
+  const dir = resolve(projectPath, workspace)
+  if (existsSync(dir) && statSync(dir).isDirectory()) return ''
+  return `Workspace folder '${workspace}' does not exist under project path ${projectPath}`
+}
+
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
 // one the project keeps issuing legacy T- ids.
-export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', priority, blockedBy, now = new Date() }) {
+export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', priority, blockedBy, projectPath = '', now = new Date() }) {
   if (typeof title !== 'string' || !title.trim() || title.length > 200 || /[\r\n]/.test(title)) throw new Error('A single-line title of at most 200 characters is required')
   if (typeof brief !== 'string' || !brief.trim() || brief.length > 50000) throw new Error('An approved brief of at most 50000 characters is required')
   if (typeof mission !== 'string' || /[\r\n]/.test(mission)) throw new Error('Invalid mission')
@@ -1099,6 +1108,8 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   if (!CATEGORIES.includes(category)) throw new Error(`Category must be one of: ${CATEGORIES.join(', ')}`)
   workspace = String(workspace).replace(/\\/g, '/').trim() || '.'
   if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace)) throw new Error('Workspace must be a project-relative path')
+  const missing = missingWorkspace(projectPath, workspace)
+  if (missing) throw new Error(missing)
   audit = String(audit).toLowerCase()
   if (audit && !AUDITS.includes(audit)) throw new Error(`Audit must be one of: ${AUDITS.join(', ')}`)
   if (audit === 'general' && !String(tools ?? '').trim()) tools = '- chrome-devtools (headless isolated browser: screenshots, DOM measurements, console and network)'

@@ -3,7 +3,7 @@
 // `- F<n>: declined — <reason>`, the lines auditArchiveError already checks.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { createCard, findCard, moveCard } from './cards.mjs'
+import { createCard, findCard, missingWorkspace, moveCard } from './cards.mjs'
 import { auditStatus, cardReadyFindings, section } from './audit-routing.mjs'
 import { CARD_ID } from './ids.mjs'
 
@@ -55,7 +55,7 @@ export function auditFindings(tasksDir, source) {
   return { audit, text, findings, links: Object.fromEntries(findings.map(f => [f.n, linkLine(text, f.n) || null])) }
 }
 
-export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = [], reason = '', prefix, mission = '' }) {
+export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = [], reason = '', prefix, mission = '', projectPath = '' }) {
   const { audit, findings: all, links } = auditFindings(tasksDir, { id, report })
   if (audit.column === 'archive') return { audit: audit.id, created: [], links, archived: true, remaining: [] }
   if (!report && !['pou', 'owner', 'planning'].includes(audit.column)) throw new Error(`${audit.id} is in ${audit.column}; turn findings into cards once the report is in Pou, Owner or Planning`)
@@ -72,6 +72,11 @@ export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = 
   const cardOf = n => {
     if (!links[n] || declined(n)) return null
     return (links[n].match(new RegExp(String.raw`\b${CARD_ID}\b`, 'g')) || []).find(card => { try { return findCard(tasksDir, card) } catch { return false } }) || null
+  }
+  // A bad Workspace stops the run before any decline note, evidence copy, card or link is written.
+  for (const f of all.filter(f => selected.includes(f.n) && !cardOf(f.n))) {
+    const missing = missingWorkspace(projectPath, String(f.workspace).replace(/\\/g, '/').trim() || '.')
+    if (missing) throw new Error(`F${f.n}: ${missing}`)
   }
   for (const n of decline) {
     if (cardOf(n)) throw new Error(`F${n} is already linked to ${cardOf(n)}; it cannot be declined`)
@@ -92,7 +97,7 @@ export function cardsFromAudit(tasksDir, { id, report, findings = [], decline = 
   }
   const created = []
   for (const f of all.filter(f => selected.includes(f.n) && !cardOf(f.n))) {
-    const card = createCard(tasksDir, { title: f.title, brief: briefFor(audit.id, { ...f, evidence: f.evidence.map(localEvidence) }), category: f.category, workspace: f.workspace, mission, prefix })
+    const card = createCard(tasksDir, { title: f.title, brief: briefFor(audit.id, { ...f, evidence: f.evidence.map(localEvidence) }), category: f.category, workspace: f.workspace, mission, prefix, projectPath })
     // Link before anything else can fail, so a retry never duplicates this finding.
     links[f.n] = card.id
     setLink(audit.path, f.n, card.id)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -131,5 +131,22 @@ test('audit-cards: off-board report.md source links in the report and never arch
     const legacy = join(dir, 'legacy.md')
     writeFileSync(legacy, `# Old\n\nStatus: FINDINGS\n${report([finding(1)]).replace(/## Audit conclusion[\s\S]*$/, '')}`)
     assert.equal(cardsFromAudit(dir, { report: legacy, findings: 'all', prefix: 'I' }).created.length, 1, 'legacy Status: header is accepted')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('audit-cards: a Workspace folder missing from the project is refused before anything is written', () => {
+  const dir = fixture()
+  try {
+    const tasks = join(dir, 'tasks'), project = join(dir, 'project')
+    mkdirSync(tasks); mkdirSync(join(project, 'app'), { recursive: true })
+    const audit = createCard(tasks, { title: 'Journey', brief: 'Visual flow', audit: 'general', prefix: 'I' })
+    fill(audit, report([finding(1), finding(2, { category: 'code', workspace: 'injectbuddy-app' })]))
+    moveCard(tasks, audit.id, 'owner')
+    const run = () => cardsFromAudit(tasks, { id: audit.id, findings: 'all', decline: [], prefix: 'I', projectPath: project })
+    assert.throws(run, (err) => /F2/.test(err.message) && err.message.includes("'injectbuddy-app'") && err.message.includes(project))
+    assert.equal(existsSync(join(tasks, 'planning')), false, 'no card file is written')
+    assert.doesNotMatch(readFileSync(findCard(tasks, audit.id).path, 'utf8'), /- F1:/)
+    fill(findCard(tasks, audit.id), report([finding(1), finding(2, { category: 'code', workspace: 'app' })]))
+    assert.equal(run().created.length, 2, 'workspace "." and an existing folder are accepted')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
