@@ -29,7 +29,8 @@ test('workerPrompt stays at or below 6,200 chars', () => {
 test('workerPrompt names hkb result and no longer asks for a scripted section replace', () => {
   const w = workerPrompt(common)
   assert.match(w, /hkb\.mjs['"]? result IA999 --file/)
-  assert.match(w, /\bfinish IA999 --file/)
+  assert.match(w, /hkb\.mjs['"]? finish IA999 --file <path>/)
+  assert.doesNotMatch(w, /Commit before done/)
   assert.doesNotMatch(w, /scripted/)
   assert.doesNotMatch(w, /\n/)
 })

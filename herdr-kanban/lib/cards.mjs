@@ -690,6 +690,16 @@ export function parseResultText(input, { lenient = false } = {}) {
     if (next) { heading = next; bodies[heading] ??= ''; continue }
     if (heading) bodies[heading] += `${line}\n`
   }
+  // No heading at all: file labelled lines under the two headings; no labelled line leaves both empty.
+  if (!heading && /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(?:Stage|Outcome|Files|Blocker|AC\d+|Check|Result|Evidence)[ \t]*:/mi.test(input)) {
+    heading = 'Implementation'
+    bodies.Implementation = bodies.Evidence = ''
+    for (const line of input.split(/\r?\n/)) {
+      const label = line.match(/^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(Stage|Outcome|Files|Blocker|AC\d+|Check|Result|Evidence)[ \t]*:/i)?.[1]
+      if (label) heading = /^(?:Stage|Outcome|Files|Blocker)$/i.test(label) ? 'Implementation' : 'Evidence'
+      bodies[heading] += `${line}\n`
+    }
+  }
   const { Implementation = '', Evidence = '' } = bodies
   if (!lenient && (!Implementation.trim() || !Evidence.trim())) throw new Error('result needs both a ## Implementation and a ## Evidence section in the text')
   return { Implementation: Implementation.trim(), Evidence: Evidence.trim() }

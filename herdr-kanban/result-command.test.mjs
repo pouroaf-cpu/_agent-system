@@ -134,3 +134,30 @@ test('AC2: a missing AC test line and a one-section text are refused', t => {
   assert.match(half.stderr, /result needs both a ## Implementation and a ## Evidence section/)
   assert.equal(readFileSync(path, 'utf8'), before)
 })
+
+test('AC1: labelled lines with no headings are filed under Implementation and Evidence', t => {
+  const { tasks, path } = board(t, card())
+  const before = readFileSync(path, 'utf8')
+  const bare = text().replace(/^## .*\n/gm, '')
+  const r = hkb(tasks, { input: bare }, 'result', 'T-1')
+  assert.equal(r.status, 0, r.stderr)
+  const after = readFileSync(path, 'utf8')
+  assert.match(after, /## Implementation\n\nStage: builder\nOutcome: PASS\nFiles: .*\nBlocker: none\n\n## Files/)
+  assert.match(after, /## Evidence\n\nAC1: .*\nAC2: .*\nCheck: .*\nResult: .*\nEvidence: .*\n\n## Reviewer evidence/)
+  assert.equal(withoutBodies(after), withoutBodies(before))
+  assert.doesNotMatch(hkb(tasks, {}, 'done', 'T-1').stderr, /requires a current|result requires|recorded test|requires Stage/)
+})
+
+test('AC2: text with no labelled content is refused and names the missing part', t => {
+  const { tasks, path } = board(t, card())
+  const before = readFileSync(path, 'utf8')
+  const input = 'I finished the work and everything passes.\n'
+  const r = hkb(tasks, { input }, 'result', 'T-1')
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /result needs both a ## Implementation and a ## Evidence section/)
+  const f = hkb(tasks, { input }, 'finish', 'T-1')
+  assert.notEqual(f.status, 0)
+  assert.match(f.stderr, /requires a current Implementation result/)
+  assert.match(f.stderr, /Evidence/)
+  assert.equal(readFileSync(path, 'utf8'), before)
+})
