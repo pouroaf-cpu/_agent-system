@@ -140,6 +140,10 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}${planError ? ` (not returned to a Builder: ${planError})` : ''}. ${action}` : detail }
 }
 
+// Recorded Check re-runs in flight under `background`, by tasksDir + card id: { commit, result }.
+const recordedChecks = new Map()
+const RECORDED_RUNNING = 'recorded check is running in the background'
+
 export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, integrationCheck, now = Date.now(), background = false,
   io = { agentList, paneRead, paneClose, recordUsageFinish, reconcile: reconcileCompletedWorktrees, runCheck: runRecordedCheck } }) {
   io = { rebase: rebaseCompletedOntoIntegration, runIntegrationCheck: runShell, startInstall: startDependencyInstall, installRunning, ...io }
@@ -205,13 +209,29 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     }
     const pending = readWorkflow(tasksDir)[card.id]?.integrationRetry
     if (pending?.nextAt > now) { results.push({ id: card.id, status: 'held', reason: pending.reason }); continue }
+    // Never rebase or re-check a worktree a background recorded check is using.
+    const key = `${tasksDir}\n${card.id}`
+    if (recordedChecks.get(key)?.result === null) { results.push({ id: card.id, status: 'held', reason: RECORDED_RUNNING }); continue }
     const gated = integrationCheck && await gateIntegration(tasksDir, card, integrationCheck, io, now, background)
     if (gated) { results.push(gated); continue }
     const batch = readWorktrees(tasksDir)[card.id]?.state === 'rebased' ? [{ id: card.id, status: 'rebased' }] : io.reconcile({ tasksDir, onlyIds: [card.id] })
     for (const result of batch) {
       if (result.status === 'conflict') { results.push(returnIntegrationConflict(tasksDir, card.id, result)); continue }
       if (result.status !== 'rebased') { results.push(result); continue }
-      const check = await (io.runCheck ?? runRecordedCheck)(card, readWorktrees(tasksDir)[card.id])
+      const worktree = readWorktrees(tasksDir)[card.id], run = io.runCheck ?? runRecordedCheck, job = recordedChecks.get(key)
+      recordedChecks.delete(key)
+      let check
+      if (!background) check = await run(card, worktree)
+      else if (job?.commit === worktree.commit) check = job.result
+      else {
+        // Same pattern as the integration check: start it, hold the card, apply the result next poll.
+        const started = { commit: worktree.commit, result: null }
+        recordedChecks.set(key, started)
+        Promise.resolve().then(() => run(card, worktree))
+          .catch(err => ({ ok: false, output: `recorded check\n${err?.message || err}` }))
+          .then(settled => { started.result = settled })
+        results.push({ id: card.id, status: 'held', reason: RECORDED_RUNNING }); continue
+      }
       appendHistory(tasksDir, card.id, { event: 'rebase-check', ok: check.ok, output: check.output })
       const timedOut = !check.ok && isTransient(check) && checkTimedOut(tasksDir, card.id, 'recorded check', now)
       if (timedOut) { results.push(timedOut); continue }
