@@ -17,6 +17,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs finish T-02 --file result.md [-m "<message>"]   (Builder, after git add: commit, write the result, hand off; names every missing part)
 //   node hkb.mjs files T-02 path [path ...]   (Builder, before the first edit: exit 1 names the needed files ## Files misses)
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
+//   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -150,6 +151,23 @@ if (verb === 'tests') {
     const { submitTestRun } = await import('./lib/test-handoff.mjs')
     const run = submitTestRun({ tasksDir, cardId, name, command, cwd: process.cwd(), timeoutSeconds })
     console.log(`TEST RUN HANDED OFF ${cardId} ${name}: result will be at ${run.record}; a fresh agent starts on it. Stop now.`)
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
+// locate: read-only multi-term source search for a Planner (HK77); writes nothing and needs no card.
+if (verb === 'locate') {
+  const terms = [], paths = []
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--in') paths.push(rest[++i] ?? '')
+    else terms.push(rest[i])
+  }
+  if (!cardId || !terms.length || paths.includes('')) fail('usage: hkb locate T-02 <term> [<term> ...] [--in <folder>]')
+  const bad = paths.find(p => isAbsolute(p) || /^[a-z]:/i.test(p) || p.split(/[\\/]/).includes('..'))
+  if (bad) fail(`locate --in is a folder relative to the current directory; "${bad}" is not`)
+  try {
+    const { locateTerms, formatLocate } = await import('./lib/locate.mjs')
+    console.log(formatLocate(locateTerms({ root: process.cwd(), terms, paths }), terms))
     process.exit(0)
   } catch (err) { fail(err.message) }
 }
