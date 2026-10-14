@@ -14,7 +14,8 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs wait  T-02 "public/x/y.html, T-03" "the page this plan edits is created by T-03"
 //   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
 //   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
-//   node hkb.mjs files T-02 path [path ...]     (Builder, before the first edit: exit 1 names the needed files ## Files misses)
+//   node hkb.mjs finish T-02 --file result.md [-m "<message>"]   (Builder, after git add: commit, write the result, hand off; names every missing part)
+//   node hkb.mjs files T-02 path [path ...]   (Builder, before the first edit: exit 1 names the needed files ## Files misses)
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //
 // Run it from the project root. Moving the card IS the report; there is no
@@ -26,11 +27,11 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, integrationStartHoldReason } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, commitStagedForHandoff, integrationStartHoldReason } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
@@ -58,8 +59,8 @@ if (args[0] === '--review-root') { reviewRoot = args[1]; args.splice(0, 2) }
 if (args[0] === '--review-claim') { reviewClaim = args[1]; args.splice(0, 2) }
 let plannerAssignment
 if (args[0] === '--planner-assignment') { plannerAssignment = args[1]; args.splice(0, 2) }
-const [verb, cardId, ...rest] = args
-const note = rest.join(' ').trim()
+let [verb, cardId, ...rest] = args
+let note = rest.join(' ').trim()
 
 if (verb === 'show') {
   if (!cardId) fail('missing card id, e.g. hkb show T-02')
@@ -92,6 +93,32 @@ if (verb === 'result') {
     console.log(`${cardId}: Implementation and Evidence written; run hkb done ${cardId} when the commit is ready`)
     process.exit(0)
   } catch (err) { fail(err.message) }
+}
+
+// finish: result + commit + done in one command (HK71). Validates the whole result first and names every
+// missing part in one refusal; nothing is committed or written until it passes. Then falls through as `done`.
+if (verb === 'finish') {
+  if (!cardId) fail('missing card id, e.g. hkb finish T-02 --file result.md -m "T-02 title"')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const card = findCard(tasksDir, cardId)
+    if (card.column !== 'working') fail(`finish hands off the Builder's work; ${cardId} is in ${card.column}`)
+    const flag = (...names) => { const at = rest.findIndex(arg => names.includes(arg)); return at < 0 ? undefined : rest[at + 1] }
+    const file = flag('--file')
+    let input = ''
+    try { input = readFileSync(file ?? 0, 'utf8') } catch {}
+    if (!input.trim()) fail('finish needs the result text: hkb finish T-02 --file <path> [-m <message>], or pipe it on stdin')
+    const bodies = parseResultText(input, { lenient: true }), next = replaceResultSections(readFileSync(card.path, 'utf8'), bodies)
+    const midLine = Object.values(bodies).some(body => unglueHeadings(body) !== body)
+    if (midLine) fail('result text has "## Implementation", "## Evidence" or "## Reviewer evidence" in the middle of a line, where hkb done would split the card; reword it without the leading ##')
+    const problems = builderResultProblems('done', unglueHeadings(next))
+    if (problems.length) fail(problems.join('; '))
+    const message = flag('-m', '--message') || `${cardId}: ${card.title}`
+    const commit = commitStagedForHandoff(tasksDir, card, message)
+    writeFileSync(card.path, next)
+    console.log(`${cardId}: ${commit.committed ? `committed ${commit.files.length} staged file(s)` : 'no staged files (using your existing commit)'}; result written; handing off`)
+  } catch (err) { fail(err.message) }
+  verb = 'done'; rest = []; note = ''
 }
 
 // files: read-only Files check a Builder runs before its first edit (HK41); writes nothing, so the issue path and return count are untouched.
@@ -371,7 +398,7 @@ if (verb === 'split' && rest[0] === '--parts') {
 }
 
 if (!verb || !(verb in VERBS)) {
-  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show|result|tests> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb tests <card-id> <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop; a fresh agent reads the saved result)\n       hkb result <card-id> --file <path>   (Builder: write the ## Implementation and ## Evidence bodies from text, or pipe it on stdin; refuses what done would)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
+  fail(`usage: hkb [--tasks <absolute-tasks-dir>] <done|issue|owner|park|split|found|wait|covered|review|rework|pass|move|show|result|finish|tests> <card-id> [note|column]\n       hkb show <card-id>   (read the card from any lane)\n       hkb finish <card-id> --file <path> [-m <message>]   (Builder, after git add: commit the staged files, write the result and hand off; refusal names every missing result part)\n       hkb tests <card-id> <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop; a fresh agent reads the saved result)\n       hkb result <card-id> --file <path>   (Builder: write the ## Implementation and ## Evidence bodies from text, or pipe it on stdin; refuses what done would)\n       hkb found [--board] <card-id> "<finding>"   (--board: a board/process problem, always to the Kanban Manager)\n       hkb wait <card-id> "<files or cards>" "<why>"   (Planner: the plan needs something that does not exist yet)\n       hkb covered <card-id> <covering-card> "<check> -> <result>"   (Planner: another card already fixed this)\n       got: ${verb ?? '(nothing)'}`)
 }
 if (!cardId) fail('missing card id, e.g. T-02')
 

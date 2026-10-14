@@ -631,27 +631,30 @@ export const builderPassIn = result => /^Stage:\s*builder\s*$/mi.test(result) &&
 
 // The refusal hkb done/unchanged (and hkb result) give a card's Builder result, or '' when it passes.
 // `text` is the card text with headings already unglued.
-export function builderResultError(verb, text) {
-  const sections = []
+// Every problem at once (HK71), so a Builder fixes the result in one pass instead of one refusal per part.
+export function builderResultProblems(verb, text) {
+  const problems = [], sections = []
   for (const heading of ['Implementation', 'Evidence']) {
     const content = text.match(new RegExp(`^## ${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1]?.replace(/<!--[\s\S]*?-->/g, '').trim()
-    if (!content) return emptySectionError(verb, heading, text)
-    sections.push(content)
+    if (content) sections.push(content)
+    else problems.push(emptySectionError(verb, heading, text))
   }
-  if (!/^\*\*Workflow version:\*\* 2$/m.test(text)) return ''
+  if (!/^\*\*Workflow version:\*\* 2$/m.test(text)) return problems
   const result = builderResult(sections.join('\n'))
-  for (const field of BUILDER_FIELDS) {
-    if (!new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result)) return `version-2 ${verb} result requires ${field}: with a specific value (Blocker: none when clear)`
-  }
-  if (!builderPassIn(result)) return `${verb} requires Stage: builder and Outcome: PASS`
+  const missing = BUILDER_FIELDS.filter(field => !new RegExp(`^${field}:\\s*\\S.+$`, 'mi').test(result))
+  if (missing.length) problems.push(`version-2 ${verb} result requires ${missing.map(field => `${field}:`).join(', ')} with a specific value (Blocker: none when clear)`)
+  else if (!builderPassIn(result)) problems.push(`${verb} requires Stage: builder and Outcome: PASS`)
   // Testing is the Builder's job now, not the Planner's (operator 2026-10-11): for each AC,
   // run the smallest fitting test and record it here, e.g. "AC1: npm test -> 4 passing".
   const untested = acceptanceCriteriaIds(text).filter(ac => !new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?${ac}[ \\t]*:[ \\t]*\\S`, 'm').test(result))
-  return untested.length ? `version-2 ${verb} result is missing a recorded test for ${untested.join(', ')} — add a line in ## Implementation or ## Evidence like "${untested[0]}: <command> -> <result>"` : ''
+  if (untested.length) problems.push(`version-2 ${verb} result is missing a recorded test for ${untested.join(', ')} — add a line in ## Implementation or ## Evidence like "${untested[0]}: <command> -> <result>"`)
+  return problems
 }
+export const builderResultError = (verb, text) => builderResultProblems(verb, text).join('; ')
 
 // hkb result: the Builder's "## Implementation" and "## Evidence" text, split on those two heading lines.
-export function parseResultText(input) {
+// `lenient` (hkb finish) returns empty bodies instead of throwing, so every missing part is named together.
+export function parseResultText(input, { lenient = false } = {}) {
   const bodies = {}
   let heading
   for (const line of input.split(/\r?\n/)) {
@@ -660,7 +663,7 @@ export function parseResultText(input) {
     if (heading) bodies[heading] += `${line}\n`
   }
   const { Implementation = '', Evidence = '' } = bodies
-  if (!Implementation.trim() || !Evidence.trim()) throw new Error('result needs both a ## Implementation and a ## Evidence section in the text')
+  if (!lenient && (!Implementation.trim() || !Evidence.trim())) throw new Error('result needs both a ## Implementation and a ## Evidence section in the text')
   return { Implementation: Implementation.trim(), Evidence: Evidence.trim() }
 }
 

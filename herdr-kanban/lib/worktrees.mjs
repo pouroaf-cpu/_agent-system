@@ -886,6 +886,18 @@ export function handoffCommitError(tasksDir, card) {
   try { validateCompleted(card, entry); return null } catch (err) { return err.message }
 }
 
+// hkb finish (HK71): commit what the Builder staged so the handoff is one command. The card keeps
+// exactly one commit, so an existing one is amended, never followed by a second.
+export function commitStagedForHandoff(tasksDir, card, message) {
+  const entry = worktreeForCard(tasksDir, card.id)
+  if (!entry?.worktreePath || !existsSync(entry.worktreePath)) return { committed: false }
+  const files = git(entry.worktreePath, ['diff', '--cached', '--name-only', '-z']).stdout.split('\0').filter(Boolean)
+  if (!files.length) return { committed: false }
+  const amended = commitsAfter(entry).length === 1
+  git(entry.worktreePath, amended ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', message])
+  return { committed: true, amended, files }
+}
+
 // Rebase the card's one commit onto the integration HEAD inside its own worktree
 // (never the integration checkout). The pre-rebase commit keeps a recovery ref.
 function rebaseCardOnto(entry, head) {
