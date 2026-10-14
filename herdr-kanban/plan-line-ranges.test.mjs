@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { validatePlan } from './lib/cards.mjs'
@@ -12,6 +12,7 @@ import { workerPrompt } from './lib/prompt.mjs'
 const root = mkdtempSync(join(tmpdir(), 'plan-ranges-'))
 mkdirSync(join(root, 'src'))
 writeFileSync(join(root, 'src', 'app.mjs'), Array.from({ length: 30 }, (_, i) => i === 9 ? 'function handleKeyDown(event) {}' : `// line ${i + 1}`).join('\n') + '\n')
+writeFileSync(join(root, 'src', 'multi.mjs'), Array.from({ length: 14 }, (_, i) => i === 2 || i === 11 ? 'function handleKeyDown(event) {}' : `// line ${i + 1}`).join('\n') + '\n')
 mkdirSync(join(root, 'proj', 'lib'), { recursive: true })
 writeFileSync(join(root, 'proj', 'lib', 'cards.mjs'), 'export {}\n')
 for (const args of [['init'], ['add', '.'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'x']]) spawnSync('git', ['-C', root, ...args], { windowsHide: true })
@@ -58,6 +59,25 @@ test('AC2: a range that lacks the name is refused and named', () => {
   assert.throws(() => validatePlan(plan({ changes: '- `src/app.mjs` lines 20-30, `handleKeyDown()`: guard.' }), options), /## Implementation plan src\/app\.mjs lines 20-30/)
   // A blocked card is planned against files its blocker still changes: format only.
   assert.doesNotThrow(() => validatePlan(plan({ header: '**Blocked by:** HK2\n', files: '- `src/app.mjs` lines 20-30, `handleKeyDown()` — h' }), options))
+})
+
+test('HK79 AC1: hkb pointer prints one Files line covering every occurrence', () => {
+  const tasks = join(root, 'TASKS')
+  mkdirSync(join(tasks, 'planning'), { recursive: true })
+  writeFileSync(join(tasks, 'planning', 'T-1.md'), '# T-1 — card\n**Workflow:** card-owned\n**Workflow version:** 2\n**Workspace:** .\n## Files\n- `src/multi.mjs` lines 1-14, `x`\n')
+  const run = (...args) => spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', tasks, 'pointer', 'T-1', ...args], { encoding: 'utf8', windowsHide: true })
+  const ok = run('src/multi.mjs', 'handleKeyDown()')
+  assert.equal(ok.status, 0, ok.stderr)
+  assert.equal(ok.stdout, '- `src/multi.mjs` lines 3-12, `handleKeyDown()`\n')
+  assert.equal(run('src/multi.mjs', 'noSuchName').status, 1)
+  assert.equal(run(join(root, 'src', 'multi.mjs'), 'handleKeyDown()').status, 1)
+})
+
+test('HK79 AC2: a range that misses the name lists the lines where it occurs', () => {
+  const at = (path, range) => plan({ files: `- \`${path}\` lines ${range}, \`handleKeyDown()\` — h`, changes: `- \`${path}\` lines ${range}, \`handleKeyDown()\`: guard.` })
+  assert.throws(() => validatePlan(at('src/multi.mjs', '5-8'), options), /occurs on lines 3, 12/)
+  assert.throws(() => validatePlan(at('src/app.mjs', '20-30'), options), /occurs on lines 10\b/)
+  assert.doesNotThrow(() => validatePlan(at('src/multi.mjs', '3-12'), options))
 })
 
 test('AC3: a plan whose every entry has a correct file, range and name passes', () => {

@@ -16,6 +16,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
 //   node hkb.mjs finish T-02 --file result.md [-m "<message>"]   (Builder, after git add: commit, write the result, hand off; names every missing part)
 //   node hkb.mjs files T-02 path [path ...]   (Builder, before the first edit: exit 1 names the needed files ## Files misses)
+//   node hkb.mjs pointer T-02 path name   (Planner: prints the ## Files line, path lines A-B, name, covering every occurrence)
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
 //
@@ -28,7 +29,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles, pointerLine } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -139,6 +140,18 @@ if (verb === 'files') {
   } catch (err) { fail(err.message) }
 }
 
+// pointer: read-only (HK79); prints the ## Files line for a name, covering every occurrence. Any column, moves nothing.
+if (verb === 'pointer') {
+  const path = (rest[0] || '').replaceAll('\\', '/').replace(/^\.\//, ''), name = rest.slice(1).join(' ').trim()
+  if (!cardId || !path || !name) fail('usage: hkb pointer T-02 <path> <name> (path workspace-relative, as ## Files writes it)')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  if (isAbsolute(path) || /^[a-z]:/i.test(path) || path.split('/').includes('..')) fail(`pointer paths are workspace-relative, as ## Files writes them; "${rest[0]}" is not`)
+  try {
+    console.log(pointerLine(planWorkspaceFor(findCard(tasksDir, cardId)).planWorkspace, path, name))
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
 // tests: hand a long test command to the board and stop; the board runs it, saves the result in
 // the card's evidence folder and starts a fresh short agent on it (HK64).
 if (verb === 'tests') {
@@ -192,16 +205,21 @@ const HEADING = { issue: 'Kicked back', owner: 'Needs you', park: 'Parked', spli
 // Repeated failed reviews require deeper Planner diagnosis, never a human dump.
 const MAX_REVIEW_ROUNDS = 3
 
+// HK79: where ## Files paths are resolved for a card (planCheck and pointer share it).
+function planWorkspaceFor(card) {
+  const projectPath = dirname(tasksDir)
+  const gitSettings = projectSettings()
+  const integration = resolveGitSettings({ projectPath, gitSettings })?.integrationPath
+  const repoRoot = integration || projectPath
+  return { gitSettings, integration, repoRoot, planWorkspace: resolve(repoRoot, card.workspace || '.') }
+}
+
 // The plan check at a Planner handoff: the card's workspace in the project's integration
 // checkout (where ## Files paths must already exist) and the project's sharedFiles.
 function planCheck(card) {
   // I863: an already-covered card must close before the unchanged-base gate.
   if (!cardFiles(card.path).length) fail(`no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`)
-  const projectPath = dirname(tasksDir)
-  const gitSettings = projectSettings()
-  const integration = resolveGitSettings({ projectPath, gitSettings })?.integrationPath
-  const repoRoot = integration || projectPath
-  const planWorkspace = resolve(repoRoot, card.workspace || '.')
+  const { gitSettings, integration, repoRoot, planWorkspace } = planWorkspaceFor(card)
   // IA98 (2026-10-09): the Planner drafted its check in the integration checkout; the board then held the card there for hours.
   const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
   if (dirty) fail(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)

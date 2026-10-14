@@ -198,16 +198,33 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   if (approvalMissing) throw Object.assign(new Error('Plan incomplete: investigation requires explicit approval on the card'), { operatorApproval: true })
 }
 
+const fileLines = (planRoot, path) => readFileSync(resolve(planRoot, path), 'utf8').replace(/\r?\n$/, '').split(/\r?\n/)
+
+// HK79: 1-based numbers of the lines holding the name (a trailing `(...)` is not part of the match).
+export function nameLines(lines, name) {
+  const needle = name.replace(/\(.*\)\s*$/, '') || name
+  return lines.flatMap((l, i) => l.includes(needle) ? [i + 1] : [])
+}
+
+// HK79: the ## Files line for a name: the path, the range from its first to its last occurrence, the name.
+export function pointerLine(planRoot, path, name) {
+  if (!existsSync(resolve(planRoot, path))) throw new Error(`${path} does not exist in ${planRoot}`)
+  const hits = nameLines(fileLines(planRoot, path), name)
+  if (!hits.length) throw new Error(`\`${name}\` does not occur in ${path}`)
+  return `- \`${path}\` lines ${hits[0]}-${hits.at(-1)}, \`${name}\``
+}
+
 // HK27: each pointer's name must occur inside its line range (checkPlanPaths already proved the file exists).
 function checkPointers(planRoot, pointers, fail) {
   const cache = new Map()
   for (const { where, path, from, to, name } of pointers) {
     // A missing file is already reported by checkPlanPaths (or is a new file with nothing to read).
     if (!cache.has(path) && !existsSync(resolve(planRoot, path))) continue
-    if (!cache.has(path)) cache.set(path, readFileSync(resolve(planRoot, path), 'utf8').replace(/\r?\n$/, '').split(/\r?\n/))
-    const lines = cache.get(path), needle = name.replace(/\(.*\)\s*$/, '') || name
-    if (from < 1 || to < from || to > lines.length || !lines.slice(from - 1, to).join('\n').includes(needle)) {
-      fail(`Plan check failed: ## ${where} ${path} lines ${from}-${to}: \`${name}\` does not occur in those lines (file has ${lines.length} lines). Open ${path} and correct the range or the name.`)
+    if (!cache.has(path)) cache.set(path, fileLines(planRoot, path))
+    const lines = cache.get(path), hits = nameLines(lines, name)
+    if (from < 1 || to < from || to > lines.length || !hits.some(n => n >= from && n <= to)) {
+      const where2 = !hits.length ? 'occurs nowhere in the file' : `occurs on lines ${hits.slice(0, 20).join(', ')}${hits.length > 20 ? ` and ${hits.length - 20} more` : ''}`
+      fail(`Plan check failed: ## ${where} ${path} lines ${from}-${to}: \`${name}\` does not occur in those lines (file has ${lines.length} lines); \`${name}\` ${where2}. Open ${path} and correct the range or the name (hkb pointer <card> ${path} <name> prints the line).`)
     }
   }
 }
