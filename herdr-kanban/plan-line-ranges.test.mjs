@@ -12,6 +12,8 @@ import { workerPrompt } from './lib/prompt.mjs'
 const root = mkdtempSync(join(tmpdir(), 'plan-ranges-'))
 mkdirSync(join(root, 'src'))
 writeFileSync(join(root, 'src', 'app.mjs'), Array.from({ length: 30 }, (_, i) => i === 9 ? 'function handleKeyDown(event) {}' : `// line ${i + 1}`).join('\n') + '\n')
+mkdirSync(join(root, 'proj', 'lib'), { recursive: true })
+writeFileSync(join(root, 'proj', 'lib', 'cards.mjs'), 'export {}\n')
 for (const args of [['init'], ['add', '.'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'x']]) spawnSync('git', ['-C', root, ...args], { windowsHide: true })
 
 const plan = ({ header = '', files = '- `src/app.mjs` lines 5-15, `handleKeyDown()` — handler\n- `test/app.test.mjs` (new) — focused check', changes = '- `src/app.mjs` lines 5-15, `handleKeyDown()`: guard Enter.' } = {}) => `# HK1 — ranges
@@ -72,6 +74,20 @@ test('AC3b: several Files failures are refused once and every one is named', () 
     return true
   })
   assert.doesNotThrow(() => validatePlan(plan(), options))
+})
+
+test('HK74 AC1: a missing Files path names the tracked file that ends with it', () => {
+  const files = '- `lib/cards.mjs` lines 1-1, `foo()` — wrong folder'
+  assert.throws(() => validatePlan(plan({ files }), options), /lib\/cards\.mjs does not exist in .*\(tracked file ending in it: proj\/lib\/cards\.mjs\)/)
+})
+
+test('HK74 AC2: a missing Files path with no tracked file ending in it keeps the plain refusal', () => {
+  const files = '- `src/missing.mjs` lines 1-5, `foo()` — gone'
+  assert.throws(() => validatePlan(plan({ files }), options), (err) => {
+    assert.match(err.message, /src\/missing\.mjs does not exist in/)
+    assert.doesNotMatch(err.message, /tracked file ending in it/)
+    return true
+  })
 })
 
 test('AC4: the Builder prompt and BUILDER.md say to open each range and search only when a pointer is wrong', () => {

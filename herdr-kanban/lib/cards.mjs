@@ -225,9 +225,19 @@ function checkPlanPaths(planRoot, filesSection, prereqSection, planSection, fail
     if (git.status === null || /not a git repository/i.test(git.stderr)) return existsSync(resolve(planRoot, path)) // non-Git workspace
     return false
   }
-  const problem = (path) => tracked(path) ? null
-    : existsSync(resolve(planRoot, path)) ? `exists in ${root} but is not tracked by git at HEAD (untracked or gitignored), so the card worktree will not have it`
-      : `does not exist in ${root}`
+  // Tracked files whose path ends in /<path> (whole components), so a Planner who left off the project folder sees it.
+  const endingIn = (path) => {
+    const git = spawnSync('git', ['-C', planRoot, 'ls-files', '-z'], { windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    if (git.status !== 0) return []
+    const tail = `/${path.replaceAll('\\', '/').replace(/^\.\//, '')}`
+    return git.stdout.split('\0').filter((file) => file.endsWith(tail)).slice(0, 3)
+  }
+  const problem = (path) => {
+    if (tracked(path)) return null
+    if (existsSync(resolve(planRoot, path))) return `exists in ${root} but is not tracked by git at HEAD (untracked or gitignored), so the card worktree will not have it`
+    const names = endingIn(path)
+    return `does not exist in ${root}${names.length ? ` (tracked file ending in it: ${names.join(', ')})` : ''}`
+  }
   const newFiles = new Set()
   for (const [, path, rest] of filesSection.matchAll(/^[-*]\s+`([^`]+)`([^\n]*)/gm)) {
     if (/\(new\b[^)]*\)/i.test(rest)) { newFiles.add(path); continue }
