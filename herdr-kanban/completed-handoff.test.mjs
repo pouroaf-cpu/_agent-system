@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { reconcileCompletedHandoffs } from './lib/completed-handoff.mjs'
 import { archiveNoReviewCards, promoteAutoReview, routeReviewVerdicts } from './lib/autospawn.mjs'
 import { appendReviewPass, canArchive, findCard, moveCard } from './lib/cards.mjs'
-import { evidenceFingerprint } from './lib/workflow-state.mjs'
+import { evidenceFingerprint, readWorkflow } from './lib/workflow-state.mjs'
 
 const cardText = (id, flag = 'no') => `# ${id} — task\n**Workflow:** card-owned\n${flag === null ? '' : `**Auto-review:** ${flag}\n`}**Category:** code\n**Workspace:** .\n**Workflow version:** 2\n\n## Implementation\nStage: builder\nOutcome: PASS\nFiles: example.js\nBlocker: none\n\n## Evidence\nStage: builder\nOutcome: PASS\nCheck: check\nResult: passed\nEvidence: proof\nBlocker: none\n`
 
@@ -375,6 +375,33 @@ test('a timed-out integration or recorded check backs off without counting as a 
   const [returned] = await run('T-1', t0 + 2 * min)
   assert.deepEqual([returned.status, returned.to], ['returned', 'queue'])
   assert.equal(registry()['T-1'].conflictFailures, 1)
+})
+
+test('a timed-out integration check holds only its own card; the same poll still checks the next card (HK63)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'check-timeout-next-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  const cwds = { 'T-1': join(root, 'w1'), 'T-2': join(root, 'w2') }
+  for (const id of ['T-1', 'T-2']) {
+    mkdirSync(cwds[id])
+    writeFileSync(join(tasksDir, 'completed', `${id}.md`), `# ${id} — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n`)
+  }
+  const entry = id => ({ cardId: id, state: 'building', worktreePath: cwds[id], workspacePath: cwds[id], baseCommit: 'b0' })
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry('T-1'), 'T-2': entry('T-2') }))
+  const called = []
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit: 'c1' }),
+    runIntegrationCheck: async (_command, cwd) => { called.push(cwd); return cwd === cwds['T-1'] ? { ok: false, timedOut: true, output: 'npm test\ntimed out after 300s' } : { ok: true, output: '' } },
+    reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const results = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', integrationCheck: 'npm test', io, now: Date.now() })
+  assert.deepEqual(called, [cwds['T-1'], cwds['T-2']])
+  const held = results.find(r => r.id === 'T-1'), next = results.find(r => r.id === 'T-2')
+  assert.equal(held.status, 'held'); assert.match(held.reason, /integration check npm test timed out.*; retrying at \d{4}-/)
+  assert.equal(next.status, 'integrated')
+  const registry = JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))
+  assert.equal(registry['T-1'].conflictFailures, undefined)
+  const workflow = readWorkflow(tasksDir)
+  assert.equal(workflow['T-1'].integrationRetry.tries, 1)
+  assert.equal(workflow['T-2']?.integrationRetry ?? null, null)
 })
 
 test('a failed integration check on a card whose plan fails the plan check goes to Owner with the reason, not silently stuck in Completed (HK25)', async t => {
