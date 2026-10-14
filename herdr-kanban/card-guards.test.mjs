@@ -145,7 +145,7 @@ test('hkb found sends an out-of-scope finding to the Kanban Manager inbox and le
     assert.notEqual(run('found', 'T-1').status, 0)
     const ok = run('found', 'T-1', 'e2e/i201.spec.ts fails on base too: timeout at Bacteriostatic water')
     assert.equal(ok.status, 0, ok.stderr)
-    assert.match(readFileSync(inbox, 'utf8'), /FOUND Proj T-1 \(working\): e2e\/i201\.spec\.ts fails on base too/)
+    assert.match(readFileSync(inbox, 'utf8'), /^- FD \d{5,} .*FOUND Proj T-1 \(working\): e2e\/i201\.spec\.ts fails on base too/m)
     assert.equal(findCard(tasks, 'T-1').column, 'working')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -37,7 +37,7 @@ test('hkb wait on a missing file keeps the card in Planning, uncounted, and tell
     const owner = readCardPlanners(dir)[card.id]
     assert.equal(owner.submitted, false)
     assert.equal(owner.correctionRequestedAt, undefined)
-    assert.match(readFileSync(join(dir, 'inbox.md'), 'utf8'), new RegExp(`WAIT \\S+ ${card.id} \\(planning\\): needs public/x/y.html — the page is created by another card`))
+    assert.match(readFileSync(join(dir, 'inbox.md'), 'utf8'), new RegExp(`^- WT \\d{5,} .*WAIT \\S+ ${card.id} \\(planning\\): needs public/x/y.html — the page is created by another card`, 'm'))
     assert.match(readFileSync(join(dir, 'activity.log'), 'utf8'), new RegExp(`card=${card.id} event=planner-wait`))
 
     // The board starts no Planner while the file is missing, and one once it exists.
@@ -137,7 +137,7 @@ test('hkb issue [board] from Planning holds the card and flags the Kanban Manage
     assert.equal(saved.waitFor.decision, true)
     assert.equal(saved.waitFor.board, true)
     // The board conflict goes to the Kanban Manager's own inbox, never the project's.
-    assert.match(readFileSync(kmInbox, 'utf8'), new RegExp(`BOARD Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`))
+    assert.match(readFileSync(kmInbox, 'utf8'), new RegExp(`^- BQ \\d{5,} .*BOARD Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`, 'm'))
     assert.equal(existsSync(projectInbox) && readFileSync(projectInbox, 'utf8').includes('BOARD'), false)
     // The Needs-you ask still reaches the project manager chat, as any decision wait does.
     assert.match(readFileSync(projectInbox, 'utf8'), new RegExp(`ASK Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`))

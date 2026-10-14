@@ -95,7 +95,7 @@ try {
   const line = `${formatNZTime()} e2e ${head}: ${stats.expected} passed, ${stats.unexpected} failed, ${stats.flaky} flaky, ${Math.round(stats.duration / 1000)}s. Report: ${report}`
   console.log(line)
   // 2026-10-05: first-night failures stay in the report/tally; only repeats reach chat.
-  if (repeated.length) postInbox(INBOX, `- FOUND Injectbuddy nightly ${line} Repeat failures: ${repeated.slice(0, 20).map(title => title.replace(/[\r\n]+/g, ' ')).join('; ')}\n`)
+  if (repeated.length) postInbox(INBOX, `- FOUND Injectbuddy nightly ${line} Repeat failures: ${repeated.slice(0, 20).map(title => title.replace(/[\r\n]+/g, ' ')).join('; ')}\n`, undefined, 'FD')
   if (serverError) console.error(`${serverError}; totals are not reliable`)
   if (run.status !== 0 || serverError) {
     console.error(parsed.errors?.map(e => e.message).join('\n') || `${stats.unexpected} Playwright tests failed; report: ${report}`)

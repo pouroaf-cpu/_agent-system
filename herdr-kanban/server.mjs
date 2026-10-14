@@ -147,7 +147,7 @@ function diskLow(now = Date.now()) {
     disk.low = true
     const message = `Kanban: drive ${drive} low on space (${gb.toFixed(1)} GB free); new agents paused`
     for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 4 GB is free`, 'error')
-    notifyManagerException({ boardRoot: HERE, key: 'low-disk', title: `Drive ${drive} low on space`, detail: message }).catch(err => console.error(`low-disk inbox alert failed: ${err.message}`))
+    notifyManagerException({ boardRoot: HERE, key: 'low-disk', title: `Drive ${drive} low on space`, detail: message, code: 'LD' }).catch(err => console.error(`low-disk inbox alert failed: ${err.message}`))
   } else if (disk.low && gb > 4) {
     disk.low = false
     for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
@@ -166,7 +166,7 @@ function checkMemory() {
       memory.low = true
       const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
       for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
-      notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
+      notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message, code: 'LM' }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
     } else if (memory.low && gb > 6) {
       memory.low = false
       for (const project of config.projects) activity(project, '-', 'resume', `PC has ${gb.toFixed(1)} GB of commit free; new agents resumed`)
@@ -297,6 +297,7 @@ async function pollAgentsNow(project) {
         key: 'herdr',
         title: 'HERDR unavailable',
         detail: `${project}: ${err.message}`,
+        code: 'HD',
       })
     }
     const state = { agents: [], herdrUp: false }
@@ -800,23 +801,23 @@ async function pollProject(project) {
       if (!recovery.escalatedAt) continue
       await notifyManagerException({ boardRoot: HERE, key: `recovery:${project}:${card.id}:${recovery.escalatedAt}`,
         title: `${project} ${card.id}: automatic recovery stopped after ${recovery.returns} failed returns`,
-        detail: `Five distinct failed returns; attempts and failure evidence preserved in ${card.path}. Choose a changed recovery approach, narrower scope, or cancellation. No unchanged retry is authorized.` })
+        detail: `Five distinct failed returns; attempts and failure evidence preserved in ${card.path}. Choose a changed recovery approach, narrower scope, or cancellation. No unchanged retry is authorized.`, code: 'RC' })
     }
     const ageing = ownerAgeing(tasksDir)
-    if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail })
+    if (ageing) await notifyManagerException({ boardRoot: HERE, key: `owner:${project}`, title: `${project}: ${ageing.title}`, detail: ageing.detail, code: 'OA' })
     // Warning only (finding 10): never held, moved or kicked back; one inbox line per card, ever.
     const board = readBoard(tasksDir)
     for (const warn of tokenWarnings(tasksDir, new Set(COLUMNS.filter(c => c.key !== 'archive').flatMap(c => (board[c.key] || []).map(x => x.id))))) {
       await notifyManagerException({ boardRoot: HERE, key: `token-warn:${project}:${warn.id}`, cooldownMs: Infinity,
         title: `${project} ${warn.id}: card token usage is high`,
-        detail: `Total usage across this card's recorded runs has reached ${warn.total.toLocaleString()} tokens (warn threshold ${warn.threshold.toLocaleString()}). Warning only; the card is not held, moved or kicked back.` })
+        detail: `Total usage across this card's recorded runs has reached ${warn.total.toLocaleString()} tokens (warn threshold ${warn.threshold.toLocaleString()}). Warning only; the card is not held, moved or kicked back.`, code: 'TW' })
     }
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
     for (const [kind, block] of Object.entries(activeQuota(HERE))) {
       await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} ${block.why || 'usage limit'}`,
         detail: block.why === SIGN_IN
           ? `The ${kind} CLI on the board PC is signed out, so no ${kind} agent can start on any project. The operator must sign it in again (run it, then /login). The board tries one start again at ${formatNZTime(block.until)}; waiting cards keep their lanes.`
-          : `No ${kind} agent starts on any project until ${formatNZTime(block.until)}. Waiting cards keep their lanes and resume by themselves.` })
+          : `No ${kind} agent starts on any project until ${formatNZTime(block.until)}. Waiting cards keep their lanes and resume by themselves.`, code: 'QU' })
     }
     const breaker = breakerState(project)
     if (breaker.breakerTripped) {
@@ -825,6 +826,7 @@ async function pollProject(project) {
       key: 'circuit-breaker',
       title: 'Kanban circuit breaker tripped',
       detail: breaker.reason || 'auto-spawn halted',
+      code: 'CB',
     })
     }
     for (const [id, reason] of Object.entries(holdsFor(project))) {
@@ -839,6 +841,7 @@ async function pollProject(project) {
       key: `hold:${project}:${id}`,
       title: `${project} ${id} held`,
       detail: reason,
+      code: 'HO',
       })
     }
   } catch (error) {

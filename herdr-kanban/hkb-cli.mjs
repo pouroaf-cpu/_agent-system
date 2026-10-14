@@ -187,10 +187,10 @@ function fail(msg) {
 }
 
 // One line in the project's registered manager inbox, else the Kanban Manager's. Returns who got it.
-function tellManager(line, toBoard = false) {
+function tellManager(line, toBoard = false, code) {
   const manager = !toBoard && projectSettings()?.manager
   const inbox = manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(dirname(fileURLToPath(import.meta.url)), '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
-  postInbox(inbox, `- ${formatNZTime()} ${formatNZText(line)}\n`)
+  postInbox(inbox, `- ${formatNZTime()} ${formatNZText(line)}\n`, undefined, code)
   return manager ? `${manager.chat} (project manager)` : 'the Kanban Manager'
 }
 
@@ -212,7 +212,7 @@ if (verb === 'found') {
     console.log(`hkb: ${earlier} already reported this finding; not sent again. Carry on with your card`)
     process.exit(0)
   }
-  const to = tellManager(`FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}`, toBoard)
+  const to = tellManager(`FOUND ${project} ${card.id} (${card.column}): ${finding.replace(/\s+/g, ' ')}`, toBoard, 'FD')
   appendHistory(tasksDir, card.id, { event: 'found', note: finding, to })
   activityLog({ tasksDir, project, cardId: card.id, event: 'found', message: `${finding} (to ${to})` })
   console.log(`hkb: ${card.id} finding sent to ${to}; carry on with your card`)
@@ -243,7 +243,7 @@ if (verb === 'wait') {
     requestPlannerCorrection(tasksDir, current.id, { correction: false })
     appendHistory(tasksDir, current.id, { event: 'planner-wait', stage: 'planning', waitFor })
     appendHistory(tasksDir, current.id, { event: 'handoff', stage: 'planning', outcome: 'wait', note: `${items.join(', ')}: ${why}`, text: readFileSync(current.path, 'utf8') })
-    const to = tellManager(`WAIT ${project} ${current.id} (planning): needs ${items.join(', ')} — ${why}`)
+    const to = tellManager(`WAIT ${project} ${current.id} (planning): needs ${items.join(', ')} — ${why}`, false, 'WT')
     activityLog({ tasksDir, project, cardId: current.id, event: 'planner-wait', message: `needs ${items.join(', ')}: ${why} (to ${to})` })
     stopCardRun(project, current.id, 'Stopped at wait')
     console.log(`${current.id} waits in Planning for ${items.join(', ')}; ${to} was told. Stop now.`)
@@ -496,7 +496,7 @@ try {
     target = 'planning'
     updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, ...(decisionCategory === 'board' ? { board: true } : {}), why: note, since: new Date().toISOString() } })
     appendHistory(tasksDir, current.id, { event: 'planner-decision-wait', stage: 'planning', note })
-    if (decisionCategory === 'board') tellManager(`BOARD ${basename(dirname(tasksDir))} ${current.id} (planning): ${note.replace(/\s+/g, ' ')}`, true)
+    if (decisionCategory === 'board') tellManager(`BOARD ${basename(dirname(tasksDir))} ${current.id} (planning): ${note.replace(/\s+/g, ' ')}`, true, 'BQ')
   }
   prerequisiteWait = verb === 'issue' && !approvalWait && !decisionWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
   if (prerequisiteWait) {
