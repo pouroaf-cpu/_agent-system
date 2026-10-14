@@ -62,6 +62,18 @@ test('AC3: a plan whose every entry has a correct file, range and name passes', 
   assert.doesNotThrow(() => validatePlan(plan(), options))
 })
 
+test('AC3b: several Files failures are refused once and every one is named', () => {
+  const files = '- `src/app.mjs` — no range\n- `src/missing.mjs` lines 1-5, `foo()` — gone\n- `src/app.mjs` lines 20-30, `handleKeyDown()` — wrong lines'
+  assert.throws(() => validatePlan(plan({ files }), options), (err) => {
+    assert.match(err.message, /found 3 problems/)
+    assert.match(err.message, /has no line range/)
+    assert.match(err.message, /src\/missing\.mjs does not exist/)
+    assert.match(err.message, /does not occur in those lines/)
+    return true
+  })
+  assert.doesNotThrow(() => validatePlan(plan(), options))
+})
+
 test('AC4: the Builder prompt and BUILDER.md say to open each range and search only when a pointer is wrong', () => {
   const card = { id: 'IA999', category: 'ui', column: 'approved', path: 'C:/fake/card.md', trivial: false, title: 'Sample ui card' }
   const prompt = workerPrompt({ cards: [card], card, projectPath: 'C:/fake/project', boardRoot: 'C:/Users/PFrew/Projects/herdr-kanban', tasksDir: null, engine: 'claude' })
