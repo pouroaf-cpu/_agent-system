@@ -526,7 +526,7 @@ test('a failed integration check on a card whose plan fails the plan check goes 
   assert.equal(findCard(tasksDir, 'T-1').column, 'owner')
   const saved = JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1']
   assert.deepEqual([saved.state, saved.conflictFailures], ['conflict', 1])
-  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 cannot go back to a Builder: its plan fails the plan check \(Plan incomplete/)
+  assert.match(readFileSync(findCard(tasksDir, 'T-1').path, 'utf8'), /Needs you: T-1 cannot go back to a Builder: its plan fails the plan check \(Plan check found 2 problems/)
 })
 
 test('a Completed card in conflict state is never silent: one repeating held result per poll; Review cards return none (HK25)', async t => {

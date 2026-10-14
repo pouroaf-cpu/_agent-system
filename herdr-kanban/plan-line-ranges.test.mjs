@@ -76,6 +76,25 @@ test('AC3b: several Files failures are refused once and every one is named', () 
   assert.doesNotThrow(() => validatePlan(plan(), options))
 })
 
+test('HK75 AC1: header failures and Files failures are refused once, every one named', () => {
+  const text = plan({ files: '- `src/app.mjs` — no range' }).replace('**Difficulty:** medium', '**Difficulty:** impossible').replace('**Workspace:** .', '**Workspace:** C:/x')
+  assert.throws(() => validatePlan(text, options), (err) => {
+    assert.match(err.message, /found 3 problems/)
+    assert.match(err.message, /Difficulty must be tiny, easy, medium or hard/)
+    assert.match(err.message, /Workspace must be a project-relative path/)
+    assert.match(err.message, /has no line range/)
+    return true
+  })
+})
+
+test('HK75 AC2: a Changes line naming a Files entry without a range names that Files entry', () => {
+  assert.throws(() => validatePlan(plan({ files: '- `src/app.mjs` — handler' }), options), (err) => {
+    assert.match(err.message, /## Files entry src\/app\.mjs has no line range/)
+    assert.doesNotMatch(err.message, /names no ## Files path/)
+    return true
+  })
+})
+
 test('HK74 AC1: a missing Files path names the tracked file that ends with it', () => {
   const files = '- `lib/cards.mjs` lines 1-1, `foo()` — wrong folder'
   assert.throws(() => validatePlan(plan({ files }), options), /lib\/cards\.mjs does not exist in .*\(tracked file ending in it: proj\/lib\/cards\.mjs\)/)

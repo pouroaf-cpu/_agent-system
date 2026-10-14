@@ -54,29 +54,29 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   const workspace = text.match(/^\*\*Workspace:\*\*\s*([^\n]+)$/im)?.[1]?.trim() || '.'
   const readinessLine = text.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)?.[0]
   const readiness = text.match(/^\*\*Plan readiness:\*\*\s*(build-ready|investigation)\s*$/im)?.[1]?.toLowerCase()
-  if (requireReadiness && !readinessLine) throw new Error('Plan incomplete: authenticated Planner handoff requires **Plan readiness:** build-ready or investigation')
-  if (requireReadiness && !difficultyFromText(text)) throw new Error('Plan incomplete: authenticated Planner handoff requires **Difficulty:** tiny, easy, medium or hard')
+  // HK69: every rule reports into `problems`, so one refusal lists them all (HK75: header rules too).
+  const problems = []
+  const fail = (message) => { if (!problems.includes(message)) problems.push(message) }
+  if (requireReadiness && !readinessLine) fail('Plan incomplete: authenticated Planner handoff requires **Plan readiness:** build-ready or investigation')
   const difficultyValue = text.replace(/<!--[\s\S]*?-->/g, '').match(/^\*\*Difficulty:\*\*([^\r\n]*)/im)?.[1]?.trim()
-  if (difficultyValue && !/^(tiny|easy|medium|hard)$/i.test(difficultyValue)) throw new Error('Plan incomplete: Difficulty must be tiny, easy, medium or hard')
-  if (readinessLine && !readiness) throw new Error('Plan incomplete: Plan readiness must be build-ready or investigation')
+  if (difficultyValue && !/^(tiny|easy|medium|hard)$/i.test(difficultyValue)) fail('Plan incomplete: Difficulty must be tiny, easy, medium or hard')
+  else if (requireReadiness && !difficultyFromText(text)) fail('Plan incomplete: authenticated Planner handoff requires **Difficulty:** tiny, easy, medium or hard')
+  if (readinessLine && !readiness) fail('Plan incomplete: Plan readiness must be build-ready or investigation')
   if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace.replace(/\\/g, '/'))) {
-    throw new Error('Plan incomplete: Workspace must be a project-relative path')
+    fail('Plan incomplete: Workspace must be a project-relative path')
   }
   for (const name of ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']) {
-    if (!section(name)) throw new Error(`Plan incomplete: fill ## ${name} before handoff; keep the template headings`)
+    if (!section(name)) fail(`Plan incomplete: fill ## ${name} before handoff; keep the template headings`)
   }
   // I556: a check tied to Planning stops working as soon as the card moves.
   const commands = ['Implementation plan', 'Prerequisites', 'Acceptance criteria'].map(section).join('\n').replaceAll('\\', '/')
   if (new RegExp(String.raw`\bTASKS/(?:${ALL.map(c => c.dir).join('|')})/${CARD_ID}(?:-[^/\s]+)?\.md\b`, 'i').test(commands)) {
-    throw new Error('Plan check failed: card files move between lanes. Use a lane-independent check such as hkb show <id> or the card id, instead of TASKS/<lane>/<ID>-*.md in check commands.')
+    fail('Plan check failed: card files move between lanes. Use a lane-independent check such as hkb show <id> or the card id, instead of TASKS/<lane>/<ID>-*.md in check commands.')
   }
-  // HK69: every rule below reports into `problems`, so one refusal lists them all.
-  const problems = []
-  const fail = (message) => { if (!problems.includes(message)) problems.push(message) }
   const refused = new Set() // Files paths already refused as malformed; checkPlanPaths skips them
   if (/^\*\*Workflow version:\*\* 2$/m.test(text)) {
     const criteria = acceptanceCriteriaIds(text)
-    if (!criteria.length || new Set(criteria).size !== criteria.length) fail('Plan incomplete: give each acceptance criterion its own unique AC ID (AC1, AC2, ...)')
+    if (section('Acceptance criteria') && (!criteria.length || new Set(criteria).size !== criteria.length)) fail('Plan incomplete: give each acceptance criterion its own unique AC ID (AC1, AC2, ...)')
     if (!section('Prerequisites')) fail('Plan incomplete: state workspace prerequisites (or explicitly none)')
   }
   const fileLines = [...section('Files').matchAll(/^-\s+`([^`]+)`([^\n]*)/gm)]
@@ -92,7 +92,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   // I530: name the path that failed; the old message blamed globs for a .py bullet.
   // TF167: named dotfiles count as files; a card whose whole job was one .gitignore line could not be planned.
   const bad = fileLines.filter(([, p]) => /[\\:?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|cjs|css|json|md|html?|txt|xml|svg|ya?ml|sql|py|sh|ps1)$|(^|\/)\.(gitignore|gitattributes|vercelignore|easignore|dockerignore|prettierignore|eslintignore|npmrc|nvmrc|editorconfig|env\.example)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')))
-  if (!files.length) fail('Plan incomplete: ## Files needs exact relative file paths as - `path/to/file.css` bullets')
+  if (!files.length && section('Files')) fail('Plan incomplete: ## Files needs exact relative file paths as - `path/to/file.css` bullets')
   for (const [, p] of bad) {
     refused.add(p)
     fail(`Plan incomplete: ## Files needs exact relative file paths as - \`path/to/file.css\` bullets; ${p} is not one (no placeholders, folders, absolute or ../ paths, or unknown file types)`)
@@ -138,10 +138,11 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     if (requireReadiness) {
       const form = 'Write it as `path` lines START-END, `functionOrSelector` (for example `public/ib-rail.js` lines 2650-2700, `revealSettingsSheet()`)'
       const ranged = []
+      const unranged = [] // HK75: already reported as "has no line range"; a Changes line naming one adds nothing
       for (const [line, path, rest] of fileLines) {
         if (isGlob(path) || /\(new\b[^)]*\)/i.test(rest) || REFERENCE_ONLY.test(line)) continue
         const found = planPointers(rest)
-        if (!found.length) { fail(`Plan incomplete: ## Files entry ${path} has no line range and name. ${form}, or mark a file this card creates (new).`); continue }
+        if (!found.length) { fail(`Plan incomplete: ## Files entry ${path} has no line range and name. ${form}, or mark a file this card creates (new).`); unranged.push(path.replace(/^\.\//, '')); continue }
         ranged.push(path.replace(/^\.\//, ''))
         pointers.push(...found.map(p => ({ ...p, where: 'Files', path })))
       }
@@ -164,7 +165,7 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
           const path = [...paths].reverse().find(t => t.index < p.index) || paths[0]
           if (path) pointers.push({ ...p, where: 'Implementation plan', path: path.token })
           // A pointer into a file outside ## Files (an absolute path) cannot be checked here.
-          else if (!ticks.some(t => /^[A-Za-z]:\/|^\//.test(t.token))) fail(`Plan incomplete: ## Implementation plan Changes entry "${entry}" has lines ${p.from}-${p.to} but names no ## Files path. ${form}.`)
+          else if (!ticks.some(t => /^[A-Za-z]:\/|^\//.test(t.token) || unranged.includes(t.token))) fail(`Plan incomplete: ## Implementation plan Changes entry "${entry}" has lines ${p.from}-${p.to} but names no ## Files path. ${form}.`)
         }
       }
     }
