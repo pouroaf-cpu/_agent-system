@@ -18,6 +18,13 @@ test('plannerPrompt stays at or below 4,300 chars with at most two hkb.mjs menti
   }
 })
 
+test('plannerPrompt tells a Planner of a card in planning to run the pointer command for Files and Changes lines', () => {
+  const planning = { ...card, id: 'HK82', category: 'code', column: 'planning' }
+  const p = plannerPrompt({ ...common, cards: [planning], card: planning, tasksDir: 'C:/fake/TASKS' })
+  assert.match(p, /Files and Changes[^.]*pointer <ID> <path> <name>/)
+  assert.ok(p.includes('HK82'), 'plannerPrompt does not name the card ID')
+})
+
 test('workerPrompt stays at or below 6,200 chars', () => {
   const w = workerPrompt(common)
   assert.ok(w.length <= 6200, `workerPrompt is ${w.length} chars, want <= 6200`)
