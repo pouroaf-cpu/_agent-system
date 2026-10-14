@@ -48,6 +48,7 @@ const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, '
 const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
+const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
@@ -155,23 +156,45 @@ function diskLow(now = Date.now()) {
   return disk.low
 }
 
-// Low-memory pause, shared by every project: free commit (RAM + pagefile) is read every minute.
-// Under 4 GB free no new agents start; above 6 GB they resume. Windows kills whichever process
-// next fails to allocate, and that was the board itself three times in two days (2026-10-09 22:33,
-// 2026-10-10 19:33 and 22:48). Running agents are left alone.
-const memory = { low: false }
-function checkMemory() {
-  freeCommitGb().then(gb => {
-    if (!memory.low && gb < 4) {
-      memory.low = true
+// Low-memory pause, shared by every project: free commit (RAM + pagefile) is read every minute,
+// every 10 s while agents are live (HK62: the 60 s sample missed the 2026-10-14 07:22 peak).
+// Under 4 GB free no new agents start and the newest working Builder is stopped and requeued, one
+// per 30 s; above 6 GB new agents resume. Windows kills whichever process next fails to allocate,
+// and that was the board itself three times in two days (2026-10-09 22:33, 2026-10-10 19:33 and
+// 22:48). Planners and Reviewers are left alone.
+const memory = { low: false, minGb: Infinity, lastStopAt: 0 }
+const liveAgents = new Map() // project -> agents from its last poll
+const liveAgentCount = () => [...liveAgents.values()].reduce((n, agents) => n + agents.length, 0)
+async function checkMemory() {
+  try {
+    const gb = await freeCommitGb()
+    const live = liveAgentCount()
+    if (!live) memory.minGb = Infinity
+    const before = memory.minGb
+    const next = applyReading(memory, gb)
+    memory.low = next.low
+    memory.minGb = next.minGb
+    if (live && gb < before && gb < 8) herdrLog(`free commit low-water mark ${gb.toFixed(1)} GB with ${live} live agents`)
+    if (next.event === 'low') {
       const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
       for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
       notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message, code: 'LM' }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
-    } else if (memory.low && gb > 6) {
-      memory.low = false
+    } else if (next.event === 'resume') {
       for (const project of config.projects) activity(project, '-', 'resume', `PC has ${gb.toFixed(1)} GB of commit free; new agents resumed`)
     }
-  }).catch(() => {})
+    if (memory.low) {
+      const entries = [...liveAgents].map(([project, agents]) => ({ project, tasksDir: tasksDirOf(project), session: sessionOf(project), agents }))
+      const stop = await stopNewestBuilder({ entries, close: paneClose, lastStopAt: memory.lastStopAt, gb })
+      if (stop.stopped) {
+        memory.lastStopAt = Date.now()
+        activity(stop.project, stop.id, 'hold', `PC low on memory (${gb.toFixed(1)} GB of commit free): newest Builder stopped, card returned to Queue`, 'error')
+      }
+    }
+  } catch { /* the next sample retries */ }
+}
+async function memoryLoop() {
+  await checkMemory()
+  setTimeout(memoryLoop, sampleDelayMs(liveAgentCount()))
 }
 
 function archiveNoReview(project, tasksDir) {
@@ -577,6 +600,7 @@ async function pollProject(project) {
     if ((liveBoard.review.length || liveBoard.completed.length) && archiveNoReview(project, tasksDir)) broadcastBoard(project)
     const { agents, herdrUp } = await pollAgents(project)
     broadcast(project, 'agents', { project, agents, herdrUp })
+    liveAgents.set(project, herdrUp ? agents : [])
     if (!herdrUp) { stopCardRun(project, null, 'Agent inventory unavailable; explicit run stopped'); return }
     // Per-run token cap backstop (Codex runs, a failed hook). Not skipped while starts are paused:
     // a run already going must still be capped.
@@ -1727,8 +1751,7 @@ async function startPollers() {
   console.log(`herdr: ${(await isRunning()) ? 'up' : 'down'}`)
   cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
   setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
-  checkMemory()
-  setInterval(checkMemory, 60000)
+  memoryLoop()
 
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.
