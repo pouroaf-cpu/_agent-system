@@ -44,7 +44,7 @@ test('AC1: a 14-step Planner run and a 3.1M-token Builder run each write one lin
   const a = fixture(t)
   await finish(a, run(a, { role: 'planner', steps: 14 }))
   assert.equal(lines(a).length, 1)
-  assert.match(lines(a)[0], /^- .* TOKEN ALERT /)
+  assert.match(lines(a)[0], /^- TA \d{5,} .* TOKEN ALERT /)
   assert.match(lines(a)[0], / planner steps 14 /)
 
   const b = fixture(t)

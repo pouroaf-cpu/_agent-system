@@ -2344,9 +2344,20 @@ test('manager exception alerts push and append to the inbox without herdr, once 
     }
     assert.deepEqual(await notifyManagerException(args), { sent: true })
     assert.equal(sent.length, 1)
-    assert.match(sent[0].title, /HERDR unavailable/)
+    assert.match(sent[0].title, /^GE \d{5,} HERDR unavailable/)
     assert.match(sent[0].message, /server_not_running/)
-    assert.match(readFileSync(inbox, 'utf8'), /HERDR unavailable: Injectbuddy: .*server_not_running/)
+    const text = readFileSync(inbox, 'utf8')
+    assert.match(text, /^- GE \d{5,} .*HERDR unavailable: Injectbuddy: .*server_not_running/)
+    assert.equal(text.split(' ').slice(1, 3).join(' '), sent[0].title.split(' ').slice(0, 2).join(' '))
+    // a passed kind is used, and a cooldown-suppressed call takes no number
+    const other = { ...args, key: 'ld', code: 'LD', now: 1500, send: async (title) => sent.push({ title }) }
+    assert.deepEqual(await notifyManagerException(other), { sent: true })
+    assert.match(sent[1].title, /^LD \d{5,} HERDR unavailable/)
+    assert.match(readFileSync(inbox, 'utf8').split('\n').filter(Boolean)[1], /^- LD \d{5,} /)
+    const before = readFileSync(inbox, 'utf8')
+    assert.equal((await notifyManagerException({ ...other, now: 1600 })).reason, 'cooldown')
+    assert.equal(readFileSync(inbox, 'utf8'), before)
+    sent.length = 1
     // Seven projects report the same outage with different text: still one push.
     assert.equal((await notifyManagerException({ ...args, detail: 'Tradeflow: agent list failed', now: 2000 })).reason, 'cooldown')
     assert.equal(sent.length, 1)

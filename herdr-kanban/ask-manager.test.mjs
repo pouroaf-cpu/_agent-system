@@ -17,6 +17,6 @@ test('a Needs you question goes to the project manager inbox, other feedback doe
     writeCurrentFeedback(tasks, card, 'Kicked back', 'fix the test')
     assert.equal(existsSync(inbox), false)
     writeCurrentFeedback(tasks, card, 'Needs you', 'Needs you: (a) or (b)?')
-    assert.match(readFileSync(inbox, 'utf8'), /ASK Proj T-1 \(planning\): \(a\) or \(b\)\?\n$/)
+    assert.match(readFileSync(inbox, 'utf8'), /^- AS \d{5,} .* ASK Proj T-1 \(planning\): \(a\) or \(b\)\?\n$/)
   } finally { delete process.env.KANBAN_CONFIG }
 })

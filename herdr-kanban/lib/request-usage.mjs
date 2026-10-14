@@ -310,7 +310,7 @@ function flushTokenAlerts(tasksDir, all, { root } = {}) {
       const title = path ? readFileSync(path, 'utf8').split(/\r?\n/, 1)[0].match(/^#\s+.+?\s+[—-]\s+(.+)$/)?.[1] || '' : ''
       const file = run.finish.file || run.start?.file || sessionFile(run.sessionId, root)
       const line = tokenAlertLine(run, { title, settings, file, project: basename(dirname(tasksDir)) })
-      if (line && settings.inbox) { postInbox(settings.inbox, line); run.tokenAlert = 'sent' }
+      if (line && settings.inbox) { postInbox(settings.inbox, line, undefined, 'TA'); run.tokenAlert = 'sent' }
       else run.tokenAlert = 'checked'
     } catch { /* stays due; retried on the next write */ }
   }

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { renameSync } from './fs-retry.mjs'
 import { historyFailures } from './metrics.mjs'
 import { postInbox } from './inbox.mjs'
+import { nextEventId } from './event-id.mjs'
 import { failedTests, readTestRuns } from './test-runs.mjs'
 
 export const ALERT_THRESHOLDS = {
@@ -59,9 +60,10 @@ export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), in
   renameSync(path + '.tmp', path)
   const errors = []
   for (const { message } of fresh) {
-    const line = `- ${formatNZTime(now)} ALERT ${project} ${message.replace(/[\r\n]+/g, ' ')}\n`
+    const eventId = nextEventId('BE')
+    const line = `- ${eventId} ${formatNZTime(now)} ALERT ${project} ${message.replace(/[\r\n]+/g, ' ')}\n`
     try { await append(inboxPath, line) } catch (err) { errors.push(err) }
-    try { await send(`Board alert: ${project}`, message) } catch (err) { errors.push(err) }
+    try { await send(`${eventId} Board alert: ${project}`, message) } catch (err) { errors.push(err) }
   }
   if (errors.length) throw new AggregateError(errors, errors.map(err => err.message).join('; '))
   return fresh.map(({ key }) => key)

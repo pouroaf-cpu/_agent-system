@@ -313,6 +313,6 @@ export function askManager(tasksDir, card, note, max = 600) {
     const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
     const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, max)
     postInbox(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
-`)
+`, undefined, 'AS')
   } catch { /* the question is still on the card; routing is best effort */ }
 }

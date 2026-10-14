@@ -10,6 +10,7 @@ import { herdrLog } from './herdr.mjs'
 import { readBoard, isOperatorHold } from './cards.mjs'
 import { laneEnteredAt } from './card-history.mjs'
 import { postInbox } from './inbox.mjs'
+import { nextEventId } from './event-id.mjs'
 
 const COOLDOWN_MS = 4 * 60 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -36,6 +37,7 @@ export async function notifyManagerException({
   key,
   title,
   detail,
+  code = 'GE',
   now = Date.now(),
   cooldownMs = COOLDOWN_MS,
   send = async () => {}, // inbox only: no board Pushovers to the operator (2026-10-09)
@@ -51,9 +53,10 @@ export async function notifyManagerException({
 
   state.alerts[key] = { sentAt: now, body }
   writeState(file, state)
-  postInbox(inbox, `- ${formatNZTime(now)} ${formatNZText(body)}\n`)
+  const eventId = nextEventId(code)
+  postInbox(inbox, `- ${eventId} ${formatNZTime(now)} ${formatNZText(body)}\n`)
   try {
-    await send(title, formatNZText(body).slice(0, 1000))
+    await send(`${eventId} ${title}`, formatNZText(body).slice(0, 1000))
     log?.(`manager alerted: ${title}`, 'error')
     return { sent: true }
   } catch (err) {
