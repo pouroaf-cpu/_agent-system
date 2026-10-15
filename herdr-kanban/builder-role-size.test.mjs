@@ -11,9 +11,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const local = join(here, '..', '_roles', 'BUILDER.md')
 const path = existsSync(local) ? local : 'C:/Users/PFrew/Projects/_roles/BUILDER.md'
 
-test('BUILDER.md stays at or below 8,500 bytes with no stale text', () => {
+test('BUILDER.md stays at or below 7,000 bytes with no stale text', () => {
   const text = readFileSync(path)
-  assert.ok(text.length <= 8500, `BUILDER.md is ${text.length} bytes, want <= 8500`)
+  assert.ok(text.length <= 7000, `BUILDER.md is ${text.length} bytes, want <= 7000`)
 
   const str = text.toString('utf8')
   assert.doesNotMatch(str, /login:false/)
