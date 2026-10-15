@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites, unmetBlockers, approveInvestigation } from './cards.mjs'
+import { readBoard, moveCard, findCard, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites, unmetBlockers, approveInvestigation } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys } from './herdr.mjs'
 import { sessionOf } from './project-key.mjs'
@@ -271,7 +271,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       const launchEngine = selected ? engineForAssignment({ engine: selected.engine, model: selected.model, reasoning: owner.reasoning }) : engine
       const amendEngine = amend && engineKind(launchEngine) === 'codex' ? { ...(typeof launchEngine === 'object' ? launchEngine : {}), kind: 'codex', reasoningArgs: ['-c', `model_reasoning_effort="${owner.reasoning}"`] } : launchEngine
-      owner.name = (await agentStart({ name: owner.name, paneId, browser: needsBrowser(card), model: owner.model, engine: amendEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
+      owner.name = (await agentStart({ name: owner.name, paneId, browser: false, model: owner.model, engine: amendEngine, timeoutMs: START_TIMEOUT_MS, session }).catch(error => failStart(card, owner, startFailed(error))))?.name ?? owner.name
       if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }

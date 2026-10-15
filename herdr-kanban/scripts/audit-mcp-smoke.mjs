@@ -3,10 +3,11 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { CHROME_DEVTOOLS_MCP_ENTRY } from '../lib/audit-mcp.mjs'
 
 const output = resolve(process.argv[2] || 'artifacts/audit-mcp-smoke')
 mkdirSync(output, { recursive: true })
-const proc = spawn('cmd.exe', ['/d', '/c', 'npx', '-y', 'chrome-devtools-mcp@1.9.0', '--isolated', '--headless', '--no-usage-statistics', '--no-performance-crux', '--redactNetworkHeaders', '--workspace', output], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+const proc = spawn(process.execPath, [CHROME_DEVTOOLS_MCP_ENTRY, '--isolated', '--headless', '--no-usage-statistics', '--no-performance-crux', '--redactNetworkHeaders', '--workspace', output], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
 let sequence = 0, buffer = ''
 const pending = new Map()
 proc.stderr.resume() // Do not persist browser messages that could contain session details.

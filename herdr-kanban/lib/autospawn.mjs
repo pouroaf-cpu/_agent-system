@@ -20,7 +20,7 @@ import { testRunPending } from './test-handoff.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { readBoard, moveCard, findCard, needsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
+import { readBoard, moveCard, findCard, reviewerNeedsBrowser, isParked, appendBuildAttempt, currentReviewDecision, currentDirtyMatchesSnapshot, setAutoReview, hasBuilderPass, canArchive, unmetBlockers, cycleFor } from './cards.mjs'
 import { bind, unbind, liveBindings, readBindings } from './bindings.mjs'
 import { spawnForCard, deliver, unsubmittedDelivery, confirmLateDeliveries, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, recordPlanCheckRetry } from './spawn.mjs'
 import { isRetryHold } from './transient.mjs'
@@ -1029,7 +1029,7 @@ export async function spawnReviewer({ project, projectPath, tasksDir, boardRoot,
     beginSpawn(paneId)
     try {
       // Same generous startup budget as a builder — Opus is no faster to boot.
-      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session, browser: cards.some(needsBrowser) }).catch(err => { throw startFailed(err) }))?.name ?? name
+      name = (await agentStart({ name, paneId, model: selectedModel, engine: reviewerEngine, timeoutMs: START_TIMEOUT_MS, session, browser: reviewerNeedsBrowser(cards) }).catch(err => { throw startFailed(err) }))?.name ?? name
       const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
       try {
         recordUsageStart({

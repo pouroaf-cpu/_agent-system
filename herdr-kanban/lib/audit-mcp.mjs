@@ -1,4 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+// Pinned in herdr-kanban/package.json. Started with node directly: no npx, cmd.exe or
+// per-start registry lookup (speed audit 2026-10-16, F4).
+export const CHROME_DEVTOOLS_MCP_ENTRY = fileURLToPath(new URL('../node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js', import.meta.url))
 
 export function gscReviewerConfig(tasksDir) {
   if (!/[\\/]Injectbuddy[\\/]TASKS[\\/]?$/i.test(tasksDir)) throw new Error('GSC reviewer connection is approved only for Injectbuddy')
@@ -47,8 +52,8 @@ export function auditMcpEngine(engine, cards, tasksDir) {
     overrides.push('-c', `mcp_servers.gsc={ command = ${JSON.stringify(gsc.command)}, args = ${JSON.stringify(gsc.args)}, env = { ${env} }, enabled_tools = ${JSON.stringify(gsc.enabled_tools)}, disabled_tools = ${JSON.stringify(gsc.disabled_tools)}, required = true, startup_timeout_sec = 60, tool_timeout_sec = 120 }`)
   }
   if (requiresTool(cards, /\bchrome-devtools\b/i)) {
-    const args = ['/d', '/c', 'npx', '-y', 'chrome-devtools-mcp@1.9.0', '--isolated', '--headless', '--no-usage-statistics', '--no-performance-crux', '--redactNetworkHeaders', '--workspace', tasksDir]
-    const mcp = `{ command = "cmd.exe", args = ${JSON.stringify(args)}, required = true, startup_timeout_sec = 60, tool_timeout_sec = 120 }`
+    const args = [CHROME_DEVTOOLS_MCP_ENTRY, '--isolated', '--headless', '--no-usage-statistics', '--no-performance-crux', '--redactNetworkHeaders', '--workspace', tasksDir]
+    const mcp = `{ command = ${JSON.stringify(process.execPath)}, args = ${JSON.stringify(args)}, required = true, startup_timeout_sec = 60, tool_timeout_sec = 120 }`
     overrides.push('-c', `mcp_servers.chrome-devtools=${mcp}`)
   }
   return { ...cfg, reasoningArgs: [...(cfg.reasoningArgs || []), ...overrides, '-c', 'mcp_optional_startup_grace_ms=0'] }

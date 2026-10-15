@@ -1233,6 +1233,11 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   return parseCard(path, audit ? 'review' : 'planning')
 }
 
+// A Reviewer gets the browser MCP only when it reviews an audit or a UI card (audit 2026-10-16, F4).
+export function reviewerNeedsBrowser(cards) {
+  return cards.some(c => c.audit || c.category === 'ui')
+}
+
 // Whether an agent for this card needs the browser MCPs (chrome-devtools, playwright,
 // computer-use). UI cards and any card naming browser work get them; others start lean.
 export function needsBrowser(card) {
