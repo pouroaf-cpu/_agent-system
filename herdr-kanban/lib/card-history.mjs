@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
 import { postInbox } from './inbox.mjs'
+import { renameSync } from './fs-retry.mjs'
 
 export function historyPath(tasksDir, id) {
   if (!isCardId(id)) throw new Error('Invalid history card ID')
@@ -356,11 +357,28 @@ export function managerInbox(tasksDir) {
   const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
   return { project, inbox }
 }
+// One ASK per question per card: the same question on the same card is asked once, until its text
+// changes (I1339 got the same "Approve the investigation" ASK four times in six minutes, 15 Oct 2026).
+// Recorded in <tasksDir>/.ask-sent.json before the line is written; entries older than a week are dropped.
+const ASK_MEMORY_MS = 7 * 24 * 60 * 60 * 1000
+function firstAskForQuestion(tasksDir, id, question, now = Date.now()) {
+  const file = join(tasksDir, '.ask-sent.json')
+  let state = {}
+  try { state = JSON.parse(readFileSync(file, 'utf8')) } catch { state = {} }
+  const key = createHash('sha1').update(`${id}\n${question}`).digest('hex')
+  const kept = Object.fromEntries(Object.entries(state).filter(([, at]) => now - at < ASK_MEMORY_MS))
+  if (kept[key] !== undefined) return false
+  kept[key] = now
+  writeFileSync(file + '.tmp', JSON.stringify(kept))
+  renameSync(file + '.tmp', file)
+  return true
+}
 export function askManager(tasksDir, card, note, max = 600) {
   try {
     const target = managerInbox(tasksDir)
     if (!target) return
     const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, max)
+    if (!firstAskForQuestion(tasksDir, card.id, question)) return
     postInbox(target.inbox, `- ${formatNZTime()} ASK ${target.project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
 `, undefined, 'AS')
   } catch { /* the question is still on the card; routing is best effort */ }

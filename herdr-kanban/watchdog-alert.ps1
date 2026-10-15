@@ -1,14 +1,30 @@
 # One send attempt per outage: do not duplicate a push after an ambiguous timeout.
+# With -SettleMinutes, an outage ends only after the check has passed continuously for that long.
+# A flap (a poll that times out, then a SLOW retry pass, then down again) is still the same outage:
+# the old rule cleared the state on the first pass and sent "Kanban board down" again (10 times overnight, 15-16 Oct 2026).
 function Update-BoardOutage {
-    param([bool]$Healthy, [string]$StatePath, [scriptblock]$Send)
-    if ($Healthy) {
-        if (Test-Path -LiteralPath $StatePath) { Remove-Item -LiteralPath $StatePath }
+    param([bool]$Healthy, [string]$StatePath, [scriptblock]$Send, [int]$SettleMinutes = 0)
+    $healthySince = "$StatePath.healthy"
+    if (-not $Healthy) {
+        # A failed check restarts the healthy timer.
+        if (Test-Path -LiteralPath $healthySince) { Remove-Item -LiteralPath $healthySince -Force }
+        if (Test-Path -LiteralPath $StatePath) { return }
+        # Persist before sending so subsequent watchdog runs cannot repeat the alert.
+        [IO.File]::WriteAllText($StatePath, (Get-Date -Format o))
+        & $Send
         return
     }
-    if (Test-Path -LiteralPath $StatePath) { return }
-    # Persist before sending so subsequent watchdog runs cannot repeat the alert.
-    [IO.File]::WriteAllText($StatePath, (Get-Date -Format o))
-    & $Send
+    if (-not (Test-Path -LiteralPath $StatePath)) { return }
+    if ($SettleMinutes -gt 0) {
+        if (-not (Test-Path -LiteralPath $healthySince)) {
+            [IO.File]::WriteAllText($healthySince, (Get-Date -Format o))
+            return
+        }
+        $since = [datetime]::Parse((Get-Content -LiteralPath $healthySince -Raw).Trim(), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+        if (((Get-Date) - $since).TotalMinutes -lt $SettleMinutes) { return }
+        Remove-Item -LiteralPath $healthySince -Force
+    }
+    Remove-Item -LiteralPath $StatePath
 }
 # A board is only "Gone" (safe to relaunch) when it answers no request in the whole window,
 # its port has no listener AND its process has exited. A live process is never relaunched:

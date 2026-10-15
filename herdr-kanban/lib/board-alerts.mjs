@@ -10,7 +10,11 @@ import { failedTests, readTestRuns } from './test-runs.mjs'
 export const ALERT_THRESHOLDS = {
   cardWindowMs: 24 * 60 * 60 * 1000, cardFailures: 3,
   burstWindowMs: 60 * 60 * 1000, kickBacks: 5, deliveryFailed: 3, noHandoff: 3,
-  nightlyRuns: 2, dedupeMs: 60 * 60 * 1000,
+  nightlyRuns: 2,
+  // An alert is one message per condition: it stays quiet while its condition holds (a burst that
+  // persists, a card that keeps failing) and re-arms only after the condition has been false for
+  // rearmMs. A flap or a sliding window inside that time does not send it again (operator, 2026-10-16).
+  rearmMs: 6 * 60 * 60 * 1000,
 }
 const INBOX = 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
 
@@ -29,7 +33,7 @@ export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), in
   const events = await historyFailures(tasksDir, now - limits.cardWindowMs, now)
   const triggers = []
   // A stuck card or test alerts once a day; a burst can recur hourly.
-  const add = (kind, subject, message) => triggers.push({ key: JSON.stringify([project, kind, subject]), message, quietMs: kind.startsWith('burst-') ? limits.dedupeMs : limits.cardWindowMs })
+  const add = (kind, subject, message) => triggers.push({ key: JSON.stringify([project, kind, subject]), message })
   for (const kind of ['builder-kick-back', 'plan-check-fail']) {
     const cards = new Map()
     for (const e of events.filter(e => e.event === kind)) cards.set(e.card, (cards.get(e.card) || 0) + 1)
@@ -51,13 +55,23 @@ export async function checkBoardAlerts({ project, tasksDir, now = Date.now(), in
   const path = join(tasksDir, '.board-alerted.json')
   let previous = {}
   try { previous = JSON.parse(readFileSync(path, 'utf8')) } catch (err) { if (err.code !== 'ENOENT') throw err }
-  const fresh = triggers.filter(({ key, quietMs }) => previous[key] === undefined || now - previous[key] >= quietMs)
+  // Records: { sent, seen }, where seen is the last time the condition held. Older state (a bare time) reads as both.
+  const active = new Set(triggers.map(t => t.key))
+  const next = {}
+  for (const [key, raw] of Object.entries(previous)) {
+    const rec = typeof raw === 'number' ? { sent: raw, seen: raw } : raw
+    if (!rec || typeof rec.sent !== 'number' || typeof rec.seen !== 'number') continue
+    if (now - rec.seen >= limits.rearmMs) continue // quiet for rearmMs: the next occurrence is news
+    next[key] = active.has(key) ? { sent: rec.sent, seen: now } : rec
+  }
+  const fresh = triggers.filter(({ key }) => next[key] === undefined)
+  for (const { key } of fresh) next[key] = { sent: now, seen: now }
+  if (fresh.length || JSON.stringify(next) !== JSON.stringify(previous)) {
+    // Persist before side effects, like owner alerts: an ambiguous timeout must not repeat a push.
+    writeFileSync(path + '.tmp', JSON.stringify(next, null, 2))
+    renameSync(path + '.tmp', path)
+  }
   if (!fresh.length) return []
-  const next = Object.fromEntries(Object.entries(previous).filter(([, time]) => now - time < limits.cardWindowMs))
-  for (const { key } of fresh) next[key] = now
-  // Persist before side effects, like owner alerts: an ambiguous timeout must not repeat a push.
-  writeFileSync(path + '.tmp', JSON.stringify(next, null, 2))
-  renameSync(path + '.tmp', path)
   const errors = []
   for (const { message } of fresh) {
     const eventId = nextEventId('BE')

@@ -48,7 +48,7 @@ test('board alerts fire at each threshold, persist cooldowns across restarts, an
     assert.equal(f.lines[0].split(' ').slice(1, 3).join(' '), f.pushes[0][0].split(' ').slice(0, 2).join(' '))
     assert.match(f.lines[0], expected)
     assert.equal(f.lines[0].split('\n').length, 2)
-    assert.deepEqual(await checkBoardAlerts({ ...f.options, now: now + ALERT_THRESHOLDS.dedupeMs - 1 }), [])
+    assert.deepEqual(await checkBoardAlerts({ ...f.options, now: now + 60 * 60 * 1000 - 1 }), [])
     // A fresh Node process cannot fall back on module memory for deduplication.
     execFileSync(process.execPath, ['--input-type=module', '-e',
       "import { checkBoardAlerts } from './lib/board-alerts.mjs'; await checkBoardAlerts({ project: 'Fixture', tasksDir: process.argv[1], now: Number(process.argv[2]), send: () => { throw Error('duplicate push') }, append: () => { throw Error('duplicate inbox') } })",
@@ -73,8 +73,8 @@ test('board alerts fire at each threshold, persist cooldowns across restarts, an
   appendFileSync(join(f.tasksDir, '.history', 'T-1.jsonl'), JSON.stringify({ at: new Date(now).toISOString(), event: 'plan-check', verdict: 'FAIL' }) + '\n')
   now += 5001 // the shared history cache refreshes on the next poll
   assert.equal((await checkBoardAlerts({ ...f.options, now })).length, 1)
-  now += ALERT_THRESHOLDS.dedupeMs
-  assert.equal((await checkBoardAlerts({ ...f.options, now })).length, 0, 'a stuck card alerts once a day, not hourly')
+  now += 60 * 60 * 1000
+  assert.equal((await checkBoardAlerts({ ...f.options, now })).length, 0, 'a stuck card stays quiet while it holds, however long')
   assert.equal(f.pushes.length, 1)
   // Notification failure still attempts both channels and never repeats ambiguous sends.
   const broken = fixture({ 'T-1': plan(3) })
@@ -82,4 +82,45 @@ test('board alerts fire at each threshold, persist cooldowns across restarts, an
   await assert.rejects(checkBoardAlerts({ ...broken.options, now, append: () => { throw Error('inbox unavailable') }, send: () => { attempts++; throw Error('push timeout') } }), /inbox unavailable; push timeout/)
   assert.equal(attempts, 1)
   assert.deepEqual(await checkBoardAlerts({ ...broken.options, now }), [])
+})
+
+// Overnight 15-16 Oct 2026: the no-handoff burst re-sent every hour with the same burst, and a card's
+// kick-back alert repeated while its failures stayed in the 24 h window. Replayed hour by hour: each
+// condition sends once while it holds, and only sends again after it has been quiet for rearmMs.
+test('overnight replay: a burst that persists for hours and a card kicked back all day each send once; a later recurrence sends again', async t => {
+  mkdirSync(join(import.meta.dirname, 'tmp'), { recursive: true })
+  const root = mkdtempSync(join(import.meta.dirname, 'tmp', 'board-replay-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const HOUR = 60 * 60 * 1000
+  const T0 = Date.parse('2026-10-15T14:00:00Z') // 3 am NZ, 16 Oct
+  const tasksDir = join(root, 'TASKS')
+  mkdirSync(join(tasksDir, '.history'), { recursive: true })
+  mkdirSync(join(tasksDir, 'e2e'))
+  writeFileSync(join(tasksDir, 'e2e', 'runs.jsonl'), '')
+  const inboxPath = join(root, 'inbox.md')
+  const sent = [], lines = []
+  const record = (card, event, at) => appendFileSync(join(tasksDir, '.history', card + '.jsonl'),
+    JSON.stringify({ at: new Date(at).toISOString(), event, stage: 'working' }) + '\n')
+  // The shared history cache refreshes on Date.now() every 5 s, so the replay's clock drives it too.
+  let clock = T0
+  t.mock.method(Date, 'now', () => clock)
+  const poll = now => { clock = now; return checkBoardAlerts({ project: 'Fixture', tasksDir, now, inboxPath,
+    send: async (...args) => sent.push(args), append: (path, line) => { lines.push(line); appendFileSync(path, line) } }) }
+  // Hour 0: IA235 stops without a handoff three times, I1319 is kicked back three times.
+  for (let i = 0; i < 3; i++) record('IA235', 'builder-no-handoff', T0 - 10 * 60000)
+  for (let i = 0; i < 3; i++) record('I1319', 'failure', T0 - 30 * 60000)
+  assert.equal((await poll(T0)).length, 2, 'the burst and the card alert both send at the start')
+  // Hours 1 to 23: a new card joins the burst every hour, the kick-backs stay in the window. Nothing new is sent.
+  for (let h = 1; h <= 23; h++) {
+    for (let i = 0; i < 3; i++) record(`IA${236 + h}`, 'builder-no-handoff', T0 + h * HOUR - 5 * 60000)
+    assert.deepEqual(await poll(T0 + h * HOUR), [], `hour ${h}: the same condition stays quiet`)
+  }
+  // Hour 29: the burst and the kick-backs have been quiet for over six hours, so a new burst sends again.
+  for (let i = 0; i < 3; i++) record('IA300', 'builder-no-handoff', T0 + 29 * HOUR - 5 * 60000)
+  assert.equal((await poll(T0 + 29 * HOUR)).length, 1, 'a recurrence after the condition re-armed sends once')
+  assert.equal(sent.length, 3)
+  assert.equal(lines.length, 3)
+  assert.match(lines[0], /I1319/)
+  assert.match(lines[1], /burst/)
+  assert.match(lines[2], /IA300/)
 })

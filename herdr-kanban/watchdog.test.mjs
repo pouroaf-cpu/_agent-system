@@ -197,3 +197,34 @@ test('no listener alone does not relaunch a board whose process is still alive',
   assert.equal(read('kanban-calls.txt'), '', 'a live board process is never relaunched')
   assert.deepEqual(lines('pushes.txt'), ['Kanban board down'])
 })
+
+// Overnight 15-16 Oct 2026: the board flapped (a poll timed out, a SLOW retry passed, the next poll failed again)
+// and each FAILED pass sent "Kanban board down" again: 10 pushes and inbox lines for one outage.
+// The board answers from answers.txt, one word per request: ok or fail. An outage ends only after 15 minutes healthy.
+test('board flaps within one outage send one "Kanban board down" push; the next outage after 15 healthy minutes sends another', async t => {
+  const { root, run, read, lines } = await fixture(t, `
+function Invoke-WebRequest {
+  param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+  $f = Join-Path $PSScriptRoot 'answers.txt'
+  $all = @(); if (Test-Path -LiteralPath $f) { $all = @(Get-Content -LiteralPath $f) }
+  if ($all.Count -eq 0) { return }
+  $next = $all[0]
+  Set-Content -LiteralPath $f -Value @($all | Select-Object -Skip 1)
+  if ($next -eq 'fail') { throw 'fixture: no answer' }
+}
+`)
+  const answers = words => writeFileSync(join(root, 'answers.txt'), words.join('\n') + '\n')
+  const down = ['fail', 'fail', 'fail', 'fail', 'fail'] // healthy check + 4 retries: FAILED
+  const slow = ['fail', 'ok'] // healthy check fails, the retry answers: SLOW
+  const ok = ['ok']
+  // Runs: down, slow, ok, down, slow, ok make one outage and one push.
+  for (const words of [down, slow, ok, down, slow, ok]) { answers(words); await run() }
+  assert.deepEqual(lines('pushes.txt'), ['Kanban board down'], read('watchdog.log'))
+  assert.equal(existsSync(join(root, '.watchdog-outage')), true, 'the outage is still open after flaps')
+  // 16 minutes of continuous health ends the outage; the next outage alerts again.
+  writeFileSync(join(root, '.watchdog-outage.healthy'), new Date(Date.now() - 16 * 60000).toISOString())
+  answers(ok); await run()
+  assert.equal(existsSync(join(root, '.watchdog-outage')), false, 'a settled outage is cleared')
+  answers(down); await run()
+  assert.deepEqual(lines('pushes.txt'), ['Kanban board down', 'Kanban board down'])
+})

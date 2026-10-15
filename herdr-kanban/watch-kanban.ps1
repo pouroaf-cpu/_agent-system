@@ -13,7 +13,7 @@ try {
         $healthy = $true
     } catch { }
     if ($healthy) {
-        Update-BoardOutage -Healthy $true -StatePath $state -Send { }
+        Update-BoardOutage -Healthy $true -StatePath $state -SettleMinutes 15 -Send { }
     } else {
         "$(Get-Date -Format o) DOWN - checking recovery" | Out-File -Append -Encoding utf8 $log
         # Retries over about a minute (4 tries, 10 s timeout, 15 s apart); the test hook shortens the gap.
@@ -26,19 +26,19 @@ try {
         } -ProcessCheck { Test-BoardProcessAlive (Join-Path $root '.server.pid') }
         if ($recovery -eq 'Gone') {
             try {
-                Update-BoardOutage -Healthy $false -StatePath $state -Send { Send-BoardDownPush }
+                Update-BoardOutage -Healthy $false -StatePath $state -SettleMinutes 15 -Send { Send-BoardDownPush }
             } catch {
                 "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
             }
             & (Join-Path $root 'kanban.ps1') -Silent
             Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
-            Update-BoardOutage -Healthy $true -StatePath $state -Send { }
+            Update-BoardOutage -Healthy $true -StatePath $state -SettleMinutes 15 -Send { }
         } elseif ($recovery -eq 'Slow') {
             "$(Get-Date -Format o) SLOW - retry passed" | Out-File -Append -Encoding utf8 $log
-            Update-BoardOutage -Healthy $true -StatePath $state -Send { }
+            Update-BoardOutage -Healthy $true -StatePath $state -SettleMinutes 15 -Send { }
         } else {
             try {
-                Update-BoardOutage -Healthy $false -StatePath $state -Send { Send-BoardDownPush }
+                Update-BoardOutage -Healthy $false -StatePath $state -SettleMinutes 15 -Send { Send-BoardDownPush }
             } catch {
                 "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
             }
