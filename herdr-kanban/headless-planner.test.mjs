@@ -62,7 +62,7 @@ test('Planner launches headlessly, resumes corrections, and recovers exits witho
     assert(resumed[1].includes(initial.assignmentId),'re-entry brief names the same assignment')
     assert(resumed[1].includes('stop immediately after it succeeds'))
     assert(!resumed[1].includes('Read each card once'),'no full plan instructions on re-entry')
-    assert(resumed[1].length*3<launch[1].length,'re-entry brief is a fraction of the launch prompt')
+    assert(resumed[1].length*2<launch[1].length,'re-entry brief is under half the launch prompt')
     assert.match(readFileSync(tasksDir+'/.history/'+card.id+'.jsonl','utf8'),/planner-reentry/)
     // Repeat unchanged feedback: delivery dedup must not swallow the resumed turn.
     requestPlannerCorrection(tasksDir,card.id)

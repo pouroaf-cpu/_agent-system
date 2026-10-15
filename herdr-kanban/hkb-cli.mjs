@@ -20,6 +20,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
 //   node hkb.mjs workspace T-02 <path>   (change the card's Workspace; project-relative, must exist, refused while an agent holds the card)
+//   node hkb.mjs precheck T-02   (Planner: read-only; prints PASS, or every failing item numbered, before move planned)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -200,6 +201,18 @@ if (verb === 'locate') {
   } catch (err) { fail(err.message) }
 }
 
+// precheck: read-only plan gate (see planGateProblems). PASS or the numbered failing items, one output, exit 1 on any.
+if (verb === 'precheck') {
+  if (!cardId) fail('usage: hkb precheck T-02 (read-only; run it before hkb move T-02 planned)')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const problems = planGateProblems(findCard(tasksDir, cardId))
+    if (!problems.length) { console.log(`PRECHECK PASS ${cardId}: move ${cardId} planned now`); process.exit(0) }
+    console.log(`PRECHECK FAIL ${cardId}: ${problems.length} problem(s); fix only these, then precheck again:\n${problems.map((p, i) => `${i + 1}. ${p}`).join('\n')}`)
+    process.exit(1)
+  } catch (err) { fail(err.message) }
+}
+
 if (reviewClaim && verb !== 'plancheck' && reviewClaimFor(reviewRoot, tasksDir, cardId)?.role === 'plancheck') fail('Plan checker permits only plancheck handoffs')
 
 if (verb === 'plancheck') {
@@ -250,6 +263,24 @@ function planCheck(card) {
   const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
   if (dirty) fail(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
   return { planWorkspace, sharedFiles: gitSettings?.sharedFiles }
+}
+
+// precheck (read-only): the same plan gate `move planned` runs, as a list of every problem at once
+// (no exit, no write). Unlike planCheck it does not stop at the first failing check, so a Planner
+// fixes all of them in one pass.
+function planGateProblems(card) {
+  const text = readFileSync(card.path, 'utf8'), problems = []
+  const listed = (err) => /^Plan check found \d+ problems/.test(err.message) ? err.message.split('\n').slice(1).map(l => l.replace(/^\d+\. /, '')) : [err.message]
+  if (!cardFiles(card.path).length) {
+    problems.push(`no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`)
+    try { validatePlan(text, { requireReadiness: !!plannerAssignment }) } catch (err) { problems.push(...listed(err).filter(p => !/fill ## Files\b/.test(p))) }
+    return [...new Set(problems)]
+  }
+  const { gitSettings, integration, repoRoot, planWorkspace } = planWorkspaceFor(card)
+  const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
+  if (dirty) problems.push(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
+  try { validatePlan(text, { requireReadiness: !!plannerAssignment, workspace: planWorkspace, sharedFiles: gitSettings?.sharedFiles }) } catch (err) { problems.push(...listed(err)) }
+  return [...new Set(problems)]
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
