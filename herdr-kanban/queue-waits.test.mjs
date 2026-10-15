@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard } from './lib/cards.mjs'
 import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall, updateWorktree } from './lib/worktrees.mjs'
-import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
+import { autoSpawn, fileHoldDetails, holdsFor } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 
@@ -128,6 +128,37 @@ test('cards waiting on files held by another live card stay in Queue; the stall 
   assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 30 * 60000 }).map(s => s.id).filter(id => id !== 'T-34'), [], 'a live holder is an allowed wait')
   rmSync(findCard(f.tasks, 'T-34').path)
   assert.deepEqual(checkStalls({ tasksDir: f.tasks, holds, now: T + 60 * 60000 }).map(s => s.id).sort(), ['T-35', 'T-37'], 'a holder that is no longer live is not')
+})
+
+// Audit 2026-10-16 F2 AC1/AC3: /api/board names each file-held card's holder, file and minutes
+// held, and once the holder lands the card that has waited longest starts first even when a newer
+// card sorts ahead of it in the queue (T-61 sorts before T-62 by name).
+test('F2 AC1/AC3: a file-held card reports its holder and minutes, and the longest wait starts first when the file frees', async t => {
+  const f = repo(t)
+  f.add('T-60', ['site/app.js'])
+  f.add('T-62', ['site/app.js'])
+  const started = []
+  const spawn = async ({ card, projectPath, tasksDir, gitSettings }) => {
+    prepareCardWorktree({ projectPath, tasksDir, card, gitSettings })
+    started.push(card.id)
+    return { pane_id: `pane-${card.id}`, tab_id: `tab-${card.id}`, name: `b-${card.id.toLowerCase()}` }
+  }
+  const args = { project: 'f2', projectPath: f.integration, tasksDir: f.tasks, boardRoot: f.root, model: 'm', agents: [], max: 1, gitSettings: f.settings, spawn }
+  await autoSpawn(args)
+  assert.deepEqual(started, ['T-60'])
+  const details = fileHoldDetails('f2', holdsFor('f2'))
+  assert.equal(details.length, 1)
+  assert.deepEqual([details[0].card, details[0].holder, details[0].file, details[0].minutes], ['T-62', 'T-60', 'site/app.js', 0])
+  assert.match(details[0].since, /^\d{4}-\d{2}-\d{2}T/)
+
+  const move = (id, column) => { const c = findCard(f.tasks, id); mkdirSync(join(f.tasks, column), { recursive: true }); renameSync(c.path, join(f.tasks, column, c.file)) }
+  updateWorktree(f.tasks, 'T-60', { state: 'integrated', cleaned: true })
+  move('T-60', 'archive')
+  f.add('T-61', ['site/app.js'])
+  await autoSpawn(args)
+  assert.deepEqual(started, ['T-60', 'T-62'], 'the card that waited since the first pass takes the free slot, not the newer T-61')
+  assert.equal(findCard(f.tasks, 'T-61').column, 'queue')
+  assert.deepEqual(fileHoldDetails('f2', holdsFor('f2')).map(d => [d.card, d.holder]), [['T-61', 'T-62']], 'T-61 now waits on the card that took the file')
 })
 
 // InjectbuddyApp 2026-10-06: IA19 moved working -> planning at .889; the scheduler's next

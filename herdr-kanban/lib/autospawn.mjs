@@ -303,16 +303,40 @@ const planHolds = new Map() // project -> { cardId: reason }
 // Planned cards promotePlanned refused to queue (e.g. a failing plan). One bad card must not stop the pass, and its reason must show.
 const promoteRefusals = new Map() // project -> { cardId: reason }
 const holdContexts = new Map() // project -> file-lock settings, independent of dispatch selection
+// When each planned or queued card first waited on a file lock: project -> { cardId: ms }. Kept in
+// memory like the holds above; a restart starts the clock again. Audit 2026-10-16 F2: holders were
+// logged but nothing ordered the cards behind them, so the longest wait lost its turn to newer cards.
+const fileWaits = new Map()
+function syncFileWaits(project, board, waiting, now = Date.now()) {
+  const waits = fileWaits.get(project) ?? {}
+  const inLane = new Set([...board.planned, ...board.queue].map(c => c.id))
+  for (const id of Object.keys(waits)) if (!inLane.has(id) || !waiting.has(id)) delete waits[id]
+  for (const id of waiting) waits[id] ??= now
+  fileWaits.set(project, waits)
+}
+
 export function holdsFor(project, context = holdContexts.get(project)) {
   const held = { ...planHolds.get(project), ...promoteRefusals.get(project), ...holds.get(project) }
   if (!context?.projectPath) return held
   const { tasksDir, projectPath, gitSettings = {} } = context, board = readBoard(tasksDir), registry = readWorktrees(tasksDir)
+  const waiting = new Set()
   for (const card of [...board.planned, ...board.queue]) {
     const reason = overlapHoldReason({ tasksDir, projectPath, card, board, registry, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles })
-    if (filesBusyHolder(reason)) held[card.id] = reason
+    if (filesBusyHolder(reason)) { held[card.id] = reason; waiting.add(card.id) }
     else if (filesBusyHolder(held[card.id])) delete held[card.id]
   }
+  syncFileWaits(project, board, waiting)
   return held
+}
+
+// The file-lock holds from holdsFor with how long each card has waited: [{ card, holder, file, since, minutes }].
+export function fileHoldDetails(project, held, now = Date.now()) {
+  return Object.entries(fileWaits.get(project) ?? {}).flatMap(([card, since]) => {
+    const reason = held[card] ?? ''
+    const holder = filesBusyHolder(reason)
+    if (!holder) return []
+    return [{ card, holder, file: reason.split(' — ')[1] ?? null, since: new Date(since).toISOString(), minutes: Math.round((now - since) / 60000) }]
+  })
 }
 
 const HELD_BY = new RegExp(String.raw`held by (${CARD_ID})`)
@@ -351,7 +375,11 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
 
   const board = readBoard(tasksDir)
   const only = onlyIds?.length ? new Set(onlyIds.map((id) => id.toUpperCase())) : null
-  const queued = only ? board.queue.filter((c) => only.has(c.id)) : board.queue
+  // A card that has waited on a file lock longest goes first once its file is free (audit F2), so a
+  // newer card cannot take the free slot ahead of it. Unwaited cards keep their queue order.
+  const waits = fileWaits.get(project) ?? {}
+  const queued = (only ? board.queue.filter((c) => only.has(c.id)) : [...board.queue])
+    .sort((a, b) => (waits[a.id] ?? now) - (waits[b.id] ?? now))
   if (!queued.length) { holds.set(project, {}); return [] }
 
   busy.add(project)

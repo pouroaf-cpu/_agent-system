@@ -68,7 +68,7 @@ const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-
 const { beginStoppage, clearStoppage, dropStoppages, noteStart, readyCard, checkResume, resumeAlert } = await import('./lib/resume-watch.mjs')
 const resumeStart = project => { try { noteStart(HERE, { project }) } catch (err) { console.error(`resume watch failed: ${err.message}`) } }
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, fileHoldDetails: schedulerFileHoldDetails, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { dispatchTestResults } = await import('./lib/test-handoff.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
@@ -488,6 +488,7 @@ function buildBoardPayload(project) {
       ...(card.column === 'queue' ? recordedOverlapBlockers(card, integrationPathOf(project), registry, projectSettingsOf(project)?.parallelFiles, projectSettingsOf(project)?.generatedFiles) : []),
     ])]
   } catch { /* Unknown lock state must not invent visual relationships. */ }
+  const holdMap = { ...holdsFor(project), ...quotaHoldsOf(project, board) }
   return {
     project,
     control: controlState(project, CONFIG_PATH),
@@ -517,7 +518,9 @@ function buildBoardPayload(project) {
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or
     // files another card is still holding. Without it a held card is visually
     // identical to one simply waiting its turn.
-    holds: { ...holdsFor(project), ...quotaHoldsOf(project, board) },
+    holds: holdMap,
+    // Cards waiting on another card's files: holder, file, when the wait began and minutes so far (audit F2).
+    fileHolds: schedulerFileHoldDetails(project, holdMap),
     // Engine usage blocks in force, keyed "claude" (every model) or "claude:<model>": { until, since }.
     quotaBlocks: activeQuota(HERE),
     agents: cached.agents,
