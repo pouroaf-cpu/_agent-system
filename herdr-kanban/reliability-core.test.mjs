@@ -5,19 +5,38 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { bind, readBindings, unbind } from './lib/bindings.mjs'
+import { bind, readBindings, unbind, liveBindings, onBindingsAlert } from './lib/bindings.mjs'
 
-test('corrupt binding state fails closed and is never overwritten by bind', () => {
+// Audit 2026-10-15 F6 AC1: a truncated .board.json reads as empty with one alert; the
+// callers that decide slots or rewrite the file still stop, so the file is never overwritten.
+test('truncated binding state reads as empty with one alert and is never overwritten by bind', () => {
   const root = mkdtempSync(join(tmpdir(), 'hkb-bindings-'))
   const tasks = join(root, 'TASKS')
   mkdirSync(tasks)
   const path = join(tasks, '.board.json')
-  writeFileSync(path, '{broken')
+  const alerts = []
+  onBindingsAlert(message => alerts.push(message))
   try {
-    assert.throws(() => readBindings(tasks), /cannot read bindings/)
-    assert.throws(() => bind(tasks, 'T-1', { pane_id: 'p1' }), /cannot read bindings/)
-    assert.equal(readFileSync(path, 'utf8'), '{broken')
-  } finally { rmSync(root, { recursive: true, force: true }) }
+    bind(tasks, 'T-1', { pane_id: 'p1' })
+    const whole = readFileSync(path, 'utf8')
+    writeFileSync(path, whole.slice(0, Math.floor(whole.length / 2)))
+    const truncated = readFileSync(path, 'utf8')
+    assert.deepEqual(readBindings(tasks), {})
+    assert.deepEqual(readBindings(tasks), {})
+    assert.equal(alerts.length, 1, 'one alert for the file, not one per read')
+    assert.match(alerts[0], /cannot read bindings at .*\.board\.json/)
+    assert.throws(() => bind(tasks, 'T-2', { pane_id: 'p2' }), /cannot read bindings/)
+    assert.throws(() => liveBindings(tasks, [{ pane_id: 'p1' }]), /cannot read bindings/)
+    assert.equal(readFileSync(path, 'utf8'), truncated, 'the damaged file is kept for repair')
+    writeFileSync(path, whole)
+    assert.deepEqual(Object.keys(readBindings(tasks)), ['T-1'])
+    writeFileSync(path, truncated)
+    readBindings(tasks)
+    assert.equal(alerts.length, 2, 'a file that parsed again alerts afresh when it breaks again')
+  } finally {
+    onBindingsAlert(message => console.error(message))
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('binding mutations complete atomically without leaving temporary state', () => {

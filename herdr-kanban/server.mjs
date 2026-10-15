@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch, openSync, readSync, closeSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
+import { tmpdir } from 'node:os'
 import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
@@ -47,7 +48,7 @@ const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, '
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
-const { readBindings, unbind } = await import('./lib/bindings.mjs')
+const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -73,11 +74,28 @@ const reviewInventory = () => Promise.all(config.projects.map(async project => {
   try { return { project, tasksDir: tasksDirOf(project), known: true, agents: await agentList(sessionOf(project), { ensureSession: false }) } }
   catch (err) { return { project, tasksDir: tasksDirOf(project), known: false, agents: [], error: err.message } }
 }))
-const resolvedProjectSettings = new Map()
+// Git settings resolve once per project. A folder whose Git root check fails (the folder is
+// gone, git cannot run there) used to throw from every payload and poll and twice took the
+// process down (audit 2026-10-15 F6): it is a project hold instead, shown on the board, the
+// scheduler skips the project, and the check runs again a minute later.
+const resolvedProjectSettings = new Map() // project -> { settings, hold, at }
+const PROJECT_HOLD_RETRY_MS = 60000
 const projectSettingsOf = (project) => {
-  if (!resolvedProjectSettings.has(project)) resolvedProjectSettings.set(project, resolveGitSettings({ projectPath: projectPathOf(project), gitSettings: config.projectSettings?.[project] }))
-  return resolvedProjectSettings.get(project)
+  const hit = resolvedProjectSettings.get(project)
+  if (hit && (!hit.hold || Date.now() - hit.at < PROJECT_HOLD_RETRY_MS)) return hit.settings
+  try {
+    resolvedProjectSettings.set(project, { settings: resolveGitSettings({ projectPath: projectPathOf(project), gitSettings: config.projectSettings?.[project] }), hold: null, at: Date.now() })
+  } catch (err) {
+    const hold = `project held: ${err.message}`
+    if (hit?.hold !== hold) {
+      console.error(`${project}: ${hold}`)
+      try { activity(project, '-', 'hold', hold, 'error') } catch { /* no TASKS folder to log in */ }
+    }
+    resolvedProjectSettings.set(project, { settings: config.projectSettings?.[project], hold, at: Date.now() })
+  }
+  return resolvedProjectSettings.get(project).settings
 }
+const projectHoldOf = (project) => { projectSettingsOf(project); return resolvedProjectSettings.get(project)?.hold ?? null }
 const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
 const holdsFor = (project) => schedulerHoldsFor(project, { tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), gitSettings: projectSettingsOf(project) })
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
@@ -408,6 +426,8 @@ function buildBoardPayload(project) {
     plannerRecoveryCards: Object.entries(readCardPlanners(tasksDirOf(project))).filter(([, o]) => o.lifecycle === 'retired' && o.recoveryReady && o.reconciliationHistoryId).map(([id]) => id),
     projectPath: projectPathOf(project),
     integrationPath: integrationPathOf(project),
+    // Why the whole project is not scheduled (its Git root check failed), else null.
+    projectHold: projectHoldOf(project),
     columns: COLUMNS,
     archive: ARCHIVE,
     version: boardVersion(project),
@@ -629,6 +649,8 @@ async function pollProject(project) {
   projectPolls.add(project)
   try {
     const tasksDir = tasksDirOf(project)
+    if (projectHoldOf(project)) { broadcastBoard(project); return }
+    if (process.env.KANBAN_TEST && faultDue('poll')) throw new Error('injected poll fault')
     if (!controlState(project, CONFIG_PATH).paused) {
       try { await checkBoardAlerts({ project, tasksDir, inboxPath: process.env.KANBAN_ALERT_INBOX }) }
       catch (err) {
@@ -1822,6 +1844,36 @@ let pollersStarted = false
 const holdsReady = new Set() // projects whose file-lock holds this process has computed
 // One bad request must never take the board down: an async handler that throws is an
 // unhandled rejection, which kills node (a project folder that no longer exists did this).
+// Fault injection for the resilience test only (KANBAN_FAULT=poll,uncaught,unhandled under
+// KANBAN_TEST): each named fault fires once.
+const faultsFired = new Set()
+const faultDue = (name) => {
+  if (!String(process.env.KANBAN_FAULT || '').split(',').includes(name) || faultsFired.has(name)) return false
+  faultsFired.add(name)
+  return true
+}
+
+// A throw outside any request or poll (a timer, a stream callback, a rejected promise nobody
+// awaits) ended the process, dropping every project's polls and SSE tabs until the watchdog
+// relaunched it minutes later (12 crash markers in server.err.log, audit 2026-10-15 F6).
+// Log it, tell the Kanban Manager, keep serving. Tests alert into their own files, never the
+// real inbox or the board's alert state.
+const alertRoot = process.env.KANBAN_TEST ? join(tmpdir(), `kanban-test-alerts-${process.pid}`) : HERE
+const alertInbox = () => process.env.KANBAN_ALERT_INBOX || (process.env.KANBAN_TEST ? join(alertRoot, 'inbox.md') : undefined)
+const processFault = (kind) => (err) => {
+  const message = err?.stack || err?.message || String(err)
+  console.error(`${kind}: ${message}`)
+  notifyManagerException({ boardRoot: alertRoot, key: `process:${kind}`, title: `Board ${kind}`, detail: message.split(/\r?\n/)[0], code: 'PX', inbox: alertInbox() })
+    .catch(e => console.error(`${kind} inbox alert failed: ${e.message}`))
+}
+process.on('uncaughtException', processFault('uncaught exception'))
+process.on('unhandledRejection', processFault('unhandled rejection'))
+onBindingsAlert((message) => {
+  console.error(message)
+  notifyManagerException({ boardRoot: alertRoot, key: 'bindings', title: 'Board bindings unreadable', detail: `${message}; read as empty until the file parses again`, code: 'PX', inbox: alertInbox() })
+    .catch(e => console.error(`bindings inbox alert failed: ${e.message}`))
+})
+
 const serve = (req, res) => handleRequest(req, res).catch((err) => {
   console.error(`${req.method} ${req.url}: ${err.stack || err.message}`)
   if (res.headersSent) res.end()
@@ -1885,4 +1937,6 @@ server.on('error', (err) => {
 server.listen(port, '127.0.0.1', () => {
   startLan()
   startPollers()
+  if (process.env.KANBAN_TEST && faultDue('uncaught')) setTimeout(() => { throw new Error('injected uncaught fault') }, 200)
+  if (process.env.KANBAN_TEST && faultDue('unhandled')) setTimeout(() => Promise.reject(new Error('injected unhandled rejection')), 200)
 })

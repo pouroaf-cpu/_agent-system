@@ -14,18 +14,43 @@ function valid(data) {
     Object.values(data).every((binding) => binding && typeof binding === 'object' && typeof binding.pane_id === 'string')
 }
 
-export function readBindings(tasksDir) {
+// Where an unreadable state file is reported (the server routes it to the Kanban Manager
+// inbox; the CLI keeps stderr). One report per file until it parses again.
+let alert = (message) => console.error(message)
+export function onBindingsAlert(fn) { alert = fn }
+const alerted = new Set()
+
+function parse(path) {
+  const data = JSON.parse(readFileSync(path, 'utf8'))
+  if (!valid(data)) throw new Error('invalid binding shape')
+  return data
+}
+
+// A reader that meets the file mid-write (the writer renames a temp file, but a slow disk
+// showed readers a half-written file 3 times and killed the server, audit 2026-10-15 F6)
+// retries once after 50 ms. A file still unreadable then is reported once and read as empty,
+// so a board payload or a lookup never takes the process down. Empty means "all slots are
+// free", so the callers that decide slots or rewrite the file (liveBindings, mutate) read
+// strictly and stop instead: a live Builder's claim is never guessed away or overwritten.
+export function readBindings(tasksDir, { strict = false } = {}) {
   const path = file(tasksDir)
   if (!existsSync(path)) return {}
-  try {
-    const data = JSON.parse(readFileSync(path, 'utf8'))
-    if (!valid(data)) throw new Error('invalid binding shape')
-    return data
-  } catch (err) {
-    // Empty means "all slots are free", so guessing empty here can duplicate a
-    // live Builder and overwrite its claim. Stop until the state is repaired.
-    throw new Error(`cannot read bindings at ${path}: ${err.message}`)
+  let error
+  for (const wait of [0, 50]) {
+    if (wait) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait)
+    try {
+      const data = parse(path)
+      alerted.delete(path)
+      return data
+    } catch (err) { error = err }
   }
+  const message = `cannot read bindings at ${path}: ${error.message}`
+  if (strict) throw new Error(message)
+  if (!alerted.has(path)) {
+    alerted.add(path)
+    alert(message)
+  }
+  return {}
 }
 
 function write(tasksDir, data) {
@@ -94,7 +119,7 @@ export function withBoardLock(tasksDir, change) {
 
 function mutate(tasksDir, change) {
   return withBoardLock(tasksDir, () => {
-    const all = readBindings(tasksDir)
+    const all = readBindings(tasksDir, { strict: true })
     const result = change(all)
     write(tasksDir, all)
     return result ?? all
@@ -124,7 +149,7 @@ const stillSpawning = (b, now) =>
 // decided by herdr and never by this file alone.
 export function liveBindings(tasksDir, agents, now = Date.now()) {
   const live = new Set(agents.map((a) => a.pane_id))
-  const all = readBindings(tasksDir)
+  const all = readBindings(tasksDir, { strict: true })
   return Object.fromEntries(
     Object.entries(all).filter(([, b]) => live.has(b.pane_id) || stillSpawning(b, now))
   )
