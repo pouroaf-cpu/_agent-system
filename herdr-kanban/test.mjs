@@ -2304,9 +2304,9 @@ test('explicit operator pause survives a later circuit breaker reset', async () 
   const end = source.indexOf("  if (req.method === 'POST' && url.pathname === '/api/priority')", start)
   let response
   // The file on disk was hand-edited after startup; a settings save must keep that edit.
-  const onDisk = JSON.stringify({maxConcurrentAgents:0, projects:[], workflowLimits:{maxRunsPerStage:25}})
+  const onDisk = JSON.stringify({maxConcurrentAgents:0, projects:['Proof'], projectSettings:{Proof:{manager:{chat:'Proof chat'}}}, workflowLimits:{maxRunsPerStage:25}})
   const route = new Function('json', 'writeFileSync', 'readFileSync', 'resetBreaker', `
-    const CONFIG_PATH = 'unused'; const clients = []; const res = {}; const announcedBreakers = new Set();
+    const CONFIG_PATH = 'unused'; const clients = []; const res = {}; const announcedBreakers = new Set(); const activity = () => {};
     let config = {maxConcurrentAgents:0};
     return async (req, url) => { ${source.slice(start, end)} };
   `)((_res, _status, value) => { response = structuredClone(value) }, () => {}, () => onDisk, () => {})
@@ -2315,6 +2315,18 @@ test('explicit operator pause survives a later circuit breaker reset', async () 
   assert.equal(response.config.workflowLimits.maxRunsPerStage, 25)
   await route({method:'POST'}, {pathname:'/api/breaker-reset'})
   assert.equal(response.config.maxConcurrentAgents, 0)
+  // Audit 2026-10-15 F4: caps and a project's integration check are set live through the route, merged into the file's values.
+  const post = body => route({method:'POST', async *[Symbol.asyncIterator]() {yield JSON.stringify(body)}}, {pathname:'/api/config'})
+  await post({workflowLimits:{maxTokensPerCard:12000000, maxStepsPerRun:60}})
+  assert.deepEqual(response.config.workflowLimits, {maxRunsPerStage:25, maxTokensPerCard:12000000, maxStepsPerRun:60})
+  await post({workflowLimits:{maxStepsPerRun:-1}})
+  assert.deepEqual([response.ok, /maxStepsPerRun/.test(response.error)], [false, true])
+  await post({projectSettings:{Proof:{integrationCheck:'node herdr-kanban/run-tests.mjs --changed master'}}})
+  assert.deepEqual(response.config.projectSettings.Proof, {manager:{chat:'Proof chat'}, integrationCheck:'node herdr-kanban/run-tests.mjs --changed master'})
+  await post({projectSettings:{Other:{integrationCheck:'x'}}})
+  assert.deepEqual([response.ok, response.error], [false, 'unknown project Other'])
+  await post({projectSettings:{Proof:{manager:{inbox:'x'}}}})
+  assert.equal(response.ok, false, 'only integrationCheck is settable per project')
 })
 
 test('finished reviewer stops blocking the next batch after existing done grace', () => {

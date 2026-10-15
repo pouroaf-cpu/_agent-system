@@ -159,6 +159,19 @@ export function liveRunTokens(run, { sessionId, root } = {}) {
   return delta.status === 'ok' ? delta.counters.total : null
 }
 
+// Model turns an open Claude run has taken so far (the same count runSteps records at its
+// finish); null when unknown, as for a Codex transcript. Audit 2026-10-15 F4 step cap.
+export function liveRunSteps(run, { sessionId, root } = {}) {
+  const id = run?.sessionId || sessionId
+  if (!id || run.finish) return null
+  const events = sessionEvents(id, { root })
+  const rows = events.filter((r) => r.kind === 'token_count' && r.steps != null)
+  if (!rows.length) return null
+  const startOrdinal = Number.isFinite(run.start?.ordinal) && !run.start?.missing ? run.start.ordinal : startBefore(run.start?.at, events).ordinal
+  const stepsAt = (n) => rows.filter((r) => r.ordinal <= n).at(-1)?.steps ?? 0
+  return rows.at(-1).steps - stepsAt(startOrdinal ?? -1)
+}
+
 function latestEventOrdinal(sessionId, { root } = {}) {
   return sessionEvents(sessionId, { root }).at(-1)?.ordinal ?? null
 }

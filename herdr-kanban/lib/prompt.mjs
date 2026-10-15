@@ -192,6 +192,18 @@ export function plannerPrompt({ cards, projectPath, boardRoot, tasksDir, manager
   )
 }
 
+// Audit 2026-10-15 F4: a correction sent into a Planner's own session (resume, prompt cache
+// warm) carries only what is outstanding, never the full brief again: the session already
+// holds the card, the role files and the plan. One hand-off, then stop.
+export function plannerReentryPrompt({ card, boardRoot, tasksDir, plannerAssignment, engine, note }) {
+  const cmd = hkb(boardRoot, tasksDir) + (plannerAssignment ? ` --planner-assignment ${plannerAssignment}` : '')
+  return oneLine(
+    `Re-entry for ${card.id}: your hand-off for this card was not accepted. Outstanding: ${note || 'read the card\'s Current feedback section for the failing items'}.`,
+    shellRule(engine),
+    `Fix only those items in the card at ${psLiteral(card.path)}; do not re-read the role files, re-plan what already passed, implement or delegate. Then hand off again with exactly one ${cmd} <verb> ${card.id} [args] command (move planned, issue, owner, covered, wait or split, as before) and stop immediately after it succeeds.`
+  )
+}
+
 // The Finder (HK29) only reads. Its list is the Planner's first read, so it prints only the list
 // and, since HK40, one final Size line the board uses to hold a card too big for one plan.
 export function finderPrompt({ card, projectPath }) {

@@ -10,7 +10,7 @@ import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, as
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
-import { agentName, plannerPrompt, finderPrompt } from './prompt.mjs'
+import { agentName, plannerPrompt, plannerReentryPrompt, finderPrompt } from './prompt.mjs'
 import { agentRole } from './ids.mjs'
 import { recordUsageStart, recordUsageFinish } from './request-usage.mjs'
 import { recoveryState } from './recovery.mjs'
@@ -18,7 +18,7 @@ import { controlState, assertPromptAllowed, projectEnvironment } from './project
 import { cardRunContext, assertCardRunSelection, stopCardRun, bindCardRunAssignment } from './card-run.mjs'
 import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput, askManager } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput, askManager, sectionBody } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
@@ -282,7 +282,14 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       if (choice.message) activityLog({ tasksDir, project, cardId: card.id, event: 'planner-start', message: choice.message, now })
       return { owner, agent: (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId) }
     }
-    const submit = async (card, owner, agent, startNote) => {
+    // What a resumed Planner still owes: the Builder's or board's correction note, else the
+    // card's Current feedback (the plan check's or a return's failing items), cut to one note.
+    const outstanding = (card) => {
+      const note = readWorkflow(tasksDir)[card.id]?.correction?.note
+        || sectionBody(readFileSync(card.path, 'utf8'), 'Current feedback')
+      return note ? String(note).replace(/\s+/g, ' ').trim().slice(0, 1500) : ''
+    }
+    const submit = async (card, owner, agent, startNote, { reentry = false } = {}) => {
       assertCardRunSelection(project, [card.id], 'planner')
       assertPlannerAssignment(tasksDir, card.id, owner)
       // Launch can take a minute; an operator may have moved the card meanwhile.
@@ -296,7 +303,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       save(tasksDir, owners)
       assertPlannerAssignment(tasksDir, card.id, owner)
       const plannerKind = owner.engine || plannerEngine(card)
-      await deliver(owner.paneId, plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: owner.amendNote, envFile: plannerEnvFile(project) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
+      if (reentry) appendHistory(tasksDir, card.id, { event: 'planner-reentry', stage: 'planning', pane: owner.paneId })
+      await deliver(owner.paneId, reentry ? plannerReentryPrompt({ card, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, note: outstanding(card) }) : plannerPrompt({ cards: [card], projectPath, boardRoot, tasksDir, plannerAssignment: owner.assignmentId, engine: plannerKind, amend: owner.amendNote, envFile: plannerEnvFile(project) }) + ' Plan only this card; do not delegate. For a returned card, resolve the recorded blocker before requeueing. If a check needs dependencies or a local server, supply a concrete setup/start command for the isolated card checkout and its port; do not assume localhost is running or substitute another checkout. Preserve the acceptance criteria. Stop after the handoff; the board sends any correction in a later turn.' + (escalation(card) ? ' Escalation: a Planner could not make this card build-ready; read its blocker in Current feedback and the card history, solve the blocker rather than re-confirm it.' : '') + (owner.reconciliationHistoryId ? ` Recovery provenance: ${tasksDir.replaceAll('\\', '/')}/.history/${card.id}.jsonl entry ${owner.reconciliationHistoryId}. Preserve saved work, commits, locks and counters. Resolve scope decisions explicitly; do not implement, integrate, or claim acceptance. This recovery run stops after planning for inspection.` : ''), session, null, { engine: plannerKind, force: isHeadless(owner.paneId) }).catch(error => failStart(card, owner, error))
       const after = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === owner.paneId)
       if (!isHeadless(owner.paneId) && agent?.state_change_seq != null && after?.state_change_seq === agent.state_change_seq && ['idle', 'done'].includes(after.agent_status)) {
         throw new Error('planner prompt produced no observed state change')
@@ -636,7 +644,8 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         }
       }
       try {
-        await submit(card, owner, agent, startNote)
+        // Audit 2026-10-15 F4: a resumed session gets the short re-entry brief, not the full prompt.
+        await submit(card, owner, agent, startNote, { reentry: !!resume && !spawnedNewAgent })
       } catch (error) {
         if (error.paused || error.startFailed) throw error // failStart already closed the pane and counted it
         if (cardRunContext()) { stopCardRun(project, card.id, error.message); throw error }

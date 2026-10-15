@@ -1562,6 +1562,27 @@ const handleRequest = async (req, res) => {
         config.agentSettings.global = validateSettingsPatch(config, settings)
         if ('tinyEnabled' in settings) config.agentSettings.tinyEnabled = settings.tinyEnabled
       }
+      // Audit 2026-10-15 F4: caps and a project's integration check are set live here, so the
+      // operator's config changes never go through a commit of board.config.json.
+      if ('workflowLimits' in patch) {
+        const limits = patch.workflowLimits
+        if (!limits || typeof limits !== 'object' || Array.isArray(limits)) throw new Error('workflowLimits must be an object of caps')
+        for (const [key, value] of Object.entries(limits)) {
+          if (value !== null && !(Number.isFinite(value) && value > 0)) throw new Error(`workflowLimits.${key} must be a number above 0, or null to turn it off`)
+        }
+        config.workflowLimits = { ...(config.workflowLimits || {}), ...limits }
+      }
+      if ('projectSettings' in patch) {
+        const settings = patch.projectSettings
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('projectSettings must be an object keyed by project')
+        for (const [project, entry] of Object.entries(settings)) {
+          if (!(config.projects || []).includes(project)) throw new Error(`unknown project ${project}`)
+          if (!entry || typeof entry !== 'object' || Object.keys(entry).some(k => k !== 'integrationCheck')) throw new Error('projectSettings accepts only integrationCheck per project')
+          if (entry.integrationCheck !== null && typeof entry.integrationCheck !== 'string') throw new Error('integrationCheck must be a command string, or null for none')
+          config.projectSettings ||= {}
+          config.projectSettings[project] = { ...(config.projectSettings[project] || {}), integrationCheck: entry.integrationCheck }
+        }
+      }
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
       json(res, 200, { ok: true, config })
     } catch (err) {

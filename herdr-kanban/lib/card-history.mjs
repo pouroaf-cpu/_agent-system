@@ -51,7 +51,7 @@ export function repeatedFinding(tasksDir, finding, now = Date.now()) {
 // A handoff must keep every required section that had content in the board's last
 // saved copy of the card.
 const REQUIRED_SECTIONS = ['Approved brief', 'Files', 'Implementation plan', 'Acceptance criteria']
-const sectionBody = (text, name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
+export const sectionBody = (text, name) => (text.match(new RegExp(`^## ${name}\\s*\\r?\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm'))?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
 function lastSavedText(tasksDir, id) {
   const path = historyPath(tasksDir, id)
   if (!existsSync(path)) return null
