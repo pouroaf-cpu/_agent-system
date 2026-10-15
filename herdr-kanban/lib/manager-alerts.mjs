@@ -67,6 +67,12 @@ export async function notifyManagerException({
   }
 }
 
+// One Kanban Manager line per integration hold (2026-10-16: the same held card reached the Manager
+// twice). Keyed by card, so a second card's hold is not swallowed by the first's; callers pass
+// cooldownMs: Infinity so a standing hold is never re-sent; resolveManagerException with the same key
+// once the card is no longer held lets its next hold alert at once.
+export const holdAlertKey = (alertKey, project, id) => `${alertKey}:${project}:${id}`
+
 // The condition is over (herdr answers again): the next occurrence alerts at once.
 export function resolveManagerException(boardRoot, key) {
   const file = alertStatePath(boardRoot)

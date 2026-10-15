@@ -15,7 +15,7 @@ import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
 import { realertDecisionWaits } from './lib/decision-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
-import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
+import { holdAlertKey, isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
 import { tokenWarnings } from './lib/workflow-limits.mjs'
 import { enforceRunCaps } from './lib/run-cap.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -308,6 +308,8 @@ function logIntegrationResults(project, results, waiting = {}) {
   let dirty = false
   for (const result of results) {
     if (!['integrated', 'cleaned'].includes(result.status)) waiting[result.id] = result.reason
+    // A card no longer held for the Manager re-arms its hold alert (see holdAlertKey).
+    if (!result.alert) for (const alertKey of ['integration-check:base', 'integration-check:config']) resolveManagerException(HERE, holdAlertKey(alertKey, project, result.id))
     if (result.status === 'integrated') {
       activity(project, result.id, 'integrated', `commit ${result.commit}${result.cleanupPending ? '; cleanup deferred until pane releases the directory' : '; card worktree cleaned'}`)
       try {
@@ -341,7 +343,7 @@ function logIntegrationResults(project, results, waiting = {}) {
       lastActivityHold.set(key, result.reason)
       // Audit 2026-10-15 F3: a check that cannot run, or fails on master without the card, is the
       // Kanban Manager's (one inbox line per key within the alert cooldown), never a Builder's.
-      if (result.alert) notifyManagerException({ boardRoot: HERE, key: `${result.alert.key}:${project}`, title: `${project}: ${result.alert.title}`, detail: result.alert.detail, code: 'HO' })
+      if (result.alert) notifyManagerException({ boardRoot: HERE, key: holdAlertKey(result.alert.key, project, result.id), cooldownMs: Infinity, title: `${project}: ${result.alert.title}`, detail: result.alert.detail, code: 'HO' })
         .catch(err => console.error(`integration hold inbox alert failed: ${err.message}`))
     }
   }
