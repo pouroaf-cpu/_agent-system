@@ -77,7 +77,7 @@ test('headless Builder run compacts at 100000 tokens', async () => {
   let id
   try {
     id = (await api.tabCreate({ cwd: root, label: 'Build', session: 'project' })).root_pane.pane_id
-    await api.agentStart({ name: 'b-t-01', paneId: id, engine: 'codex', model: 'gpt-6-luna', session: 'project', browser: false })
+    await api.agentStart({ name: 'b-t-01', paneId: id, engine: 'claude', model: 'claude-sonnet-5-5', session: 'project', browser: false })
     await api.agentPrompt(id, 'Build', { session: 'project' })
     const text = await until(async () => { const read = await api.paneRead(id); return /agent_message/.test(read) && read })
     assert.match(text, /"text":"100000"/)

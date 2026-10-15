@@ -9,7 +9,7 @@ const starts = [], claims = []
 mock.module('./lib/project-key.mjs', { namedExports: { sessionOf: p => p.toLowerCase() } })
 mock.module('./lib/board-log.mjs', { namedExports: { boardLog: () => {} } })
 mock.module('./lib/herdr.mjs', { namedExports: {
-  approvedManagedModel: () => ['gpt-6.1-sol', 'gpt-6-luna', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5'],
+  approvedManagedModel: () => ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-haiku-4-5'],
   agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
   tabCreate: async () => ({ root_pane: { pane_id: 'r1' } }), agentStart: async args => { starts.push(args) },
   agentList: async () => [{ pane_id: 'r1', agent_status: 'working' }], agentsForProject: async () => [],
@@ -36,23 +36,27 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   const configPath = join(root, 'board.config.json'), previous = process.env.KANBAN_CONFIG
   process.env.KANBAN_CONFIG = configPath
   t.after(() => { if (previous === undefined) delete process.env.KANBAN_CONFIG; else process.env.KANBAN_CONFIG = previous; rmSync(root, { recursive: true, force: true }) })
-  const primary = { engine: 'codex', model: 'gpt-6-luna', reasoning: 'high' }
   const fallback = { engine: 'claude', model: 'claude-haiku-4-5', reasoning: 'medium' }
-  const patch = Object.fromEntries(['planning', 'working', 'builder-easy', 'builder-medium', 'review'].map(role => [role, { ...primary, fallback }]))
-  const config = { projectsRoot: root, projects: [], maxConcurrentAgents: 1, agentPollMs: 3600000, engine: 'codex', models: { working: primary.model } }
+  const sonnetPrimary = { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'high' }
+  const reviewPrimary = { engine: 'claude', model: 'claude-haiku-5-5', reasoning: 'high' }
+  const patch = { planning: { ...sonnetPrimary, fallback }, working: { ...sonnetPrimary, fallback }, 'builder-easy': { ...sonnetPrimary, fallback }, 'builder-medium': { ...sonnetPrimary, fallback }, review: { ...reviewPrimary, fallback } }
+  const config = { projectsRoot: root, projects: [], maxConcurrentAgents: 1, agentPollMs: 3600000, engine: 'claude', models: { working: sonnetPrimary.model } }
   config.agentSettings = { global: validateSettingsPatch(config, patch) }
   writeFileSync(configPath, JSON.stringify(config))
   assert.deepEqual(globalSettings(config).planning.fallback, fallback)
   assert.deepEqual(validateSettingsPatch(config, { working: { reasoning: 'low' } }).working.fallback, fallback)
   assert.equal(validateSettingsPatch(config, { working: { fallback: null } }).working.fallback, undefined)
-  for (const invalid of [{ ...fallback, engine: 'unknown' }, { ...fallback, model: primary.model }, { ...fallback, reasoning: 'bogus' }, { ...fallback, model: 'claude-sonnet-4-6' }]) {
+  for (const invalid of [{ ...fallback, engine: 'codex', model: 'gpt-6-luna' }, { ...fallback, engine: 'unknown' }, { ...fallback, reasoning: 'bogus' }, { ...fallback, model: 'claude-sonnet-4-6' }]) {
     assert.throws(() => validateSettingsPatch(config, { working: { fallback: invalid } }))
   }
 
   const now = Date.now(), until = now + 3600000
-  for (const scope of ['engine', 'model']) for (const state of ['primary blocked', 'both blocked', 'expired']) for (const role of ['planning', 'working', 'trivial', 'review']) {
+  // Claude only: primary and fallback are both Claude, so an account block stops both (hold), a model cap stops only the primary.
+  for (const scope of ['model']) for (const state of ['primary blocked', 'both blocked', 'account blocked', 'expired']) for (const role of ['planning', 'working', 'trivial', 'review']) {
+    const primary = role === 'review' ? reviewPrimary : sonnetPrimary
     writeFileSync(join(root, '.engine-quota.json'), '{}')
-    blockEngine(root, quotaKey('codex', scope === 'model' ? primary.model : null), until, now)
+    if (state === 'account blocked') blockEngine(root, 'claude', until, now)
+    else blockEngine(root, quotaKey('claude', primary.model), until, now)
     if (state === 'both blocked') blockEngine(root, 'claude', until, now)
     const clock = state === 'expired' ? until + 1 : now
     const tasksDir = join(root, `${scope}-${state}-${role}`, 'TASKS')
@@ -69,7 +73,7 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
     const options = { project: `${scope}-${state}-${role}`, projectPath: join(tasksDir, '..'), tasksDir, boardRoot: root, assignmentForCard: assigned, now: clock }
     starts.length = 0; claims.length = 0
     const expected = state === 'expired' ? primary : fallback
-    const shouldHold = state === 'both blocked'
+    const shouldHold = state === 'both blocked' || state === 'account blocked'
     const choice = selectQuotaAssignment(root, assigned(card, role), clock)
     const holds = quotaHolds(root, { [card.column]: [card] }, () => quotaKey(choice.assignment.engine, choice.assignment.model), clock)
     assert.equal(Boolean(holds[card.id]), shouldHold, 'board holds match launch availability')
@@ -99,17 +103,16 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
     if (!shouldHold) {
       assert.equal(starts[0].model, expected.model)
       assert.equal(starts[0].engine.kind, expected.engine)
-      if (expected.engine === 'codex') assert.deepEqual(starts[0].engine.reasoningArgs, ['-c', 'model_reasoning_effort="high"'])
       if (state === 'primary blocked') assert.ok(readFileSync(join(tasksDir, 'activity.log'), 'utf8').includes(`started on fallback ${fallback.model}: ${primary.model} usage limit until ${new Date(until).toISOString()}`))
     }
     assert.deepEqual(globalSettings(config).planning, patch.planning, 'launch never rewrites primary')
   }
   // A model cap can use another model on the same engine; an account block cannot.
   writeFileSync(join(root, '.engine-quota.json'), '{}')
-  blockEngine(root, quotaKey('codex', primary.model), until, now)
-  const sameEngine = { ...primary, fallback: { ...primary, model: 'gpt-6.1-sol' } }
-  assert.equal(selectQuotaAssignment(root, sameEngine, now).assignment.model, 'gpt-6.1-sol')
-  blockEngine(root, 'codex', until, now)
+  blockEngine(root, quotaKey('claude', sonnetPrimary.model), until, now)
+  const sameEngine = { ...sonnetPrimary, fallback: { ...sonnetPrimary, model: 'claude-haiku-4-5' } }
+  assert.equal(selectQuotaAssignment(root, sameEngine, now).assignment.model, 'claude-haiku-4-5')
+  blockEngine(root, 'claude', until, now)
   assert.ok(selectQuotaAssignment(root, sameEngine, now).hold)
 
   // I1051/I1054 (2026-10-11): Codex blocked for weeks, its Claude fallback hit a short
@@ -117,10 +120,10 @@ test('role fallbacks survive config/API validation, launch on quota, hold if bot
   // near reset, not Codex's much later one.
   writeFileSync(join(root, '.engine-quota.json'), '{}')
   const farOff = now + 30 * 24 * 3600000, soon = now + 2 * 3600000
-  blockEngine(root, 'codex', farOff, now)
+  blockEngine(root, quotaKey('claude', sonnetPrimary.model), farOff, now)
   blockEngine(root, 'claude', soon, now)
-  const choice = selectQuotaAssignment(root, { ...primary, fallback }, now)
-  assert.equal(choice.assignment.engine, 'claude')
+  const choice = selectQuotaAssignment(root, { ...sonnetPrimary, fallback }, now)
+  assert.equal(choice.assignment.model, fallback.model)
   assert.equal(choice.hold, `Claude usage limit; retrying at ${new Date(soon).toISOString()}`)
 
   // Exercise the real config route on a private port and config; no live board access.

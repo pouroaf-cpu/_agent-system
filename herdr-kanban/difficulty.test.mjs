@@ -38,15 +38,15 @@ test('difficulty defaults, legacy cards, model settings, fallbacks and local opt
   }
   assert.equal(assignmentFor({}, { difficulty: 'tiny' }, 'working').model, 'claude-sonnet-5-5')
   assert.equal(assignmentFor({}, { trivial: true }, 'working').reasoning, 'medium')
+  // Claude only (operator, 2026-10-16): a saved Codex fallback or Codex qwen Builder is ignored, so the stage keeps its Claude setting.
   const disabledFallback = assignmentFor({ agentSettings: { global: { 'builder-medium': { fallback: { engine: 'codex', model: 'qwen3-coder', reasoning: 'none' } } } } }, { difficulty: 'medium' }, 'working')
-  assert.equal(disabledFallback.fallback.model, 'claude-sonnet-5-5', 'local fallbacks also respect opt-in')
+  assert.equal(disabledFallback.fallback, undefined, 'a saved Codex fallback is ignored')
+  assert.equal(disabledFallback.model, 'claude-sonnet-5-5')
   const setting = assignmentFor({ agentSettings: { tinyEnabled: true, global: { 'builder-tiny': { engine: 'codex', model: 'qwen3-coder', reasoning: 'none' } } } }, { difficulty: 'tiny' }, 'working')
-  const args = launchArgs({ name: 'b-t-1', model: setting.model, engine: engineForAssignment(setting), browser: false }, 'task')
-  assert(args.includes('exec')); assert(args.includes('--oss'))
-  assert.equal(args[args.indexOf('--local-provider') + 1], 'ollama')
-  assert.equal(args[args.indexOf('--model') + 1], 'qwen3-coder')
-  assert(!args.some(a => a.includes('model_reasoning_effort')))
-  assert(launchArgs({ name: 'b-t-1', model: setting.model, engine: engineForAssignment(setting) }, 'correction', 'saved').includes('resume'))
+  assert.equal(setting.engine, 'claude')
+  assert.equal(setting.model, 'claude-sonnet-5-5')
+  assert.equal(setting.reasoning, 'medium')
+
 })
 
 test('dispatch records effective difficulty and usage before a headless Builder launch', async t => {

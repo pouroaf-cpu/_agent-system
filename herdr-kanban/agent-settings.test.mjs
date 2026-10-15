@@ -19,7 +19,8 @@ test('settings validate supported combinations and preserve legacy defaults', ()
   assert.equal(globalSettings(config)['builder-easy'].reasoning, 'medium')
   assert.equal(validateSettingsPatch(config, { working: { engine: 'claude', model: 'claude-haiku-4-5', reasoning: 'high' } }).working.engine, 'claude')
   assert.throws(() => validateSettingsPatch(config, { review: { engine: 'claude', model: 'gpt-5.6-luna', reasoning: 'high' } }), /not supported/i)
-  assert.throws(() => validateSettingsPatch(config, { review: { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'bogus' } }), /reasoning/i)
+  assert.throws(() => validateSettingsPatch(config, { review: { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'high' } }), /unsupported engine codex/)
+  assert.throws(() => validateSettingsPatch(config, { review: { engine: 'claude', model: 'claude-haiku-4-5', reasoning: 'bogus' } }), /reasoning/i)
 })
 
 test('card override persists and wins only for the selected stage', t => {
@@ -47,7 +48,7 @@ test('AC1: no default names Codex or carries a fallback, even when the legacy fi
     const settings = globalSettings(cfg)
     for (const stage of STAGES) {
       assert.equal(settings[stage].engine, 'claude', stage)
-      assert.ok(!SUPPORTED.codex.models.includes(settings[stage].model), stage)
+      assert.equal(settings[stage].model.startsWith('gpt-'), false, stage)
       assert.equal('fallback' in settings[stage], false, stage)
     }
     for (const difficulty of ['tiny', 'easy', 'medium', 'hard']) {
@@ -56,6 +57,25 @@ test('AC1: no default names Codex or carries a fallback, even when the legacy fi
       assert.equal('fallback' in assigned, false, difficulty)
     }
   }
+})
+
+// Operator 2026-10-16: Claude only. A saved or card value naming Codex or a GPT model is ignored, so the
+// stage keeps its Claude setting, and no approved launch model is GPT for any role (BOARD_MODELS).
+test('Claude only: saved and card GPT or Codex values are ignored; no role approves a GPT model', t => {
+  assert.equal(SUPPORTED.codex, undefined)
+  const saved = { global: { working: { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'high' }, review: { engine: 'claude', model: 'gpt-5.6-luna', reasoning: 'high' } } }
+  const withSaved = { ...config, agentSettings: saved }
+  assert.equal(globalSettings(withSaved).working.engine, 'claude')
+  assert.equal(globalSettings(withSaved).review.model.startsWith('claude-'), true)
+  const root = mkdtempSync(join(tmpdir(), 'agent-retired-')), tasks = join(root, 'TASKS'), planning = join(tasks, 'planning')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(planning, { recursive: true })
+  writeFileSync(join(planning, 'T-2.md'), '# T-2 retired\n**Workflow:** card-owned\n## Files\n- \`app.mjs\`\n')
+  const card = { ...findCard(tasks, 'T-2'), agentSettings: { working: { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'high' } } }
+  assert.equal(assignmentFor(withSaved, card, 'working').engine, 'claude')
+  const overridden = { ...withSaved, agentSettings: { ...saved, cardOverrides: { 'T-2': { working: { model: 'gpt-6-luna' } } } } }
+  assert.equal(assignmentFor(overridden, { id: 'T-2', difficulty: 'easy' }, 'working').model, 'claude-sonnet-5-5')
+  assert.throws(() => setCardOverride(tasks, 'T-2', 'working', { engine: 'codex', model: 'gpt-5.6-luna', reasoning: 'high' }, config), /unsupported engine codex/)
 })
 
 test('AC2: an absent or null fallback stays none after a config write and re-read', t => {

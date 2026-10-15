@@ -9,11 +9,8 @@ import { approvedManagedModel } from './agent-launch.mjs'
 
 export const STAGES = ['finder', 'planning', 'plancheck', 'working', 'review', ...DIFFICULTIES.map(d => `builder-${d}`)]
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+// Claude only (operator, 2026-10-16): Codex and GPT models are not offered, saved or launched for any board role.
 export const SUPPORTED = {
-  codex: {
-    models: ['gpt-5.6-luna', 'qwen3-coder', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-6-astra'],
-    reasoning: REASONING,
-  },
   claude: {
     models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-5-5', 'claude-haiku-4-5'],
     reasoning: REASONING,
@@ -27,6 +24,9 @@ const builderDefaults = {
   medium: { engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'medium' },
   hard: { engine: 'claude', model: 'claude-opus-5-5', reasoning: 'high' },
 }
+// A saved or card value that names a retired engine or model is ignored, so its stage keeps the Claude setting.
+const retired = value => !!value && ((value.engine !== undefined && value.engine !== 'claude') || (value.model !== undefined && !SUPPORTED.claude.models.includes(value.model)) || (value.fallback != null && retired(value.fallback)))
+const usable = value => retired(value) ? null : value
 function localSetting(setting, enabled) {
   if (!enabled && setting.model === 'qwen3-coder') return builderDefaults.easy
   return { ...setting, ...(setting.fallback ? { fallback: localSetting(setting.fallback, enabled) } : {}) }
@@ -60,7 +60,7 @@ function legacySetting(config, stage) {
 
 export function globalSettings(config) {
   const saved = config.agentSettings?.global || {}
-  return Object.fromEntries(STAGES.map(stage => [stage, validateAssignment({ ...legacySetting(config, stage), ...saved[stage] }, `global ${stage}`)]))
+  return Object.fromEntries(STAGES.map(stage => [stage, validateAssignment({ ...legacySetting(config, stage), ...usable(saved[stage]) }, `global ${stage}`)]))
 }
 
 // The launch guard (agent-launch.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
@@ -91,7 +91,7 @@ export function assignmentFor(config, card, stage) {
   if (stage === 'trivial') stage = 'working' // legacy callers
   if (stage === 'working' && builder) stage = `builder-${difficulty === 'tiny' && config.agentSettings?.tinyEnabled !== true ? 'easy' : difficulty}`
   const global = globalSettings(config)[stage]
-  const override = card?.agentSettings?.[stage] || config.agentSettings?.cardOverrides?.[card?.id]?.[stage]
+  const override = usable(card?.agentSettings?.[stage]) || usable(config.agentSettings?.cardOverrides?.[card?.id]?.[stage])
   const setting = validateAssignment({ ...global, ...(override || {}) }, `${card?.id || 'card'} ${stage}`)
   const selected = localSetting(setting, config.agentSettings?.tinyEnabled === true)
   return builder ? { ...selected, difficulty: setting.model === 'qwen3-coder' && selected.model !== setting.model ? 'easy' : stage.slice(8) } : selected
@@ -117,7 +117,7 @@ const fields = ['engine', 'model', 'reasoning']
 export function setCardOverride(tasksDir, cardId, stage, patch, config) {
   if (!STAGES.includes(stage)) throw new Error(`unsupported settings stage ${stage}`)
   const card = findCard(tasksDir, cardId)
-  const current = card.agentSettings?.[stage] || {}
+  const current = usable(card.agentSettings?.[stage]) || {}
   const next = assertLaunchable(stage, validateAssignment({ ...assignmentFor(config, card, stage), ...current, ...patch }, `${card.id} ${stage}`))
   let text = readFileSync(card.path, 'utf8')
   for (const field of fields) {

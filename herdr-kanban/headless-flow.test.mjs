@@ -31,7 +31,7 @@ test('real Reviewer and plan-check dispatch use headless transport with no herdr
     const root=${JSON.stringify(root)},repo=${JSON.stringify(repo)},tasksDir=${JSON.stringify(tasks)}
     Object.assign(headless,createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]}))
     const inventory=async()=>[{project:'Proof',tasksDir,known:true,agents:await agentList('proof')}]
-    const common={project:'Proof',projectPath:repo,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},reviewRoot:root,inventory,model:'gpt-6-luna',engine:'codex',assignmentForCard:()=>({engine:'codex',model:'gpt-6-luna',reasoning:'low'})}
+    const common={project:'Proof',projectPath:repo,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},reviewRoot:root,inventory,model:'claude-haiku-4-5',engine:'claude',assignmentForCard:()=>({engine:'claude',model:'claude-haiku-4-5',reasoning:'low'})}
     const review=await spawnReviewer({...common,cardIds:['T-1']})
     const check=await spawnReviewer({...common,cardIds:['T-2'],planCheck:true})
     assert.match(review.pane_id,/^headless-/); assert.match(check.pane_id,/^headless-/)
@@ -44,8 +44,8 @@ test('real Reviewer and plan-check dispatch use headless transport with no herdr
     const event=output.split('\\n').map(line=>{try{return JSON.parse(line)}catch{return null}}).find(e=>e?.item?.type==='agent_message')
     const data=JSON.parse(event.item.text)
     assert.equal(data.cwd,claim.snapshot.path)
-    assert(data.argv.at(-1).includes(claim.id),'full claim-owned prompt is passed at launch')
-    assert(!data.argv.at(-1).startsWith('Read '),'no typed delivery pointer')
+    assert(data.argv[data.argv.indexOf('-p')+1].includes(claim.id),'full claim-owned prompt is passed at launch')
+    assert(!data.argv[data.argv.indexOf('-p')+1].startsWith('Read '),'no typed delivery pointer')
     assert.equal(finishPlanCheck({tasksDir,cardId:'T-2',reviewRoot:root,claimId:claim.id,verdict:'PASS',evidence:'assertion failed; app.mjs fixture verified'}).to,'queue')
     assert.equal(findCard(tasksDir,'T-2').column,'queue')
     await paneClose(review.pane_id); await paneClose(check.pane_id)

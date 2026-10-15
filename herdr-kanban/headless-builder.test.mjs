@@ -71,7 +71,7 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     // The session-end worktree sweep (session-end-servers.test.mjs) costs seconds per session; this flow does not need it.
     const noSweep=h=>({...h,agentStart:o=>h.agentStart({...o,worktreePath:undefined})})
     Object.assign(headless,noSweep(createHeadless({root:root+'/.agents',command:()=>[process.execPath,${JSON.stringify(fake)}]})))
-    const common={project:'Proof',projectPath:repo,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},max:1,engine:{kind:'codex',reasoningArgs:['-c','model_reasoning_effort="low"']},model:'gpt-6.1-sol',gitSettings:{worktreesRoot:root+'/worktrees'}}
+    const common={project:'Proof',projectPath:repo,tasksDir,boardRoot:${JSON.stringify(import.meta.dirname)},max:1,engine:{kind:'claude'},model:'claude-sonnet-5-5',gitSettings:{worktreesRoot:root+'/worktrees'}}
     const put=id=>writeFileSync(tasksDir+'/queue/'+id+'.md','# '+id+' — proof\\n**Workspace:** app\\n## Files\\n- \\x60result.mjs\\x60 result\\n## Acceptance criteria\\nResult is true\\n')
     const waitDone=async id=>{for(let n=0;n<200;n++){const rows=await agentList('proof'),a=rows.find(a=>a.pane_id===id);if(a?.agent_status==='done'&&a.exitCode!=null)return rows;await new Promise(r=>setTimeout(r,50))}throw Error('Timed out')}
     const turns=async id=>(await paneRead(id)).split('\\n').flatMap(line=>{try{const e=JSON.parse(line);return e.argv?[e]:[]}catch{return []}})
@@ -87,9 +87,9 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
     const launch=(await turns(first.pane_id))[0], entry=readWorktrees(tasksDir)['T-1']
     assert.equal(launch.cwd,entry.workspacePath)
     assert.equal(first.workspace_path,entry.workspacePath)
-    assert(launch.argv.at(-1).includes('done T-1'))
-    assert(!launch.argv.at(-1).includes('.deliveries'))
-    assert(launch.argv.includes('gpt-6.1-sol')); assert(launch.argv.includes('model_reasoning_effort="low"'))
+    assert(launch.argv[launch.argv.indexOf('-p')+1].includes('done T-1'))
+    assert(!launch.argv[launch.argv.indexOf('-p')+1].includes('.deliveries'))
+    assert(launch.argv.includes('claude-sonnet-5-5'))
     assert.equal(readDelivery('proof',first.pane_id).status,'confirmed')
     assert.equal(readUsage(tasksDir).runs[Object.keys(readUsage(tasksDir).runs)[0]].paneId,first.pane_id)
     assert.equal(readUsage(tasksDir).runs[Object.keys(readUsage(tasksDir).runs)[0]].sessionId,first.agent_session)
@@ -102,7 +102,7 @@ test('headless Builders bind their worktree, resume corrections, and recover exi
       assert.equal(readBindings(tasksDir)['T-1'].pane_id,first.pane_id)
       await waitDone(first.pane_id)
       const turn=(await turns(first.pane_id))[n+1]
-      assert(turn.argv.includes('resume'));assert(turn.argv.includes(first.agent_session));assert.equal(turn.cwd,entry.workspacePath)
+      assert(turn.argv.includes('--resume'));assert(turn.argv.includes(first.agent_session));assert.equal(turn.cwd,entry.workspacePath)
     }
     const before=findCard(tasksDir,'T-1').buildAttempts
     // Restart after spawn acknowledgement, before delivery confirmation was saved.
