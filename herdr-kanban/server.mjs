@@ -54,6 +54,7 @@ const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
 const { applyDiskReading, pruneAgentLogs, DISK_SAMPLE_MS, DISK_RESUME_GB } = await import('./lib/disk-guard.mjs')
+const { sweepArchivedEvidence } = await import('./lib/evidence-sweep.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
@@ -207,6 +208,18 @@ function checkDisk(now = Date.now()) {
       const pruned = pruneAgentLogs({ root: join(HERE, '.agents'), now })
       if (pruned.removed) boardLog(`headless logs pruned: ${pruned.removed} file(s), ${(pruned.bytes / 1e6).toFixed(0)} MB`)
     } catch (err) { console.error(`headless log prune failed: ${err.message}`) }
+    // Archived-card evidence: off unless board.config.json sets evidenceSweep or evidenceKeepDays (days, 0 = no age rule).
+    // Live and audit cards are never planned (lib/evidence-sweep.mjs).
+    const keepDays = Number(config.evidenceKeepDays) || 0
+    if (config.evidenceSweep || keepDays > 0) {
+      for (const project of config.projects) {
+        try {
+          const freed = sweepArchivedEvidence(tasksDirOf(project), { keepDays })
+          if (freed.items) boardLog(`${project}: archived evidence swept: ${freed.items} item(s), ${(freed.bytes / 1e6).toFixed(0)} MB`)
+          if (freed.failed.length) boardLog(`${project}: evidence sweep could not remove ${freed.failed.length} item(s)`, 'error')
+        } catch (err) { console.error(`evidence sweep failed for ${project}: ${err.message}`) }
+      }
+    }
   }
 }
 function diskLoop() {
