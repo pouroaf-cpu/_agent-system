@@ -53,6 +53,7 @@ const { cachedAsync, execText } = await import('./lib/async-cache.mjs')
 const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
+const { applyDiskReading, pruneAgentLogs, DISK_SAMPLE_MS, DISK_RESUME_GB } = await import('./lib/disk-guard.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
 const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
@@ -68,7 +69,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures, sweepCleanedCaches } = await import('./lib/worktrees.mjs')
 const { STAGES, SUPPORTED, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 // The legacy config.models fields. Spawns read the resolved assignment (modelFor), never these raw values.
 const LEGACY_MODEL_ROLES = ['planning', 'working', 'issues', 'review', 'trivial']
@@ -172,25 +173,45 @@ function schedulerActivity(project, message) {
   activity(project, cardId, event, message, event === 'retry' ? 'error' : 'info')
 }
 
-// Low-disk pause, shared by every project: checked at most every 10 minutes.
-// Under 3 GB free no new agents or worktrees start; above 4 GB they resume.
-const disk = { at: 0, low: false }
-function diskLow(now = Date.now()) {
-  if (now - disk.at < 10 * 60 * 1000) return disk.low
-  disk.at = now
+// Low-disk pause, shared by every project (lib/disk-guard.mjs). The drive is sampled every minute.
+// Under 6 GB free no new agents, card worktrees or installs start, and the board sweeps the caches
+// of its own cleaned card checkouts; above 8 GB they resume. Headless run logs older than 7 days
+// are pruned hourly. The 2026-10-15 and 2026-10-16 fills of C: are in lib/disk-guard.mjs.
+const disk = { low: false, gb: Infinity, lastPrune: 0 }
+const diskLow = () => disk.low
+function checkDisk(now = Date.now()) {
   let gb
-  try { gb = freeGb(config.projectsRoot) } catch { return disk.low }
+  try { gb = freeGb(config.projectsRoot) } catch { return }
   const drive = config.projectsRoot.slice(0, 2)
-  if (!disk.low && gb < 3) {
-    disk.low = true
+  disk.gb = gb
+  const next = applyDiskReading(disk, gb)
+  disk.low = next.low
+  if (next.event === 'low') {
     const message = `Kanban: drive ${drive} low on space (${gb.toFixed(1)} GB free); new agents paused`
-    for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 4 GB is free`, 'error')
+    for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than ${DISK_RESUME_GB} GB is free`, 'error')
     notifyManagerException({ boardRoot: HERE, key: 'low-disk', title: `Drive ${drive} low on space`, detail: message, code: 'LD' }).catch(err => console.error(`low-disk inbox alert failed: ${err.message}`))
-  } else if (disk.low && gb > 4) {
-    disk.low = false
+  } else if (next.event === 'resume') {
     for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
   }
-  return disk.low
+  if (disk.low) {
+    for (const project of config.projects) {
+      try {
+        const freed = sweepCleanedCaches(tasksDirOf(project))
+        if (freed.length) activity(project, '-', 'disk-sweep', `Low disk: deleted ${freed.length} regenerable cache folder(s) of cleaned card checkouts`)
+      } catch (err) { console.error(`disk sweep failed for ${project}: ${err.message}`) }
+    }
+  }
+  if (now - disk.lastPrune >= 60 * 60000) {
+    disk.lastPrune = now
+    try {
+      const pruned = pruneAgentLogs({ root: join(HERE, '.agents'), now })
+      if (pruned.removed) boardLog(`headless logs pruned: ${pruned.removed} file(s), ${(pruned.bytes / 1e6).toFixed(0)} MB`)
+    } catch (err) { console.error(`headless log prune failed: ${err.message}`) }
+  }
+}
+function diskLoop() {
+  checkDisk()
+  setTimeout(diskLoop, DISK_SAMPLE_MS)
 }
 
 // Low-memory pause, shared by every project: free commit (RAM + pagefile) is read every minute,
@@ -1916,6 +1937,7 @@ async function startPollers() {
   cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
   setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
   memoryLoop()
+  diskLoop()
 
   // Spawner must run whether or not a browser tab is open — a headless restart
   // still has to pick up queued cards.

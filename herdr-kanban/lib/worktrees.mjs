@@ -872,6 +872,35 @@ function isResidue(entry, { anyBranch = false } = {}) {
   return !tip || tip === entry.baseCommit
 }
 
+// Integrated card checkouts the board already cleaned can still hold a node_modules install and a
+// Next build cache (about 0.5 to 1.2 GB per card; 5 GB across the Injectbuddy card folders on
+// 2026-10-16). Both are regenerable, so the sweep deletes only those two names, and only inside a
+// checkout under a `.worktrees` folder that is not the repo or integration root. A junction is
+// unlinked, never followed. At most `limit` checkouts per call, because each removal blocks the loop.
+export function sweepCleanedCaches(tasksDir, { limit = 5 } = {}) {
+  const freed = []
+  let checkouts = 0
+  for (const entry of Object.values(readWorktrees(tasksDir))) {
+    if (checkouts >= limit) break
+    const root = entry.worktreePath
+    if (entry.state !== 'integrated' || !entry.cleaned || !root || !existsSync(root)) continue
+    if (!/[\\/]\.(kanban-)?worktrees[\\/]/.test(root)) continue
+    if ([entry.repoRoot, entry.integrationWorkspace].some(repo => repo && norm(repo) === norm(root))) continue
+    let touched = false
+    for (const name of ['node_modules', '.next']) {
+      const path = join(root, name)
+      if (!existsSync(path) && !isLinkAt(path)) continue
+      touched = true
+      if (lstatSync(path).isSymbolicLink()) { unlinkSync(path); continue }
+      rmSync(path, { recursive: true, force: true, maxRetries: 3 })
+      freed.push(path)
+    }
+    if (touched) checkouts++
+  }
+  return freed
+}
+const isLinkAt = (path) => { try { return lstatSync(path).isSymbolicLink() } catch { return false } }
+
 export function cleanupPreparedWorktree({ tasksDir, prepared }) {
   if (!prepared?.git || !prepared.created || !prepared.entry) return false
   try {
