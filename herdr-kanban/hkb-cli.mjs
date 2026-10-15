@@ -19,6 +19,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs pointer T-02 path name   (Planner: prints the ## Files line, path lines A-B, name, covering every occurrence)
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
+//   node hkb.mjs workspace T-02 <path>   (change the card's Workspace; project-relative, must exist, refused while an agent holds the card)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -148,6 +149,20 @@ if (verb === 'pointer') {
   if (isAbsolute(path) || /^[a-z]:/i.test(path) || path.split('/').includes('..')) fail(`pointer paths are workspace-relative, as ## Files writes them; "${rest[0]}" is not`)
   try {
     console.log(pointerLine(planWorkspaceFor(findCard(tasksDir, cardId)).planWorkspace, path, name))
+    process.exit(0)
+  } catch (err) { fail(err.message) }
+}
+
+// workspace: change a card's Workspace with createCard's validation; refused while a live agent holds the card.
+if (verb === 'workspace') {
+  if (!cardId || !rest[0]) fail('usage: hkb workspace T-02 <path> (project-relative folder that exists, no ../)')
+  if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  try {
+    const card = findCard(tasksDir, cardId)
+    const locked = ['working', 'review', 'completed'].includes(card.column) && !!(readBindings(tasksDir)[card.id] || reviewClaimFor(reviewRoot, tasksDir, card.id))
+    const { card: updated, changes } = updateCard(tasksDir, card.id, { workspace: rest[0] }, { lockBlockers: locked, projectPath: planWorkspaceFor(card).repoRoot })
+    activityLog({ tasksDir, project: basename(dirname(tasksDir)), cardId: card.id, event: 'update', message: `${changes.join('; ')} (hkb)` })
+    console.log(`${card.id}: Workspace is now ${updated.workspace}`)
     process.exit(0)
   } catch (err) { fail(err.message) }
 }

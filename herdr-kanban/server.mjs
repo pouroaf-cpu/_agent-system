@@ -1418,11 +1418,11 @@ const handleRequest = async (req, res) => {
   // Orchestrators maintain their own cards here: priority, blockers and dated notes.
   if (req.method === 'POST' && url.pathname === '/api/card-update') {
     try {
-      const { project: p, id, priority, addBlockedBy, removeBlockedBy, note } = posted
+      const { project: p, id, priority, addBlockedBy, removeBlockedBy, note, workspace } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const tasksDir = tasksDirOf(p), current = findCard(tasksDir, id)
       const lockBlockers = ['working', 'review', 'completed'].includes(current.column) && !!(readBindings(tasksDir)[current.id] || reviewClaimFor(REVIEW_ROOT, tasksDir, current.id))
-      const { card, changes } = updateCard(tasksDir, id, { priority, addBlockedBy, removeBlockedBy, note }, { lockBlockers })
+      const { card, changes } = updateCard(tasksDir, id, { priority, addBlockedBy, removeBlockedBy, note, workspace }, { lockBlockers, projectPath: integrationPathOf(p) })
       const waitFor = readWorkflow(tasksDir)[card.id]?.waitFor
       const decisionWaitLifted = !!note && card.column === 'planning' && waitFor?.decision === true && waitFor.board !== true
       if (decisionWaitLifted) operatorRetry(tasksDir, card.id, 'planning')

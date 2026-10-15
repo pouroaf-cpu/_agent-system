@@ -763,6 +763,14 @@ function withPriority(text, n) {
   return heading ? text.replace(heading[0], `${heading[0]}\n\n${line}`) : `${line}\n\n${text}`
 }
 
+// Rewrites the one `**Workspace:**` line (CRLF kept); a card without one gets it under the heading.
+function withWorkspace(text, workspace) {
+  const line = `**Workspace:** ${workspace}`
+  if (/^\*\*Workspace:\*\*/im.test(text)) return text.replace(/^\*\*Workspace:\*\*[^\r\n]*/im, () => line)
+  const heading = text.match(HEADING)
+  return heading ? text.replace(heading[0], () => `${heading[0]}\n\n${line}`) : `${line}\n\n${text}`
+}
+
 // The header's Blocked-by line sits right under Priority (I270's format). An empty list removes it.
 function withBlockers(text, ids) {
   const line = ids.length ? `**Blocked by:** ${ids.join(', ')}` : ''
@@ -815,7 +823,7 @@ export function cycleFor(card, board) {
 // POST /api/card-update: orchestrators maintain their own cards (priority, blockers,
 // dated decision notes) without hand-editing the file. The caller sets `lockBlockers`
 // while a live agent holds the card.
-export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], removeBlockedBy = [], note } = {}, { lockBlockers = false, now = new Date() } = {}) {
+export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], removeBlockedBy = [], note, workspace } = {}, { lockBlockers = false, projectPath = '', now = new Date() } = {}) {
   const card = findCard(tasksDir, cardId)
   if (card.column === 'archive') throw new Error(`${card.id} is archived; archived cards cannot be updated`)
   let text = readFileSync(card.path, 'utf8')
@@ -824,6 +832,13 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     checkPriority(priority)
     text = withPriority(text, priority)
     changes.push(`priority ${priority}/10`)
+  }
+  if (workspace !== undefined) {
+    if (lockBlockers) throw new Error(`${card.id} has a live agent in ${card.column}; its Workspace cannot change until it finishes`)
+    if (typeof workspace !== 'string') throw new Error('workspace must be a project-relative path string')
+    const value = checkWorkspace(projectPath, workspace)
+    text = withWorkspace(text, value)
+    changes.push(`workspace ${value}`)
   }
   const add = cardIds(addBlockedBy, 'addBlockedBy'), remove = cardIds(removeBlockedBy, 'removeBlockedBy')
   if (add.length || remove.length) {
@@ -847,7 +862,7 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     text = `${text.trimEnd()}${eol}${eol}**${heading}** ${now.toISOString()}${eol}${eol}${body.replace(/\r?\n/g, eol)}${eol}`
     changes.push(`note: ${heading}`)
   }
-  if (!changes.length) throw new Error('Nothing to update: send priority, addBlockedBy, removeBlockedBy or note')
+  if (!changes.length) throw new Error('Nothing to update: send priority, workspace, addBlockedBy, removeBlockedBy or note')
   writeFileSync(card.path, text)
   appendHistory(tasksDir, card.id, { event: 'card-update', changes })
   return { card: parseCard(card.path, card.column), changes }
@@ -1109,6 +1124,16 @@ export function missingWorkspace(projectPath, workspace) {
   return `Workspace folder '${workspace}' does not exist under project path ${projectPath}`
 }
 
+// The normalized Workspace, or a thrown refusal: project-relative, no ../, and an existing
+// folder under the project. createCard and updateCard share it.
+export function checkWorkspace(projectPath, workspace) {
+  workspace = String(workspace).replace(/\\/g, '/').trim() || '.'
+  if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace)) throw new Error('Workspace must be a project-relative path')
+  const missing = missingWorkspace(projectPath, workspace)
+  if (missing) throw new Error(missing)
+  return workspace
+}
+
 // `prefix` is the project's card prefix (board.config.json cardPrefixes); without
 // one the project keeps issuing legacy T- ids.
 export function createCard(tasksDir, { title, brief, category = 'code', workspace = '.', audit = '', tools = '', mission = '', prefix = 'T-', priority, blockedBy, projectPath = '', now = new Date() }) {
@@ -1117,10 +1142,7 @@ export function createCard(tasksDir, { title, brief, category = 'code', workspac
   if (typeof mission !== 'string' || /[\r\n]/.test(mission)) throw new Error('Invalid mission')
   category = String(category).toLowerCase()
   if (!CATEGORIES.includes(category)) throw new Error(`Category must be one of: ${CATEGORIES.join(', ')}`)
-  workspace = String(workspace).replace(/\\/g, '/').trim() || '.'
-  if (/^[A-Za-z]:|^\/|(^|\/)\.\.(\/|$)/.test(workspace)) throw new Error('Workspace must be a project-relative path')
-  const missing = missingWorkspace(projectPath, workspace)
-  if (missing) throw new Error(missing)
+  workspace = checkWorkspace(projectPath, workspace)
   audit = String(audit).toLowerCase()
   if (audit && !AUDITS.includes(audit)) throw new Error(`Audit must be one of: ${AUDITS.join(', ')}`)
   if (audit === 'general' && !String(tools ?? '').trim()) tools = '- chrome-devtools (headless isolated browser: screenshots, DOM measurements, console and network)'

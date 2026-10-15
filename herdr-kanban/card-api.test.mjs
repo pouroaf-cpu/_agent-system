@@ -270,3 +270,35 @@ test('F8: a board drag into Working is refused while a live card holds one of it
   assert.equal(r.status, 200, JSON.stringify(r.body))
   assert.equal(findCard(tasks, waiter.id).column, 'working')
 })
+
+test('workspace changes the Workspace line and the history, AC1', async () => {
+  const a = createCard(tasks, { title: 'Ws', brief: 'x', prefix: 'P' })
+  mkdirSync(join(root, 'Proj', 'app'), { recursive: true })
+  let r = await post('/api/card-update', { id: a.id, workspace: 'app' })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(r.body.card.workspace, 'app'); assert.match(text(a.id), /^\*\*Workspace:\*\* app$/m)
+  r = await post('/api/card-update', { id: a.id, workspace: '.' })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(r.body.card.workspace, '.'); assert.match(text(a.id), /^\*\*Workspace:\*\* \.$/m)
+  assert.match(readFileSync(historyPath(tasks, a.id), 'utf8'), /card-update.*workspace \./)
+})
+
+test('workspace refuses absolute, ../ and missing folders and leaves the file, AC2', async () => {
+  const a = createCard(tasks, { title: 'Ws2', brief: 'x', prefix: 'P' })
+  const before = text(a.id)
+  for (const workspace of ['C:/x', '/abs', '../x', 'a/../b', 'no-such-folder']) {
+    const r = await post('/api/card-update', { id: a.id, workspace })
+    assert.equal(r.status, 400, workspace)
+    assert.equal(text(a.id), before)
+  }
+})
+
+test('workspace is refused for a card with a live agent, AC4', async () => {
+  const w = createCard(tasks, { title: 'Ws3', brief: 'x', prefix: 'P' })
+  moveCard(tasks, w.id, 'working')
+  bind(tasks, w.id, { pane_id: 'live-pane' })
+  const before = text(w.id)
+  const r = await post('/api/card-update', { id: w.id, workspace: '.' })
+  assert.equal(r.status, 400); assert.match(r.body.error, /live agent/)
+  assert.equal(text(w.id), before)
+})
