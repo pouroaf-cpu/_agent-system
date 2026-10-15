@@ -3,9 +3,10 @@
 // timeout and rewrites the record as state: 'finished'. Nothing here may end as 'running'.
 
 import { spawn, execFileSync } from 'node:child_process'
-import { openSync, closeSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { openSync, closeSync, readFileSync, writeFileSync, renameSync, rmSync, appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { CHECK_WORKERS, waitForCheckSlot, releaseCheckSlot } from './check-slots.mjs'
 
 // Last Playwright/vitest "N passed" / "N failed", else node:test "# pass N" / "# fail N"; null when absent.
 export function parseCounts(text) {
@@ -37,22 +38,26 @@ const killTree = (pid) => {
   } catch {}
 }
 
-export async function runRecord(recordPath) {
+// The check takes one of the board-wide slots (lib/check-slots.mjs) before its command starts, so
+// the timeout counts the command only; it waits, logging one line, while two checks already run.
+export async function runRecord(recordPath, { slotDir, pollMs } = {}) {
   const record = JSON.parse(readFileSync(recordPath, 'utf8'))
-  let finished = false
+  let finished = false, slot = null
   const finish = (patch) => {
     if (finished) return
     finished = true
+    releaseCheckSlot(slot)
     let counts = { passed: null, failed: null }
     try { counts = parseCounts(readFileSync(record.log, 'utf8').slice(-200000)) } catch {}
     writeRecord(recordPath, { exitCode: null, signal: null, timedOut: false, error: null, ...record, ...counts, ...patch, state: 'finished', finishedAt: new Date().toISOString() })
   }
   try {
     writeRecord(recordPath, { ...record, pid: process.pid })
+    slot = await waitForCheckSlot({ dir: slotDir, pollMs, name: `check ${record.name || ''}`.trim(), announce: line => appendFileSync(record.log, `${new Date().toISOString()} ${line}\n`) })
     const fd = openSync(record.log, 'a')
     let child
     try {
-      child = spawn(record.command, { shell: true, cwd: record.cwd, stdio: ['ignore', fd, fd], windowsHide: true, detached: process.platform !== 'win32' })
+      child = spawn(record.command, { shell: true, cwd: record.cwd, env: { ...process.env, PW_WORKERS: String(CHECK_WORKERS) }, stdio: ['ignore', fd, fd], windowsHide: true, detached: process.platform !== 'win32' })
     } finally { closeSync(fd) }
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; killTree(child.pid) }, record.timeoutSeconds * 1000)

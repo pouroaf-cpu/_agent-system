@@ -14,6 +14,8 @@ import { agentList, paneRead, paneClose } from './herdr.mjs'
 import { sessionOf } from './project-key.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment, startDependencyInstall, installRunning } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
+import { CHECK_WORKERS, waitForCheckSlot, releaseCheckSlot } from './check-slots.mjs'
+import { boardLog } from './board-log.mjs'
 
 // The Builder's recorded check (## Evidence "Check:"), re-run in the card's
 // rebased worktree before integration. Anything unrunnable counts as a failure.
@@ -26,11 +28,18 @@ export function runRecordedCheck(card, entry) {
 
 // Runs a shell command; on timeout the whole process tree is killed (Windows
 // test runners spawn grandchildren that would otherwise hold the pipes open).
-export function runShell(command, cwd, timeout) {
+// A check takes one of the board-wide check slots first (lib/check-slots.mjs), so its timeout
+// counts only the command; a check waiting for a slot logs one board line.
+export async function runShell(command, cwd, timeout) {
+  const slot = await waitForCheckSlot({ name: 'check', announce: line => boardLog(line) })
+  try { return await runShellNow(command, cwd, timeout) } finally { releaseCheckSlot(slot) }
+}
+
+function runShellNow(command, cwd, timeout) {
   const [shell, args] = process.platform === 'win32' ? ['pwsh', ['-NoProfile', '-NonInteractive', '-Command', command]] : ['sh', ['-c', command]]
   return new Promise(done => {
     let timedOut = false
-    const child = execFile(shell, args, { cwd, windowsHide: true, maxBuffer: 64 << 20 }, (err, stdout, stderr) => {
+    const child = execFile(shell, args, { cwd, windowsHide: true, maxBuffer: 64 << 20, env: { ...process.env, PW_WORKERS: String(CHECK_WORKERS) } }, (err, stdout, stderr) => {
       clearTimeout(timer)
       done({ ok: !err && !timedOut, timedOut, output: `${command}\n${stdout}${stderr}${timedOut ? `\ntimed out after ${timeout / 1000}s` : err && !stdout && !stderr ? err.message : ''}` })
     })

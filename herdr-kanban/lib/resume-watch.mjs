@@ -14,6 +14,7 @@ export const STOPPAGE_LABEL = {
   quota: 'a usage-limit reset',
   disk: 'low disk recovering',
   memory: 'low memory recovering',
+  cpu: 'CPU use recovering',
   restart: 'a board restart',
 }
 

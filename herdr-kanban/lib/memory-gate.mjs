@@ -9,16 +9,26 @@ import { appendHistory } from './card-history.mjs'
 export const MEMORY_SAMPLE_MS = 60000
 export const MEMORY_SAMPLE_LIVE_MS = 10000
 export const MEMORY_STOP_GAP_MS = 30000
-export const MEMORY_LOW_GB = 4
-export const MEMORY_RESUME_GB = 6
+// Thresholds are a share of the commit limit (TotalVirtualMemorySize, read at boot), so they scale
+// with the PC's RAM and pagefile (audit 2026-10-16 F5). At the 59.9 GB limit of this PC they are
+// about 4.8 GB low and 7.2 GB resume. Without a readable limit the old fixed 4 / 6 GB apply.
+export const MEMORY_LOW_SHARE = 0.08
+export const MEMORY_RESUME_SHARE = 0.12
+export const MEMORY_FALLBACK = { lowGb: 4, resumeGb: 6, limitGb: null }
+
+// { lowGb, resumeGb, limitGb } for a commit limit in GB; the fallback when it is missing or unusable.
+export function memoryThresholds(limitGb) {
+  if (!(Number(limitGb) > 0)) return { ...MEMORY_FALLBACK }
+  return { lowGb: limitGb * MEMORY_LOW_SHARE, resumeGb: limitGb * MEMORY_RESUME_SHARE, limitGb }
+}
 
 export const sampleDelayMs = (liveCount) => (liveCount > 0 ? MEMORY_SAMPLE_LIVE_MS : MEMORY_SAMPLE_MS)
 
-// state: { low, minGb }. event is 'low', 'resume' or 'none'; minGb is the low-water mark so far.
-export function applyReading({ low, minGb = Infinity }, gb) {
+// state: { low, minGb, limits }. event is 'low', 'resume' or 'none'; minGb is the low-water mark so far.
+export function applyReading({ low, minGb = Infinity, limits = MEMORY_FALLBACK }, gb) {
   const min = Math.min(minGb, gb)
-  if (!low && gb < MEMORY_LOW_GB) return { low: true, event: 'low', minGb: min }
-  if (low && gb > MEMORY_RESUME_GB) return { low: false, event: 'resume', minGb: min }
+  if (!low && gb < limits.lowGb) return { low: true, event: 'low', minGb: min }
+  if (low && gb > limits.resumeGb) return { low: false, event: 'resume', minGb: min }
   return { low, event: 'none', minGb: min }
 }
 

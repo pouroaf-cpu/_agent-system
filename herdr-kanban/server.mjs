@@ -10,7 +10,7 @@ import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
-import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, stopDeadParentLeftovers, freeCommitGb } from './lib/orphan-servers.mjs'
+import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, stopDeadParentLeftovers, freeCommitGb, commitLimitGb } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
 import { realertDecisionWaits } from './lib/decision-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
@@ -54,7 +54,8 @@ const { boardLog } = await import('./lib/board-log.mjs')
 const { cachedAsync, execText } = await import('./lib/async-cache.mjs')
 const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
-const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
+const { applyReading, sampleDelayMs, stopNewestBuilder, memoryThresholds } = await import('./lib/memory-gate.mjs')
+const { addCpuSample, applyCpuReading, cpuBusyPercent, cpuTicks, CPU_RESUME_PCT } = await import('./lib/cpu-gate.mjs')
 const { applyDiskReading, pruneAgentLogs, diskWatchRoots, DISK_SAMPLE_MS, DISK_RESUME_GB } = await import('./lib/disk-guard.mjs')
 const { sweepArchivedEvidence } = await import('./lib/evidence-sweep.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
@@ -252,13 +253,35 @@ function diskLoop() {
 
 // Low-memory pause, shared by every project: free commit (RAM + pagefile) is read every minute,
 // every 10 s while agents are live (HK62: the 60 s sample missed the 2026-10-14 07:22 peak).
-// Under 4 GB free no new agents start and the newest working Builder is stopped and requeued, one
-// per 30 s; above 6 GB new agents resume. Windows kills whichever process next fails to allocate,
+// Under 8% of the commit limit free (4 GB before the limit is read) no new agents start and the newest
+// working Builder is stopped and requeued, one per 30 s; above 12% (6 GB) new agents resume. Windows kills whichever process next fails to allocate,
 // and that was the board itself three times in two days (2026-10-09 22:33, 2026-10-10 19:33 and
 // 22:48). Planners and Reviewers are left alone.
-const memory = { low: false, minGb: Infinity, lastStopAt: 0 }
+// Thresholds are a share of the commit limit read at boot (startPollers); until then the fixed 4 / 6 GB apply.
+const memory = { low: false, minGb: Infinity, lastStopAt: 0, limits: memoryThresholds(null) }
+// CPU-busy hold (lib/cpu-gate.mjs): the 60 s average above 90% holds new agent starts, 75% or less resumes.
+const cpu = { hold: false, samples: [] }
 const liveAgents = new Map() // project -> agents from its last poll
 const liveAgentCount = () => [...liveAgents.values()].reduce((n, agents) => n + agents.length, 0)
+function checkCpu() {
+  try {
+    const now = Date.now()
+    addCpuSample(cpu.samples, cpuTicks(), now)
+    const pct = cpuBusyPercent(cpu.samples, now)
+    const next = applyCpuReading(cpu, pct)
+    cpu.hold = next.hold
+    if (next.event === 'hold') {
+      const message = `Kanban: PC CPU busy (${pct.toFixed(0)}% average over 60 s); new agents paused`
+      boardLog(message, 'error')
+      for (const project of config.projects) activity(project, '-', 'hold', `${message} until the average is ${CPU_RESUME_PCT}% or less`, 'error')
+      beginStoppage(HERE, { id: `cpu-busy:${now}`, projects: config.projects, kind: 'cpu' })
+    } else if (next.event === 'resume') {
+      boardLog(`PC CPU average ${pct.toFixed(0)}% over 60 s; new agents resumed`)
+      for (const project of config.projects) activity(project, '-', 'resume', `PC CPU average ${pct.toFixed(0)}% over 60 s; new agents resumed`)
+      clearStoppage(HERE, { kind: 'cpu', projects: config.projects, now })
+    }
+  } catch { /* the next sample retries */ }
+}
 async function checkMemory() {
   try {
     const gb = await freeCommitGb()
@@ -268,10 +291,11 @@ async function checkMemory() {
     const next = applyReading(memory, gb)
     memory.low = next.low
     memory.minGb = next.minGb
-    if (live && gb < before && gb < 8) boardLog(`free commit low-water mark ${gb.toFixed(1)} GB with ${live} live agents`)
+    const limit = memory.limits.limitGb ? `${memory.limits.limitGb.toFixed(1)} GB` : 'unknown'
+    if (live && gb < before && gb < 8) boardLog(`free commit low-water mark ${gb.toFixed(1)} GB of ${limit} commit limit with ${live} live agents`)
     if (next.event === 'low') {
       const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
-      for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
+      for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than ${memory.limits.resumeGb.toFixed(1)} GB is free`, 'error')
       notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message, code: 'LM' }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
       beginStoppage(HERE, { id: `memory-low:${Date.now()}`, projects: config.projects, kind: 'memory' })
     } else if (next.event === 'resume') {
@@ -290,6 +314,7 @@ async function checkMemory() {
 }
 async function memoryLoop() {
   await checkMemory()
+  checkCpu()
   setTimeout(memoryLoop, sampleDelayMs(liveAgentCount()))
 }
 
@@ -798,7 +823,7 @@ async function pollProject(project) {
       if (Date.now() - (emptyPolls.get(project) ?? -Infinity) < 60000) return
       emptyPolls.set(project, Date.now())
     } else emptyPolls.delete(project)
-    const lowDisk = diskLow() || memory.low
+    const lowDisk = diskLow() || memory.low || cpu.hold
     if (activeCardRun(project)) {
       if (!lowDisk) await tickCardRun({ project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE, reviewRoot: REVIEW_ROOT, agents, config: { ...config, assignmentForCard: (card, stage) => assignmentForCard(project, card, stage) }, gitSettings, inventory: reviewInventory, log: msg => schedulerActivity(project, msg) })
       broadcastBoard(project)
@@ -2040,8 +2065,13 @@ async function startPollers() {
   setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
   // A relaunch or code update (restart-kanban.ps1, the watchdog) is a stoppage: work must start again. The
   // pause state is sampled again below, so open disk and memory stoppages from before are dropped here.
-  dropStoppages(HERE, ['disk', 'memory'])
+  dropStoppages(HERE, ['disk', 'memory', 'cpu'])
   beginStoppage(HERE, { id: `boot:${Date.now()}`, projects: config.projects, kind: 'restart', clearedAt: Date.now() })
+  // The memory thresholds are a share of the commit limit, read once here (audit 2026-10-16 F5).
+  memory.limits = memoryThresholds(await commitLimitGb().catch(() => null))
+  boardLog(memory.limits.limitGb
+    ? `memory gate: commit limit ${memory.limits.limitGb.toFixed(1)} GB; holds below ${memory.limits.lowGb.toFixed(1)} GB free, resumes above ${memory.limits.resumeGb.toFixed(1)} GB`
+    : `memory gate: commit limit unreadable; holds below ${memory.limits.lowGb} GB free, resumes above ${memory.limits.resumeGb} GB`)
   memoryLoop()
   diskLoop()
 

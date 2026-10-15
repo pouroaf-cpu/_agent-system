@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { sampleDelayMs, applyReading, newestBuilder, stopNewestBuilder, MEMORY_SAMPLE_MS, MEMORY_SAMPLE_LIVE_MS } from './lib/memory-gate.mjs'
+import { sampleDelayMs, applyReading, memoryThresholds, newestBuilder, stopNewestBuilder, MEMORY_SAMPLE_MS, MEMORY_SAMPLE_LIVE_MS, MEMORY_FALLBACK } from './lib/memory-gate.mjs'
 import { bind, readBindings } from './lib/bindings.mjs'
 import { findCard } from './lib/cards.mjs'
 
@@ -21,6 +21,25 @@ test('hysteresis: low under 4 GB, stays low at 5 GB, resumes over 6 GB; low-wate
   s = applyReading(s, 6.1)
   assert.deepEqual([s.low, s.event], [false, 'resume'])
   assert.equal(applyReading({ low: false }, 5).event, 'none')
+})
+
+test('thresholds are 8% and 12% of the commit limit read at boot; 4 and 6 GB without a limit', () => {
+  const t = memoryThresholds(59.9)
+  assert.equal(t.limitGb, 59.9)
+  assert.ok(Math.abs(t.lowGb - 4.792) < 0.001 && Math.abs(t.resumeGb - 7.188) < 0.001)
+  for (const missing of [null, undefined, 0, -1, NaN, 'abc']) assert.deepEqual(memoryThresholds(missing), MEMORY_FALLBACK)
+  assert.deepEqual(MEMORY_FALLBACK, { lowGb: 4, resumeGb: 6, limitGb: null })
+})
+
+test('hysteresis uses the limit-scaled thresholds: 4.5 GB is low on a 59.9 GB limit, 5 GB stays low, 7.3 GB resumes', () => {
+  const limits = memoryThresholds(59.9)
+  let s = applyReading({ low: false, limits }, 4.5)
+  assert.deepEqual([s.low, s.event], [true, 'low'])
+  s = applyReading({ ...s, limits }, 5)
+  assert.deepEqual([s.low, s.event], [true, 'none'])
+  s = applyReading({ ...s, limits }, 7.3)
+  assert.deepEqual([s.low, s.event], [false, 'resume'])
+  assert.equal(applyReading({ low: false, limits }, 5).event, 'none')
 })
 
 const agent = (pane_id, agent_status, startedAt) => ({ pane_id, agent_status, startedAt })

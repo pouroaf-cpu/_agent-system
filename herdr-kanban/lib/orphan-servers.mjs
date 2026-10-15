@@ -316,3 +316,12 @@ export async function freeCommitGb() {
   if (!kb) throw new Error('free commit unreadable')
   return kb / 1024 / 1024
 }
+
+// Commit limit (RAM + pagefile) in GB, read once at boot to scale the memory-gate thresholds.
+// Rejects when it cannot be read.
+export function commitLimitGb() {
+  return new Promise((done, fail) => execFile('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_OperatingSystem).TotalVirtualMemorySize'], { timeout: 20000, windowsHide: true }, (err, out) => {
+    const kb = Number(String(out).trim())
+    err || !kb ? fail(err || new Error('commit limit unreadable')) : done(kb / 1024 / 1024)
+  }))
+}
