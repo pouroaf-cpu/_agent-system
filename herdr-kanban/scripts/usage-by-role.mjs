@@ -196,7 +196,12 @@ async function readBoards(dir) {
     return response.json()
   }
   const summary = await get('/api/summary')
-  return Object.fromEntries(await Promise.all(summary.projects.map(async p => [p.project, await get(`/api/board?project=${encodeURIComponent(p.project)}`)])))
+  // /api/board carries open cards only (audit 2026-10-15 F5); archived cards' usage is behind /api/archive.
+  return Object.fromEntries(await Promise.all(summary.projects.map(async p => {
+    const board = await get(`/api/board?project=${encodeURIComponent(p.project)}`)
+    try { board.cardUsage = { ...(await get(`/api/archive?project=${encodeURIComponent(p.project)}`)).cardUsage, ...(board.cardUsage || {}) } } catch { /* older board: usage already complete */ }
+    return [p.project, board]
+  })))
 }
 
 export async function main(args = process.argv.slice(2)) {

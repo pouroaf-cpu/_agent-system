@@ -45,7 +45,7 @@ const { validateAgentBackend } = await import('./lib/agent-backend.mjs')
 const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
-const { COLUMNS, ARCHIVE, createCard, readBoard, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
+const { COLUMNS, ARCHIVE, createCard, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
 const { readBindings, unbind } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
@@ -94,6 +94,19 @@ function ensureTasks(project) {
 
 // Last known agent state per project, refreshed by each SSE client's poll.
 const agentCache = new Map() // project -> { agents, herdrUp }
+// Audit 2026-10-15 F5: the board payload carries the open lanes only (archive, and the
+// workflow, usage and planner records of archived cards, moved to /api/archive, fetched when
+// the Archive view opens). Every change bumps the project's version; SSE `board` events carry
+// the lane summary and the version, and tabs refetch /api/board. A GET always builds fresh:
+// a CLI or script that writes a card and reads the board at once must see its write.
+// Injectbuddy's payload was 3,959 KB, 95% archive history, sent to every tab on every
+// bookkeeping write.
+const boardVersions = new Map() // project -> n
+const lastBroadcast = new Map() // project -> payload JSON without its version
+const SLOW_PAYLOAD_MS = 100
+const boardVersion = (project) => boardVersions.get(project) ?? 0
+const bumpBoardVersion = (project) => boardVersions.set(project, boardVersion(project) + 1)
+const pick = (map, keep) => Object.fromEntries(Object.entries(map || {}).filter(([id]) => keep(id)))
 let herdrFailed = false
 // Since when herdr has not answered; the board starting counts, so a reboot that leaves herdr down alerts too.
 let herdrUnconfirmedSince = Date.now()
@@ -334,11 +347,45 @@ async function pollAgentsNow(project) {
 }
 
 function boardPayload(project) {
+  const started = performance.now()
+  const payload = buildBoardPayload(project)
+  const ms = Math.round(performance.now() - started)
+  if (ms > SLOW_PAYLOAD_MS) console.log(`${project}: board payload built in ${ms} ms (${Math.round(JSON.stringify(payload).length / 1024)} KB)`)
+  return payload
+}
+
+// The lane summary sent on every change: counts, not cards. A tab refetches /api/board when
+// the version moved on from the one it holds.
+function boardSummary(project, payload = boardPayload(project)) {
+  return { project, version: payload.version, lanes: Object.fromEntries(COLUMNS.map(c => [c.key, payload.board[c.key].length])), archiveCount: payload.archiveCount }
+}
+
+// Archived cards with their usage, workflow and planner records, on demand.
+function archivePayload(project) {
+  const board = readBoard(tasksDirOf(project))
+  const open = new Set(COLUMNS.flatMap(c => board[c.key]).map(c => c.id))
+  const archived = id => !open.has(id)
+  return {
+    project, version: boardVersion(project), archive: board.archive,
+    cardUsage: pick(cardUsageSummary(tasksDirOf(project)), archived),
+    planners: pick(readCardPlanners(tasksDirOf(project)), archived),
+    workflow: pick(readWorkflow(tasksDirOf(project)), archived),
+  }
+}
+
+function buildBoardPayload(project) {
   const cached = agentCache.get(project) ?? { agents: [], herdrUp: false }
   const breaker = breakerState(project)
   const board = readBoard(tasksDirOf(project))
   const planners = readCardPlanners(tasksDirOf(project))
   const workflow = readWorkflow(tasksDirOf(project))
+  const openCards = COLUMNS.flatMap(c => board[c.key])
+  const open = new Set(openCards.map(c => c.id))
+  const panes = new Set(cached.agents.map(a => a.pane_id))
+  // Open cards' records, plus the workflow entry of any finished Builder whose pane herdr
+  // still lists (the Agents view hides that pane through it).
+  const live = id => open.has(id)
+  const liveOrPaned = id => open.has(id) || panes.has(workflow[id]?.builder?.pane_id)
   let indicators = {}, times = {}
   try { indicators = stageIndicators({ tasksDir: tasksDirOf(project), reviewRoot: REVIEW_ROOT, board, planners, claims: readReviewClaims(REVIEW_ROOT), agents: cached.agents, workflow }) }
   catch (error) { console.error(`${project}: stage indicators unavailable — ${error.message}`) }
@@ -347,7 +394,7 @@ function boardPayload(project) {
   const blockerIds = {}
   try {
     const registry = readWorktrees(tasksDirOf(project))
-    for (const card of Object.values(board).flat()) blockerIds[card.id] = [...new Set([
+    for (const card of openCards) blockerIds[card.id] = [...new Set([
       ...unmetBlockers(card, board, registry),
       ...(card.column === 'queue' ? recordedOverlapBlockers(card, integrationPathOf(project), registry, projectSettingsOf(project)?.parallelFiles, projectSettingsOf(project)?.generatedFiles) : []),
     ])]
@@ -357,17 +404,19 @@ function boardPayload(project) {
     control: controlState(project, CONFIG_PATH),
     release: controlState(project, CONFIG_PATH).release ?? null, // { startedAt }: why a project is paused for a release
     cardRuns: readCardRuns().filter(r => r.project === project),
-    cardRunEligibility: Object.fromEntries(Object.values(board).flat().map(card => [card.id, cardRunEligibility({ project, tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), card, board, agents: cached.agents, known: cached.herdrUp })])),
+    cardRunEligibility: Object.fromEntries(openCards.map(card => [card.id, cardRunEligibility({ project, tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), card, board, agents: cached.agents, known: cached.herdrUp })])),
     plannerRecoveryCards: Object.entries(readCardPlanners(tasksDirOf(project))).filter(([, o]) => o.lifecycle === 'retired' && o.recoveryReady && o.reconciliationHistoryId).map(([id]) => id),
     projectPath: projectPathOf(project),
     integrationPath: integrationPathOf(project),
     columns: COLUMNS,
     archive: ARCHIVE,
-    board,
+    version: boardVersion(project),
+    board: { ...Object.fromEntries(COLUMNS.map(c => [c.key, board[c.key]])), archive: [] },
+    archiveCount: archiveCount(tasksDirOf(project)),
     blockerIds,
-    cardUsage: cardUsageSummary(tasksDirOf(project)),
-    planners,
-    workflow,
+    cardUsage: pick(cardUsageSummary(tasksDirOf(project)), live),
+    planners: pick(planners, live),
+    workflow: pick(workflow, liveOrPaned),
     stageIndicators: indicators,
     // Per card in Planning/Planned/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
     laneTimes: times,
@@ -895,8 +944,17 @@ function broadcast(project, event, data) {
   for (const c of clients) if (c.project === project) send(c.res, event, data)
 }
 
+// A change bumps the version and sends the summary once. A broadcast whose payload equals the
+// last one sent (Windows delivers a lane folder's change event after the file's own, past the
+// debounce; a poll with nothing new) is no change: no version, no event, no tab refetch.
 const broadcastBoard = (project) => {
-  if ([...clients].some(client => client.project === project)) broadcast(project, 'board', boardPayload(project))
+  const payload = boardPayload(project)
+  const body = JSON.stringify({ ...payload, version: null })
+  if (lastBroadcast.get(project) === body) return
+  lastBroadcast.set(project, body)
+  bumpBoardVersion(project)
+  payload.version = boardVersion(project)
+  if ([...clients].some(client => client.project === project)) broadcast(project, 'board', boardSummary(project, payload))
 }
 
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000
@@ -966,7 +1024,7 @@ function sse(req, res, project) {
   })
   const client = { res, project }
   clients.add(client)
-  send(res, 'board', boardPayload(project))
+  send(res, 'board', boardSummary(project))
   openFeed(project)
 
   const beat = setInterval(() => res.write(': ping\n\n'), 30000)
@@ -1210,6 +1268,8 @@ const handleRequest = async (req, res) => {
     else polled.catch(() => {})
     return json(res, 200, boardPayload(project))
   }
+
+  if (req.method === 'GET' && url.pathname === '/api/archive') return json(res, 200, archivePayload(project))
 
   if (req.method === 'GET' && url.pathname === '/api/manager-tasks') {
     try {

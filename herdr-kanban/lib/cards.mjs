@@ -877,7 +877,9 @@ export function setAutoReview(tasksDir, cardId, on) {
 }
 
 const columnFiles = new Map()
-function readColumn(tasksDir, col) {
+// The card file names of one lane, from the listing cache: a count or a membership check
+// needs no card parse (audit 2026-10-15 F5: the archive count on every board payload).
+function columnListing(tasksDir, col) {
   const dir = join(tasksDir, col.dir)
   let stat
   try { stat = statSync(dir) } catch (err) {
@@ -896,6 +898,13 @@ function readColumn(tasksDir, col) {
     columnFiles.set(dir, hit)
   }
   return hit.files
+}
+
+export const archiveCount = (tasksDir) => columnListing(tasksDir, ARCHIVE).length
+
+function readColumn(tasksDir, col) {
+  const dir = join(tasksDir, col.dir)
+  return columnListing(tasksDir, col)
     .map((f) => {
       try {
         return parseCard(join(dir, f), col.key)

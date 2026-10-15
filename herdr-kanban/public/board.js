@@ -219,6 +219,42 @@ async function loadBoard() {
 
 
 
+// Audit 2026-10-15 F5: archived cards and their usage live behind /api/archive, fetched when
+
+// the Archive view opens and again only when the board version has moved on.
+
+let archiveData = null;           // { version, archive, cardUsage }
+
+let archiveLoading = null;
+
+function loadArchive() {
+
+  if (archiveLoading) return archiveLoading;
+
+  archiveLoading = fetch('/api/archive?project=' + encodeURIComponent(PROJECT))
+
+    .then(r => { if (!r.ok) throw new Error('archive ' + r.status); return r.json(); })
+
+    .then(d => { archiveData = d; if (state) mergeArchive(state); })
+
+    .finally(() => { archiveLoading = null; });
+
+  return archiveLoading;
+
+}
+
+function mergeArchive(payload) {
+
+  if (!archiveData || payload.board.archive?.length) return;
+
+  payload.board.archive = archiveData.archive;
+
+  payload.cardUsage = { ...archiveData.cardUsage, ...(payload.cardUsage || {}) };
+
+}
+
+
+
 /* ---------------------------------------------------------- stall logic */
 
 
@@ -1012,6 +1048,16 @@ function renderAgentsScreen() {
 function renderArchiveScreen() {
 
   const cards = state.board.archive || [];
+
+  const stale = !MOCK && (!archiveData || (state.version !== undefined && archiveData.version !== state.version)) && state.archiveCount !== 0;
+
+  if (stale) {
+
+    loadArchive().then(() => { if (view === 'archive') renderScreen(); }).catch(() => {});
+
+    if (!cards.length) return el.screenBody.append(note('Loading archive…'));
+
+  }
 
   if (!cards.length) return el.screenBody.append(note('Nothing archived yet.'));
 
@@ -2028,6 +2074,8 @@ function boardSignature() {
 
       .map(c => c.id + c.priority + c.mtime + (c.autoReview ? '!' : '')).join(',')).join('|') +
 
+    '#' + (state.archiveCount ?? '') +
+
     '#' + [...collapsed].sort().join(',') +
 
     '#' + [...spawning].sort().join(',') +
@@ -2191,7 +2239,7 @@ function render() {
 
 
 
-  el.menuArchive.textContent = (state.board.archive || []).length;
+  el.menuArchive.textContent = state.archiveCount ?? (state.board.archive || []).length;
 
   el.menuAgents.textContent = visibleAgents().length;
 
@@ -3288,6 +3336,8 @@ function apply(payload) {
 
   trackStatuses(payload.agents);
 
+  mergeArchive(payload);
+
   // Issues is retired: its column shows only while an old card still sits there.
 
   payload.columns = payload.columns.filter(c => c.key !== 'issues' || payload.board.issues?.length);
@@ -3300,11 +3350,23 @@ function apply(payload) {
 
 
 
+let polling = null, pollAgain = false;
+
 async function poll() {
 
-  try { apply(await loadBoard()); setConn('live'); }
+  // One fetch at a time; a version that arrives mid-fetch queues one more.
 
-  catch { setConn('offline'); }
+  if (polling) { pollAgain = true; return polling; }
+
+  polling = (async () => {
+
+    try { apply(await loadBoard()); setConn('live'); }
+
+    catch { setConn('offline'); }
+
+  })().finally(() => { polling = null; if (pollAgain) { pollAgain = false; poll(); } });
+
+  return polling;
 
 }
 
@@ -3316,7 +3378,21 @@ function connect() {
 
   es.addEventListener('open', () => setConn('live'));
 
-  es.addEventListener('board', e => { apply(JSON.parse(e.data)); setConn('live'); });
+  es.addEventListener('board', e => {
+
+    // The event is the lane summary with a version (audit 2026-10-15 F5); the cards come
+
+    // from /api/board when the version moved. A full payload (older server) still applies.
+
+    const d = JSON.parse(e.data);
+
+    if (d.board) apply(d);
+
+    else if (!state || d.version !== state.version) poll();
+
+    setConn('live');
+
+  });
 
   es.addEventListener('agents', e => {
 
