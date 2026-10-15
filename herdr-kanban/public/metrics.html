@@ -8,7 +8,11 @@
     body { font: 14px system-ui, sans-serif; margin: 24px; color: #1b2433; background: #f3f4f6; }
     a { color: #2f5bd3; }
     h1 { font-size: 20px; } h2 { font-size: 16px; }
+    [hidden] { display: none !important; }
     .table-wrap { overflow-x: auto; margin-bottom: 24px; }
+    .older-toggle { display: inline-flex; align-items: center; min-height: 44px; margin: -12px 0 24px; padding: 0 14px; font: inherit; color: #2f5bd3; background: white; border: 1px solid #dde1e7; border-radius: 4px; cursor: pointer; }
+    #summary { margin: 16px 0 24px; }
+    #summary th:first-child, #summary td:first-child { white-space: normal; }
     table { border-collapse: collapse; background: white; width: 100%; }
     th, td { padding: 8px; border: 1px solid #dde1e7; text-align: right; }
     th { font-weight: 600; } th:first-child, td:first-child { text-align: left; white-space: nowrap; }
@@ -23,12 +27,26 @@
       td:first-child { grid-column: 1 / -1; text-align: left; white-space: normal; font-weight: 600; }
       td::before { content: attr(data-label); text-align: left; color: #5b6472; overflow-wrap: anywhere; }
     }
+    /* The summary stays a compact table on phones so all seven projects fit the first screen;
+       its first column stays put while the other columns scroll sideways. */
+    @media (max-width: 1300px) {
+      #summary table { display: table; }
+      #summary thead { position: static; width: auto; height: auto; overflow: visible; clip: auto; white-space: normal; }
+      #summary tbody { display: table-row-group; }
+      #summary tr { display: table-row; padding: 0; margin: 0; border: 0; background: none; }
+      #summary th, #summary td { display: table-cell; padding: 6px 8px; border: 1px solid #dde1e7; font-size: 13px; text-align: right; vertical-align: top; }
+      #summary td::before { content: none; }
+      #summary th:first-child, #summary td:first-child { position: sticky; left: 0; background: white; text-align: left; white-space: nowrap; }
+      #summary th:nth-child(2), #summary td:nth-child(2) { white-space: normal; min-width: 110px; }
+      #summary .table-wrap { overflow-x: auto; }
+    }
   </style>
 </head>
 <body>
   <a href="/">Back to board</a>
   <h1>Daily board health</h1>
   <p>Last 7 daily reporting periods in New Zealand time, newest first. Refreshes every 5 seconds.</p>
+  <div id="summary"></div>
   <p>Finished = distinct cards integrated or archived that day. Kick-backs / finished = that day's Builder kick-backs divided by finished cards; — means none finished.</p>
   <p>Kick-back tags come from the reason's leading tag. Planner failures include reported blockers, failed starts, failed delivery and missing handoffs. Owner escalations count entries into Owner.</p>
   <p>Builder difficulty columns count new attempts and failed returns at the attempted level (including no handoff). Older unlabelled history is excluded.</p>

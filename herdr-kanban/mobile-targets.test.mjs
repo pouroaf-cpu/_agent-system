@@ -78,7 +78,8 @@ test('metrics.html at 1280 px has no element wider than the viewport and keeps e
     await serve(page, { '/api/projects': { ok: true, projects: ['Injectbuddy', 'herdr-kanban'] }, '/api/metrics': { ok: true, metrics }, '/api/session-steps': { ok: true, rollup } }, [])
     await page.goto('http://mobile.test/metrics.html')
     await page.locator('table[aria-label="herdr-kanban steps per session"]').waitFor()
-    assert.equal(await page.locator('table').count(), 4)
+    // Summary table, then a daily and a steps table for each of the two projects.
+    assert.equal(await page.locator('table').count(), 5)
     assert.deepEqual(await overflowing(page), [])
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     // Every daily column is still on the page with its heading beside the value.
