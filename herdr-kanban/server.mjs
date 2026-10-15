@@ -76,7 +76,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures, sweepCleanedCaches } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures, sweepCleanedCaches, sweepUnregisteredFolders } = await import('./lib/worktrees.mjs')
 const { STAGES, SUPPORTED, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 // The legacy config.models fields. Spawns read the resolved assignment (modelFor), never these raw values.
 const LEGACY_MODEL_ROLES = ['planning', 'working', 'issues', 'review', 'trivial']
@@ -2062,6 +2062,7 @@ async function startPollers() {
   // a tick that finds the last sweep still running is skipped, so the board's event loop stays free
   // (board stalls 2026-10-15 21:14 to 23:44 NZ came after sweep ticks).
   let sweeping = false
+  const keptUnregistered = new Map() // project -> last list of kept folders, logged once per change
   setInterval(async () => {
     if (sweeping) return
     sweeping = true
@@ -2083,6 +2084,19 @@ async function startPollers() {
           const onlyIds = Object.values(readWorktrees(tasksDir)).filter(e => e.state === 'integrated' && !e.cleaned && !live.has(e.cardId)).map(e => e.cardId)
           if (onlyIds.length) logIntegrationResults(project, reconcileCompletedWorktrees({ tasksDir, onlyIds }))
         } catch (err) { boardLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
+        // Card folders that no worktree record or registry entry refers to are removed only when empty of work (audit 2026-10-16 F7).
+        try {
+          const settings = projectSettingsOf(project)
+          if (settings?.worktreesRoot && settings?.integrationPath) {
+            const { removed, skipped } = sweepUnregisteredFolders({ tasksDir: tasksDirOf(project), worktreesRoot: settings.worktreesRoot, integrationPath: settings.integrationPath })
+            if (removed.length) activity(project, '-', 'sweep', `removed ${removed.length} unregistered card folder(s), ${(removed.reduce((sum, r) => sum + r.bytes, 0) / 1e9).toFixed(2)} GB`)
+            const key = skipped.map(item => item.path).join('|')
+            if (skipped.length && key !== keptUnregistered.get(project)) {
+              keptUnregistered.set(project, key)
+              activity(project, '-', 'sweep', `kept ${skipped.length} unregistered card folder(s), nothing deleted: ${skipped.slice(0, 3).map(item => `${item.path.split(/[\\/]/).pop()} (${item.reason})`).join('; ')}`)
+            }
+          }
+        } catch (err) { boardLog(`${project}: unregistered folder sweep: ${err.message}`, 'warn') }
       }
     } catch (err) { boardLog(`sweep: ${err.message}`, 'warn') }
     finally { sweeping = false }

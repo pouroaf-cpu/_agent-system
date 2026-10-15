@@ -2,7 +2,7 @@ import { formatNZTime } from './nz-time.mjs'
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync, rm } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync, rm, rmdirSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -973,6 +973,89 @@ export function sweepCleanedCaches(tasksDir, { limit = 5 } = {}) {
   return freed
 }
 const isLinkAt = (path) => { try { return lstatSync(path).isSymbolicLink() } catch { return false } }
+
+// Card folders that no git worktree and no registry entry refers to are left by earlier attempts
+// (Injectbuddy 2026-10-16: 84 of 199 card folders). Git cannot check them, so the sweep removes a
+// folder only when nothing on disk in it can be lost: regenerable caches (node_modules, .next,
+// .expo), empty folders, and a .git pointer whose git metadata is gone. Any other file keeps the
+// folder and is reported. A folder younger than `minAgeMs` may still be under `git worktree add`.
+const REGENERABLE = ['node_modules', '.next', '.expo']
+export function listedWorktrees(repoRoot) {
+  return git(repoRoot, ['worktree', 'list', '--porcelain']).stdout
+    .split(/\r?\n/).filter(line => line.startsWith('worktree ')).map(line => line.slice(9))
+}
+// A `.git` file whose gitdir no longer exists: a dangling pointer, holding no work.
+function danglingGitPointer(path) {
+  try {
+    const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(path, 'utf8'))
+    return !!match && !existsSync(resolve(dirname(path), match[1]))
+  } catch { return false }
+}
+// The first entry that cannot be regenerated (or null). Links are never followed.
+function keptEntry(folder) {
+  let keep = null
+  const walk = (dir, top) => {
+    if (keep) return
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { keep = dir; return }
+    for (const d of entries) {
+      if (keep) return
+      const path = join(dir, d.name)
+      if (top && REGENERABLE.includes(d.name)) continue
+      if (top && d.name === '.git' && d.isFile() && danglingGitPointer(path)) continue
+      if (d.isDirectory() && !d.isSymbolicLink()) walk(path, false)
+      else keep = path
+    }
+  }
+  walk(folder, true)
+  return keep
+}
+const sizeOf = (path) => {
+  const s = lstatSync(path)
+  if (s.isSymbolicLink() || !s.isDirectory()) return s.size
+  return readdirSync(path).reduce((sum, name) => sum + sizeOf(join(path, name)), 0)
+}
+// A junction is unlinked, never followed (node_modules junctions point at the integration install).
+function unlinkLink(path) {
+  try { unlinkSync(path) } catch { rmdirSync(path) }
+}
+function removeFolderTree(folder) {
+  for (const name of REGENERABLE) {
+    const path = join(folder, name)
+    if (!existsSync(path) && !isLinkAt(path)) continue
+    if (isLinkAt(path)) unlinkLink(path)
+    else rmSync(path, { recursive: true, force: true, maxRetries: 3 })
+  }
+  const pointer = join(folder, '.git')
+  if (existsSync(pointer)) unlinkSync(pointer)
+  if (!onlyEmptyDirs(folder)) throw new Error('contents changed; preserved')
+  rmSync(folder, { recursive: true, force: true, maxRetries: 3 })
+}
+// Returns { removed: [{ path, bytes }], skipped: [{ path, reason }] }. At most `limit` folders are
+// removed per call, because each removal blocks the board's event loop. `listed` is the output of
+// `git worktree list` for the repo; the sweep removes nothing when it cannot be read.
+export function sweepUnregisteredFolders({ tasksDir, worktreesRoot, integrationPath, listed = listedWorktrees(integrationPath), dryRun = false, limit = 25, now = Date.now(), minAgeMs = 60 * 60000 }) {
+  const removed = [], skipped = []
+  if (worktreesRoot && !/[\\/]\.(kanban-)?worktrees[\\/]/.test(`${worktreesRoot}${sep}`)) throw new Error(`refusing to sweep outside a worktrees folder: ${worktreesRoot}`)
+  if (!worktreesRoot || !existsSync(worktreesRoot)) return { removed, skipped }
+  const registered = new Set([...listed, ...Object.values(readWorktrees(tasksDir)).map(e => e.worktreePath), integrationPath]
+    .filter(Boolean).map(norm))
+  for (const d of readdirSync(worktreesRoot, { withFileTypes: true })) {
+    if (removed.length >= limit) break
+    const folder = join(worktreesRoot, d.name)
+    if (!d.isDirectory() || d.isSymbolicLink() || registered.has(norm(folder))) continue
+    if (now - statSync(folder).mtimeMs < minAgeMs) continue
+    if (norm(process.cwd()) === norm(folder) || safeInside(folder, process.cwd())) { skipped.push({ path: folder, reason: 'the board process is inside it' }); continue }
+    const keep = keptEntry(folder)
+    if (keep) { skipped.push({ path: folder, reason: `holds ${slash(relative(folder, keep))}, which no git worktree record covers` }); continue }
+    const bytes = REGENERABLE.reduce((sum, name) => sum + (existsSync(join(folder, name)) || isLinkAt(join(folder, name)) ? sizeOf(join(folder, name)) : 0), 0)
+    if (!dryRun) {
+      try { removeFolderTree(folder) } catch (err) { skipped.push({ path: folder, reason: `removal failed: ${err.message}` }); continue }
+    }
+    removed.push({ path: folder, bytes })
+  }
+  return { removed, skipped }
+}
 
 export function cleanupPreparedWorktree({ tasksDir, prepared }) {
   if (!prepared?.git || !prepared.created || !prepared.entry) return false

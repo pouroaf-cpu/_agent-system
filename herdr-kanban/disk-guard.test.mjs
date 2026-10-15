@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, utimesSync, symlinkS
 import { join, parse, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { applyDiskReading, pruneAgentLogs, npmCacheDir, diskWatchRoots, DISK_LOW_GB, DISK_RESUME_GB, AGENT_LOG_KEEP_MS } from './lib/disk-guard.mjs'
-import { sweepCleanedCaches } from './lib/worktrees.mjs'
+import { sweepCleanedCaches, sweepUnregisteredFolders } from './lib/worktrees.mjs'
 
 test('disk floor: pauses under 6 GB, resumes above 8 GB, and holds in between', () => {
   assert.equal(DISK_LOW_GB, 6)
@@ -124,4 +124,80 @@ test('cache sweep: at most `limit` checkouts per call', () => {
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify(registry))
   assert.equal(sweepCleanedCaches(tasksDir, { limit: 2 }).length, 2)
   assert.equal(sweepCleanedCaches(tasksDir, { limit: 2 }).length, 2)
+})
+
+test('unregistered folders: removes only folders that hold nothing but caches, empty folders and a dangling pointer', () => {
+  const tasksDir = mkdtempSync(join(tmpdir(), 'disk-guard-orphans-'))
+  const cards = join(tasksDir, '.worktrees', 'Proj', 'cards')
+  const integrationPath = join(tasksDir, '.worktrees', 'Proj', 'integration')
+  const pointer = (folder, target) => writeFileSync(join(folder, '.git'), `gitdir: ${target}\n`)
+  const folder = (name) => { const root = join(cards, name); mkdirSync(root, { recursive: true }); return root }
+  const old = new Date(Date.now() - 5 * 60 * 60000)
+  const orphan = folder('orphan-caches')
+  mkdirSync(join(orphan, 'node_modules', 'pkg'), { recursive: true })
+  mkdirSync(join(orphan, '.next', 'cache'), { recursive: true })
+  pointer(orphan, join(tasksDir, 'missing', 'orphan'))
+  const junction = folder('orphan-junction')
+  const shared = join(tasksDir, 'shared-install')
+  mkdirSync(join(shared, 'pkg'), { recursive: true })
+  symlinkSync(shared, join(junction, 'node_modules'), 'junction')
+  pointer(junction, join(tasksDir, 'missing', 'junction'))
+  const empty = folder('orphan-empty')
+  mkdirSync(join(empty, 'sub'), { recursive: true })
+  const source = folder('orphan-source')
+  mkdirSync(join(source, 'src'), { recursive: true })
+  writeFileSync(join(source, 'src', 'a.ts'), 'unsaved work')
+  const live = folder('live-git')
+  mkdirSync(join(tasksDir, 'gitdirs', 'live'), { recursive: true })
+  pointer(live, join(tasksDir, 'gitdirs', 'live'))
+  const listedFolder = folder('listed')
+  writeFileSync(join(listedFolder, 'x.txt'), 'listed')
+  const registered = folder('registered')
+  writeFileSync(join(registered, 'x.txt'), 'registered')
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({
+    R1: { cardId: 'R1', repoRoot: integrationPath, worktreePath: registered, state: 'building' },
+  }))
+  for (const p of [orphan, junction, empty, source, live, listedFolder, registered]) utimesSync(p, old, old)
+  const { removed, skipped } = sweepUnregisteredFolders({ tasksDir, worktreesRoot: cards, integrationPath, listed: [listedFolder] })
+  const removedNames = removed.map(r => r.path.split(/[\\/]/).pop()).sort()
+  assert.deepEqual(removedNames, ['orphan-caches', 'orphan-empty', 'orphan-junction'])
+  assert.equal(existsSync(orphan), false)
+  assert.equal(existsSync(junction), false)
+  assert.equal(existsSync(empty), false)
+  assert.equal(existsSync(join(shared, 'pkg')), true, 'the junction target is never followed')
+  assert.equal(existsSync(join(source, 'src', 'a.ts')), true)
+  assert.equal(existsSync(live), true)
+  assert.equal(existsSync(listedFolder), true)
+  assert.equal(existsSync(registered), true)
+  const sourceSkip = skipped.find(s => s.path === source)
+  assert.match(sourceSkip.reason, /src[\\/]a\.ts/)
+  assert.equal(skipped.some(s => s.path === live), true)
+  assert.equal(skipped.some(s => s.path === listedFolder || s.path === registered), false)
+})
+
+test('unregistered folders: a dry run deletes nothing, young folders are left alone, and the limit holds', () => {
+  const tasksDir = mkdtempSync(join(tmpdir(), 'disk-guard-orphans-dry-'))
+  const cards = join(tasksDir, '.worktrees', 'Proj', 'cards')
+  const integrationPath = join(tasksDir, '.worktrees', 'Proj', 'integration')
+  const old = new Date(Date.now() - 5 * 60 * 60000)
+  for (const name of ['a', 'b', 'c']) {
+    const root = join(cards, name)
+    mkdirSync(join(root, 'node_modules'), { recursive: true })
+    utimesSync(root, old, old)
+  }
+  const young = join(cards, 'young')
+  mkdirSync(join(young, 'node_modules'), { recursive: true })
+  const dry = sweepUnregisteredFolders({ tasksDir, worktreesRoot: cards, integrationPath, listed: [], dryRun: true })
+  assert.equal(dry.removed.length, 3)
+  assert.ok(dry.removed.every(r => r.bytes >= 0))
+  assert.equal(existsSync(join(cards, 'a', 'node_modules')), true)
+  const limited = sweepUnregisteredFolders({ tasksDir, worktreesRoot: cards, integrationPath, listed: [], limit: 2 })
+  assert.equal(limited.removed.length, 2)
+  assert.equal(existsSync(young), true, 'a folder younger than an hour may still be under git worktree add')
+  assert.equal(limited.skipped.some(s => s.path === young), false)
+})
+
+test('unregistered folders: refuses a root that is not a worktrees folder', () => {
+  const tasksDir = mkdtempSync(join(tmpdir(), 'disk-guard-orphans-root-'))
+  assert.throws(() => sweepUnregisteredFolders({ tasksDir, worktreesRoot: join(tasksDir, 'cards'), integrationPath: tasksDir, listed: [] }), /outside a worktrees folder/)
 })
