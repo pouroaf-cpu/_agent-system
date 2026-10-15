@@ -39,6 +39,7 @@ const SLOW = {
   'release.test.mjs': 300000, // four release runs over three repos: 61s in a pair, past 120s on a busy board
   'headless-builder.test.mjs': 150000, // one 45-110s test
   'watchdog-herdr.test.mjs': 240000, // one 50-90s test
+  'watchdog.test.mjs': 300000, // ten PowerShell 5.1 watchdog runs: 100s alone, 221s with agents on the machine
   'test.mjs': 240000, // ~35s alone, 100s+ with three suites
   'syntax.test.mjs': 240000, // one serial node --check per .mjs file: 20s alone, 75s+ under load
   'agent-process.test.mjs': 180000, // PowerShell process listings: 25s alone, 37s+ in a pair
