@@ -2,6 +2,9 @@ import childProcess from 'node:child_process'
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { promisify } from 'node:util'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const calls = []
 let fail = false
@@ -54,6 +57,22 @@ test('pane mutation invalidates cycle inventory and failed inventories stay fail
     await assert.rejects(withAgentListCycle(() => agentList('alpha', { ensureSession: false })), /malformed response/)
   } finally { fail = false }
   await withAgentListCycle(() => agentList('alpha', { ensureSession: false }))
+})
+
+test('with every card role headless, an unreadable herdr inventory does not stop card flow', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'herdr-gate-'))
+  const previous = process.env.KANBAN_CONFIG
+  process.env.KANBAN_CONFIG = join(dir, 'board.config.json')
+  writeFileSync(process.env.KANBAN_CONFIG, JSON.stringify({ agentBackend: 'headless' }))
+  try {
+    fail = true
+    assert.deepEqual(await withAgentListCycle(() => agentList('alpha', { ensureSession: false })), [])
+  } finally {
+    fail = false
+    if (previous === undefined) delete process.env.KANBAN_CONFIG
+    else process.env.KANBAN_CONFIG = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('an integration check lasting beyond the poll interval refreshes its inventory', async t => {

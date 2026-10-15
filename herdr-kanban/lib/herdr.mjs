@@ -246,12 +246,21 @@ export async function agentList(session, options = {}) {
     ])
     return projectAgents(session, legacy, all, await sharedLabels(all))
   }
-  try { return [...await interactive(), ...local] } catch (err) {
+  try { const agents = [...await interactive(), ...local]; herdrInventoryDegraded = false; return agents } catch (err) {
+    // With every card role headless, no card's agent lives in herdr, so an unreadable herdr
+    // (down, hung, malformed) must not stop dispatch, planning, review, integration or release.
+    if (cardRolesHeadless()) {
+      if (!herdrInventoryDegraded) boardLog(`herdr agent inventory unavailable; card flow is headless, continuing without it: ${err.message}`)
+      herdrInventoryDegraded = true
+      return local
+    }
     // Only an absent server is safe to treat as empty; malformed inventory fails closed.
     if ((local.length || ['planner', 'builder', 'reviewer', 'plancheck'].some(role => backendFor(role) === 'headless')) && /server_not_running|ENOENT|ECONNREFUSED/.test(err.message)) return local
     throw err
   }
 }
+let herdrInventoryDegraded = false
+const cardRolesHeadless = () => ['planner', 'builder', 'reviewer', 'plancheck'].every(role => backendFor(role) === 'headless')
 
 // workspace_id -> label in the shared session, refreshed when an unknown id shows up.
 const labelCache = { at: 0, labels: new Map() }
