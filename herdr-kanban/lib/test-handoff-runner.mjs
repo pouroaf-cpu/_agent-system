@@ -3,7 +3,7 @@
 // timeout and rewrites the record as state: 'finished'. Nothing here may end as 'running'.
 
 import { spawn, execFileSync } from 'node:child_process'
-import { openSync, closeSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { openSync, closeSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
@@ -15,11 +15,19 @@ export function parseCounts(text) {
   return { passed: last(/^# pass (\d+)/gm), failed: last(/^# fail (\d+)/gm) }
 }
 
-// Temp file then rename, so a reader never sees half a record.
+// Temp file then rename, so a reader never sees half a record. Windows refuses that rename while a
+// reader has the record open (EPERM: the test poll and the board's dispatch both read it, and under
+// load the runner died with the record left 'running'), so then the text goes into the record in place.
 export function writeRecord(path, record) {
+  const text = JSON.stringify(record, null, 2)
   const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(record, null, 2))
-  renameSync(tmp, path)
+  writeFileSync(tmp, text)
+  try { renameSync(tmp, path) }
+  catch (err) {
+    if (!['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) throw err
+    writeFileSync(path, text)
+    rmSync(tmp, { force: true })
+  }
 }
 
 const killTree = (pid) => {

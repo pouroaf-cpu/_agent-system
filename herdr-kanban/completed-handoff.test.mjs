@@ -445,12 +445,16 @@ test('a running integration check does not hold the poll, and is not started or 
 })
 
 test('a timing-out integration check returns the poll first, then holds its own card with backoff (HK72 AC2)', async t => {
-  const { tasksDir, calls, poll } = backgroundFixture(t, () => new Promise(done => setTimeout(() => done({ ok: false, timedOut: true, output: 'npm test\ntimed out after 300s' }), 200)))
-  const now = Date.now(), start = performance.now()
+  // The check settles when the test says so, not on a timer: a wall-clock bound on the poll
+  // failed under load (sync poll work alone can exceed it), and the poll's own result is what counts.
+  let settle
+  const { tasksDir, calls, poll } = backgroundFixture(t, () => new Promise(done => { settle = done }))
+  const now = Date.now()
   const [first] = await poll(now)
-  assert.ok(performance.now() - start < 200, 'poll returned before the check timed out')
-  assert.match(first.reason, /running in the background/)
-  await new Promise(done => setTimeout(done, 300))
+  assert.equal(typeof settle, 'function', 'the check was started')
+  assert.match(first.reason, /running in the background/, 'the poll returned while the check was still running')
+  settle({ ok: false, timedOut: true, output: 'npm test\ntimed out after 300s' })
+  await new Promise(done => setImmediate(done))
   const [second] = await poll(now)
   assert.equal(second.status, 'held'); assert.match(second.reason, /integration check npm test timed out.*; retrying at \d{4}-/)
   assert.equal(readWorkflow(tasksDir)['T-1'].integrationRetry.tries, 1)
@@ -500,12 +504,15 @@ test('a running recorded check does not hold the poll or the next card, and is n
 })
 
 test('a timing-out recorded check returns the poll first, then holds its own card with backoff (HK73 AC2)', async t => {
-  const { tasksDir, calls, poll } = recordedFixture(t, { 'T-1': () => new Promise(done => setTimeout(() => done({ ok: false, timedOut: true, output: 'npm test\ntimed out after 600s' }), 200)) })
-  const now = Date.now(), start = performance.now()
+  // Settled by the test, not a timer (see HK72 AC2): the poll's result is what is checked.
+  let settle
+  const { tasksDir, calls, poll } = recordedFixture(t, { 'T-1': () => new Promise(done => { settle = done }) })
+  const now = Date.now()
   const [first] = await poll(now)
-  assert.ok(performance.now() - start < 200, 'poll returned before the check timed out')
-  assert.match(first.reason, /running in the background/)
-  await new Promise(done => setTimeout(done, 300))
+  assert.equal(typeof settle, 'function', 'the recorded check was started')
+  assert.match(first.reason, /running in the background/, 'the poll returned while the check was still running')
+  settle({ ok: false, timedOut: true, output: 'npm test\ntimed out after 600s' })
+  await new Promise(done => setImmediate(done))
   const [second] = await poll(now)
   assert.equal(second.status, 'held'); assert.match(second.reason, /recorded check timed out.*; retrying at /)
   assert.equal(readWorkflow(tasksDir)['T-1'].integrationRetry.tries, 1)

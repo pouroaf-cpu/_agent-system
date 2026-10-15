@@ -148,7 +148,9 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
       for (const pid of [row.pid, row.childPid].filter(Boolean)) {
         if (!alive(pid) || bindings.lockOwnerReplaced(pid, Date.parse(row.startedAt))) continue
         const key = `${id}/${pid}`
-        await trees.observe([{ key, shellPid: pid }]); await trees.close(key)
+        // Best-effort, as herdr.paneClose: a slow or failed process listing under load must not
+        // keep the agent open or skip the sweep below.
+        try { await trees.close(key, { shellPid: pid }) } catch {}
         if (process.platform !== 'win32' && alive(pid)) process.kill(pid === row.pid ? -pid : pid, 'SIGTERM')
       }
       // The tree above misses a server whose parent already exited, and the supervisor may be gone

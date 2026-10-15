@@ -73,7 +73,10 @@ export class PaneProcessTrees {
     return rows.filter(p => !protectedPids.has(p.pid))
   }
 
-  async close(key) {
+  // `seed` ({ shellPid }) roots a pane this process never observed, in the same listing that
+  // closes it: each listing costs seconds under load, so a close should not list twice to start.
+  async close(key, seed) {
+    if (seed && !this.panes.has(key)) await this.observe([{ key, shellPid: seed.shellPid }])
     const tree = this.panes.get(key)
     if (!tree) return
     let previous = new Set()
