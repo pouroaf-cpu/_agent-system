@@ -512,7 +512,7 @@ function buildBoardPayload(project) {
     stageIndicators: indicators,
     // Per card in Planning/Planned/Queue/Working/Review/Completed: { since (ISO, lane entry), agentActive, agentRole, agentName }.
     laneTimes: times,
-    cardWaits: Object.fromEntries(cardWaits(project, Date.now(), { board, planners, workflow, indicators, times }).cards.map(c => [c.id, { on: c.on ?? null, stuck: isStuck(c, 60), minutes: c.minutes }])),
+    cardWaits: Object.fromEntries(cardWaits(project, Date.now(), { board, planners, workflow, indicators, times }).cards.map(c => [c.id, { on: c.on ?? null, reason: c.reason ?? null, stuck: isStuck(c, 60), minutes: c.minutes }])),
     bindings: readBindings(tasksDirOf(project)),
     retries: readRetries(tasksDirOf(project)),
     // Why a queued card did not start on the last tick — an unmet Blocked-by, or

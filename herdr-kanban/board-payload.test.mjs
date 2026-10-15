@@ -120,6 +120,16 @@ test('F5 AC1/AC2: /api/board carries open cards only and /api/archive the archiv
   } finally { s.child.kill(); rmSync(b.root, { recursive: true, force: true }) }
 })
 
+// Audit 2026-10-16 F6 AC1: every Queue card with no agent or hold has a non-empty reason on /api/board.
+test('F6 AC1: /api/board gives each Queue card with no hold a reason', async () => {
+  const b = board()
+  const s = await startServer(b.root)
+  try {
+    const payload = await (await fetch(`${s.base}/api/board?project=Proj`)).json()
+    for (const id of ['T-1', 'T-2']) assert.match(payload.cardWaits[id].reason, /^(board paused|Builder slots are off|auto-spawn breaker|queued; waiting)/)
+  } finally { s.child.kill(); rmSync(b.root, { recursive: true, force: true }) }
+})
+
 test('F5 AC3: one SSE board event per change carries the lane summary and version, never the cards', async () => {
   const b = board()
   const s = await startServer(b.root)
