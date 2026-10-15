@@ -32,7 +32,7 @@ import { readAuditReports, resolveAuditReport, editorArguments } from './lib/aud
 import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, listRequests, addRequest, dueRequest, busyRequest, pageHistory, pageRuns } from './lib/test-runs.mjs'
 import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment, SIGN_IN, MODEL_REJECTED } from './lib/quota.mjs'
 import { startProjectPolling } from './lib/project-polling.mjs'
-import { getHeadlessAgent } from './lib/headless.mjs'
+import { getHeadlessAgent, pruneClosedRows } from './lib/headless.mjs'
 import { eventEntries, readTimes, fillTimes } from './scripts/agent-view.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -211,6 +211,11 @@ function checkDisk(now = Date.now()) {
   }
   if (now - disk.lastPrune >= 60 * 60000) {
     disk.lastPrune = now
+    // Closed registry rows and their files go first (2026-10-16 audit F4); pruneAgentLogs then clears any file still in use later.
+    try {
+      const closed = pruneClosedRows({ now })
+      if (closed.rows) boardLog(`headless registry pruned: ${closed.rows} closed row(s), ${closed.files} file(s)`)
+    } catch (err) { console.error(`headless registry prune failed: ${err.message}`) }
     try {
       const pruned = pruneAgentLogs({ root: join(HERE, '.agents'), now })
       if (pruned.removed) boardLog(`headless logs pruned: ${pruned.removed} file(s), ${(pruned.bytes / 1e6).toFixed(0)} MB`)

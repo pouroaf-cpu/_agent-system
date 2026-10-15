@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -42,6 +42,9 @@ export function agentCommand(engine, env = process.env) {
 }
 
 const alive = pid => { try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' } }
+// Closed rows are never listed again. They are kept this long for late reads of their logs, then pruneClosed drops them.
+export const CLOSED_ROW_KEEP_MS = 60 * 60000
+const settled = row => !!row.closedAt || row.exitCode != null
 const within = (path, dir) => !!path && `${resolve(path).toLowerCase()}\\`.startsWith(`${resolve(dir).toLowerCase().replace(/[\\/]+$/, '')}\\`)
 function tail(file, bytes = 128 * 1024) {
   if (!existsSync(file)) return ''
@@ -65,7 +68,8 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
   const get = id => { const row = load().find(a => a.id === id); if (!row) throw new Error(`Unknown headless agent ${id}`); return row }
   const patch = (id, value) => bindings.withBoardLock(root, () => { const rows = load(); const row = rows.find(a => a.id === id); if (!row) throw new Error(`Unknown headless agent ${id}`); Object.assign(row, value); save(rows); return row })
   function refresh(row) {
-    if (row.exitFile) { try { Object.assign(row, JSON.parse(readFileSync(row.exitFile, 'utf8'))) } catch (err) { if (err.code !== 'ENOENT') throw err } }
+    // A closed or exited row already has its final exit state merged: re-reading its exit file on every poll was the cost of the 3,360-file scan (2026-10-16 audit F4).
+    if (row.exitFile && !settled(row)) { try { Object.assign(row, JSON.parse(readFileSync(row.exitFile, 'utf8'))) } catch (err) { if (err.code !== 'ENOENT') throw err } }
     // Session identifiers are emitted at startup, before tool output grows the log.
     if (!row.sessionId && existsSync(row.log)) {
       const fd = openSync(row.log, 'r'), buffer = Buffer.alloc(65536)
@@ -134,13 +138,30 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
     },
     async agentList(session) {
       if (!existsSync(registry)) return []
-      const rows = bindings.withBoardLock(root, () => {
-        const rows = load()
-        for (const row of rows) refresh(row)
-        save(rows)
-        return rows
-      })
+      // Reads take no lock: save replaces the whole file, so a read sees the old or the new registry.
+      // The file is written back only when a row changed, and then under the lock from a fresh read.
+      let rows = load()
+      const before = JSON.stringify(rows)
+      for (const row of rows) refresh(row)
+      if (JSON.stringify(rows) !== before) rows = bindings.withBoardLock(root, () => { const fresh = load(); for (const row of fresh) refresh(row); save(fresh); return fresh })
       return rows.filter(a => !a.closedAt && (!session || a.session === session)).map(a => ({ ...a, pane_id: a.id, tab_id: a.id, agent_session: a.sessionId, agent_status: !a.startedAt ? 'idle' : a.exitCode == null && alive(a.pid) ? 'working' : 'done', backend: 'headless' }))
+    },
+    // Drops closed rows older than keepMs whose processes are gone, with their log, launch and exit files.
+    pruneClosed({ now = Date.now(), keepMs = CLOSED_ROW_KEEP_MS } = {}) {
+      if (!existsSync(registry)) return { rows: 0, files: 0 }
+      return bindings.withBoardLock(root, () => {
+        const rows = load()
+        const gone = new Set(rows.filter(row => row.closedAt && now - Date.parse(row.closedAt) >= keepMs && ![row.pid, row.childPid].some(pid => pid && alive(pid))).map(row => row.id))
+        if (!gone.size) return { rows: 0, files: 0 }
+        let files = 0
+        // Every file of a row starts with its id (headless-<uuid>.): log, .log.times, launch and exit files of each turn.
+        for (const name of readdirSync(root)) {
+          if (!gone.has(name.split('.')[0])) continue
+          try { unlinkSync(join(root, name)); files++ } catch { /* in use: pruneAgentLogs deletes it once it is old */ }
+        }
+        save(rows.filter(row => !gone.has(row.id)))
+        return { rows: gone.size, files }
+      })
     },
     async paneRead(id) { return tail(get(id).log).split('\n').slice(-200).join('\n') },
     async paneClose(id) {
@@ -169,6 +190,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
   }
 }
 export const headless = createHeadless()
+export const pruneClosedRows = options => headless.pruneClosed(options)
 export const { tabCreate, agentStart, agentPrompt, agentList, paneRead, paneClose, focusAgent } = headless
 export const getHeadlessAgent = id => headless.getAgent(id)
 export const waitForPrompt = async () => true
