@@ -9,7 +9,7 @@ import { PaneProcessTrees } from './process-tree.mjs'
 import { agentStartArgs, boardAgentPath, cleanEnv, writeCodexBoardProfile, writeCodexWorkspaceHooks } from './agent-launch.mjs'
 import { assertPromptAllowed } from './project-control.mjs'
 import * as bindings from './bindings.mjs'
-import { stopServersIn } from './orphan-servers.mjs'
+import { stopServersInAsync } from './orphan-servers.mjs'
 import { agentRole } from './ids.mjs'
 
 export const isHeadless = id => String(id).startsWith('headless-')
@@ -157,7 +157,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
       // without a record (killed): sweep the card's worktree unless another agent still works in it
       // (IA93). A recorded exit was written after the supervisor's own sweep.
       const dir = refresh(row).exitCode == null && row.options?.worktreePath
-      if (dir && !load().some(a => a.id !== id && !a.closedAt && refresh(a).exitCode == null && alive(a.pid) && within(a.options?.workspacePath || a.cwd, dir))) try { stopServersIn(dir) } catch {}
+      if (dir && !load().some(a => a.id !== id && !a.closedAt && refresh(a).exitCode == null && alive(a.pid) && within(a.options?.workspacePath || a.cwd, dir))) try { await stopServersInAsync(dir) } catch {}
       patch(id, { closedAt: new Date().toISOString() })
     },
     async focusAgent(id) {

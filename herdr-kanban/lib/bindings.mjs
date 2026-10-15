@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { cachedAsync, execText } from './async-cache.mjs'
 
 const file = (tasksDir) => join(tasksDir, '.board.json')
 const lockFile = (tasksDir) => join(tasksDir, '.board.lock')
@@ -69,11 +69,17 @@ function alive(pid) {
 // prove a lock is still held. Its owner started before writing the lock; a process that
 // reused the PID started after. Unreadable start time (a system process) is not an owner;
 // a failed query is (never break a lock on doubt). Only called for locks past their bound.
+// The start time is a PowerShell query (seconds on a loaded PC), so it is read in the background:
+// until it is known the answer is undefined and the caller waits for the next attempt.
 export function lockOwnerReplaced(pid, writtenAt) {
+  return ownerReplaced(pid, writtenAt) === true
+}
+
+function ownerReplaced(pid, writtenAt) {
   if (process.platform !== 'win32') return false
-  const r = spawnSync('powershell', ['-NoProfile', '-Command', `$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue; if (!$p) { 'gone' } elseif ($p.StartTime) { ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } else { 'unreadable' }`], { encoding: 'utf8', timeout: 20000, windowsHide: true })
-  const out = (r.stdout || '').trim()
-  return out === 'gone' || out === 'unreadable' || Number(out) > writtenAt
+  const { value, known } = cachedAsync(`owner-start:${Number(pid)}`, () => execText('powershell', ['-NoProfile', '-Command', `$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue; if (!$p) { 'gone' } elseif ($p.StartTime) { ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } else { 'unreadable' }`], { timeout: 20000 }).then(out => out.trim()), { ttl: 60000 })
+  if (!known) return undefined
+  return value === 'gone' || value === 'unreadable' || Number(value) > writtenAt
 }
 
 function acquire(tasksDir) {
@@ -89,6 +95,7 @@ function acquire(tasksDir) {
       return path
     } catch (err) {
       if (err.code !== 'EEXIST') throw err
+      let ownerPending = false
       try {
         const pid = readFileSync(path, 'utf8').trim()
         const { mtimeMs } = statSync(path)
@@ -96,14 +103,18 @@ function acquire(tasksDir) {
         // Board transactions take milliseconds; past 2 minutes, check the PID is still its owner.
         if (!stale && !checkedOwner && Date.now() - mtimeMs > 120000) {
           checkedOwner = true
+          const replaced = ownerReplaced(pid, mtimeMs)
+          // Start time still being read in the background: fail this attempt, the next one has the answer.
+          ownerPending = replaced === undefined
           // The check takes a moment: only remove the same lock, not one another process just took.
-          stale = lockOwnerReplaced(pid, mtimeMs) && statSync(path).mtimeMs === mtimeMs && readFileSync(path, 'utf8').trim() === pid
+          stale = replaced === true && statSync(path).mtimeMs === mtimeMs && readFileSync(path, 'utf8').trim() === pid
         }
         if (stale) {
           unlinkSync(path)
           continue
         }
       } catch {}
+      if (ownerPending) throw new Error(`binding state is busy: ${path}`)
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
     }
   }

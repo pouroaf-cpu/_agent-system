@@ -3,7 +3,7 @@ import { formatNZTime, formatNZClock } from './lib/nz-time.mjs'
 
 import { createServer } from 'node:http'
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, watch, openSync, readSync, closeSync, statSync } from 'node:fs'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { join, extname, normalize, dirname, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 import { renameSync } from './lib/fs-retry.mjs'
@@ -49,6 +49,7 @@ const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, '
 const { COLUMNS, ARCHIVE, createCard, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace } = await import('./lib/herdr.mjs')
 const { boardLog } = await import('./lib/board-log.mjs')
+const { cachedAsync, execText } = await import('./lib/async-cache.mjs')
 const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
@@ -548,8 +549,9 @@ const isStuck = (c, minutes) => {
 function integrationAheadOfMaster(project) {
   const path = projectSettingsOf(project)?.integrationPath
   if (!path) return null
-  const r = spawnSync('git', ['-C', path, 'rev-list', '--count', 'origin/master..HEAD'], { encoding: 'utf8', timeout: 5000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })
-  return r.status === 0 ? Number(r.stdout.trim()) : null
+  // Read in the background (git on a large repo is slow on a loaded PC): the last answer, null until known.
+  const ahead = cachedAsync(`ahead:${path}`, () => execText('git', ['-C', path, 'rev-list', '--count', 'origin/master..HEAD'], { timeout: 5000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } }).then(out => Number(out.trim())), { ttl: 30000 })
+  return ahead.known ? ahead.value : null
 }
 
 function projectSummary(project) {

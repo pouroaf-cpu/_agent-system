@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { withBoardLock } from './lib/bindings.mjs'
+import { withBoardLock, lockOwnerReplaced } from './lib/bindings.mjs'
 import { reconcileCompletedWorktrees } from './lib/worktrees.mjs'
 import { syncReviewClaims } from './lib/review-claims.mjs'
 import { routeBuilderNoHandoff } from './lib/autospawn.mjs'
@@ -261,6 +261,8 @@ test('locks whose PID was reused by a later process are reclaimed past their bou
   const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { windowsHide: true })
   t.after(() => { other.kill(); rmSync(root, { recursive: true, force: true }) })
   await new Promise(done => other.once('spawn', done))
+  // The owner's start time is read in the background (a PowerShell query): warm it up so the lock checks below have an answer.
+  for (let i = 0; i < 200 && !lockOwnerReplaced(other.pid, 0); i++) await new Promise(done => setTimeout(done, 100))
   const minutesAgo = m => new Date(Date.now() - m * 60000)
 
   const board = join(tasks, '.board.lock')
