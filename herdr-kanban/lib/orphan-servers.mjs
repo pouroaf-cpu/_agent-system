@@ -1,5 +1,8 @@
-import { spawnSync, execFile } from 'node:child_process'
-import { resolve } from 'node:path'
+import { spawn, spawnSync, execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, renameSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Agents start servers (`next dev`, `next start`) for their checks and sometimes leave
 // them running after their pane closes. The server keeps its port and locks files in the
@@ -69,8 +72,7 @@ const LIST_NODE = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Sel
 
 // Windows exposes no process working directory, so it is read from the process's PEB
 // (x64: PEB+0x20 -> ProcessParameters, +0x38 -> CurrentDirectory.DosPath). "" when unreadable.
-const LIST_NODE_CWD = `Add-Type -TypeDefinition @'
-using System; using System.Runtime.InteropServices; using System.Text;
+const PROC_CWD_CS = `using System; using System.Runtime.InteropServices; using System.Text;
 public static class ProcCwd {
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(int access, bool inherit, int pid);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
@@ -88,13 +90,38 @@ public static class ProcCwd {
       return Encoding.Unicode.GetString(Read(h, BitConverter.ToInt64(dir, 8), BitConverter.ToUInt16(dir, 0)));
     } catch { return ""; } finally { CloseHandle(h); }
   }
+}`
+
+const LIST_NODE_CWD_TAIL = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Created = [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds(); Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
+
+// The C# used to be compiled on every listing (seconds of csc per sweep). It is now built once into a
+// DLL under .agents/ (gitignored), named by a hash of the source so an edited source builds again.
+// The listing loads the DLL; with no DLL it compiles inline, as before.
+const PROC_CWD_BASE = `proc-cwd-${createHash('sha1').update(PROC_CWD_CS).digest('hex').slice(0, 12)}`
+export const PROC_CWD_DLL = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.agents', `${PROC_CWD_BASE}.dll`)
+export const listNodeCwdScript = dll => `${dll ? `Add-Type -LiteralPath '${dll}'` : `Add-Type -TypeDefinition @'\n${PROC_CWD_CS}\n'@`}\n${LIST_NODE_CWD_TAIL}`
+const existingProcCwdDll = () => (existsSync(PROC_CWD_DLL) ? PROC_CWD_DLL : null)
+
+let procCwdBuild = null
+// Resolves the DLL path, building it first when missing; null when it cannot be built.
+export function procCwdDll() {
+  if (existingProcCwdDll()) return Promise.resolve(PROC_CWD_DLL)
+  procCwdBuild ??= new Promise(done => {
+    mkdirSync(dirname(PROC_CWD_DLL), { recursive: true })
+    const tmp = resolve(dirname(PROC_CWD_DLL), `${PROC_CWD_BASE}.${process.pid}.dll`)
+    const script = `Add-Type -TypeDefinition @'\n${PROC_CWD_CS}\n'@ -OutputAssembly '${tmp}' -OutputType Library`
+    execFile('powershell', ['-NoProfile', '-Command', script], { timeout: 120000, windowsHide: true }, err => {
+      try { if (!err) renameSync(tmp, PROC_CWD_DLL) } catch {}
+      procCwdBuild = null
+      done(existingProcCwdDll())
+    })
+  })
+  return procCwdBuild
 }
-'@
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Created = [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds(); Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
 
 function nodeProcesses({ cwd = false } = {}) {
   if (process.platform !== 'win32') return []
-  const r = spawnSync('powershell', ['-NoProfile', '-Command', cwd ? LIST_NODE_CWD : LIST_NODE], { encoding: 'utf8', timeout: 20000, windowsHide: true })
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', cwd ? listNodeCwdScript(existingProcCwdDll()) : LIST_NODE], { encoding: 'utf8', timeout: 20000, windowsHide: true })
   let rows = []
   try { rows = [JSON.parse(r.stdout || '[]')].flat() } catch {}
   return rows.map(toNodeRow)
@@ -116,7 +143,7 @@ function psAsync(script) {
 async function nodeProcessesAsync({ cwd = false } = {}) {
   if (process.platform !== 'win32') return []
   let rows = []
-  try { rows = [JSON.parse(await psAsync(cwd ? LIST_NODE_CWD : LIST_NODE) || '[]')].flat() } catch {}
+  try { rows = [JSON.parse(await psAsync(cwd ? listNodeCwdScript(await procCwdDll()) : LIST_NODE) || '[]')].flat() } catch {}
   return rows.map(toNodeRow)
 }
 
@@ -241,11 +268,51 @@ export async function stopDeadParentLeftovers({ minAgeMs = 10 * 60000, now = Dat
   return hits.filter(p => !left.has(p.pid)).map(p => ({ pid: p.pid, name: p.name, cmd: p.cmd }))
 }
 
-// Free commit (RAM + pagefile), the limit Windows kills at; os.freemem() is RAM only.
+// A child process that answers one line per line it reads on stdin, so a caller can ask again and
+// again without starting a process each time. Its pending asks resolve null when it dies.
+export function startLineReader(command, args) {
+  const child = spawn(command, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+  const waiting = []
+  let buf = '', dead = false
+  const finish = () => { if (dead) return; dead = true; for (const w of waiting.splice(0)) w(null) }
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', chunk => {
+    buf += chunk
+    for (let nl; (nl = buf.indexOf('\n')) >= 0; buf = buf.slice(nl + 1)) waiting.shift()?.(buf.slice(0, nl).trim())
+  })
+  child.on('error', finish)
+  child.on('exit', finish)
+  child.stdin.on('error', finish)
+  return {
+    alive: () => !dead,
+    ask: () => new Promise(done => { if (dead) return done(null); waiting.push(done); child.stdin.write('\n') }),
+    stop: () => { finish(); try { child.kill() } catch {} },
+  }
+}
+
+// Free commit (RAM + pagefile), the limit Windows kills at; os.freemem() is RAM only. One PowerShell
+// stays up for the board's life: the memory gate samples every 10 s while agents are live, and each
+// sample used to start a new PowerShell (2026-10-16 speed audit). The script exits when stdin closes.
+const FREE_COMMIT_SCRIPT = 'while ($null -ne [Console]::In.ReadLine()) { [Console]::Out.WriteLine((Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory) }'
+const FREE_COMMIT_TIMEOUT_MS = 20000
+let freeCommitReader = null
+
+// Ends the shared PowerShell; the next reading starts a new one.
+export function stopFreeCommitReader() {
+  freeCommitReader?.stop()
+  freeCommitReader = null
+}
+
 // Rejects when it cannot be read.
-export function freeCommitGb() {
-  return new Promise((done, fail) => execFile('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory'], { timeout: 20000, windowsHide: true }, (err, out) => {
-    const kb = Number(String(out).trim())
-    err || !kb ? fail(err || new Error('free commit unreadable')) : done(kb / 1024 / 1024)
-  }))
+export async function freeCommitGb() {
+  if (process.platform !== 'win32') throw new Error('free commit unreadable')
+  if (!freeCommitReader?.alive()) freeCommitReader = startLineReader('powershell', ['-NoProfile', '-NonInteractive', '-Command', FREE_COMMIT_SCRIPT])
+  const reader = freeCommitReader
+  let timer
+  const line = await Promise.race([reader.ask(), new Promise(done => { timer = setTimeout(() => done(null), FREE_COMMIT_TIMEOUT_MS); timer.unref() })])
+  clearTimeout(timer)
+  if (line === null) reader.stop()  // timed out or died: the next sample starts a new one
+  const kb = Number(line)
+  if (!kb) throw new Error('free commit unreadable')
+  return kb / 1024 / 1024
 }

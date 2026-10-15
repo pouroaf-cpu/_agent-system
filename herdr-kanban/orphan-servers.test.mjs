@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stopServersIn, stopServersInAsync, stopRunawayTsservers, stopOrphanWebKit, stopAgentLeftovers, stopDeadParentLeftovers } from './lib/orphan-servers.mjs'
+import { execFile } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { stopServersIn, stopServersInAsync, stopRunawayTsservers, stopOrphanWebKit, stopAgentLeftovers, stopDeadParentLeftovers, startLineReader, freeCommitGb, stopFreeCommitReader, procCwdDll, listNodeCwdScript, PROC_CWD_DLL } from './lib/orphan-servers.mjs'
 
 test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', async () => {
   const list = () => [
@@ -130,4 +132,42 @@ test('dead-parent find, python, bash and board-path node leftovers older than 10
 test('a dead-parent leftover is reported only once it is gone after the kill', async () => {
   const now = 1e12, old = now - 3600e3
   assert.deepEqual(await stopDeadParentLeftovers({ now, list: async () => [{ pid: 1, ppid: 900, name: 'find.exe', cmd: 'find /', created: old }], kill: async () => {} }), [])
+})
+
+// 2026-10-16 speed audit: the memory gate asked PowerShell for free commit every 10 s, and the sweep
+// compiled its C# on every listing. Both now keep one child (or one DLL) and reuse it.
+test('the line reader answers each ask from one child, and a dead or stopped child resolves asks null', async () => {
+  const echo = "process.stdin.on('data', d => { for (let i = 0; i < String(d).split('\\n').length - 1; i++) process.stdout.write('6291456\\n') })"
+  const r = startLineReader(process.execPath, ['-e', echo])
+  assert.deepEqual([await r.ask(), await r.ask(), await r.ask()], ['6291456', '6291456', '6291456'])
+  assert.equal(r.alive(), true)
+  r.stop()
+  assert.equal(r.alive(), false)
+  assert.equal(await r.ask(), null)
+  const gone = startLineReader(process.execPath, ['-e', 'process.exit(0)'])
+  assert.equal(await gone.ask(), null)
+})
+
+test('freeCommitGb reads free commit in GB on each call', { skip: process.platform !== 'win32', timeout: 60000 }, async () => {
+  try {
+    const first = await freeCommitGb(), second = await freeCommitGb()
+    assert.ok(first > 0 && second > 0, `${first} ${second}`)
+  } finally { stopFreeCommitReader() }
+})
+
+test('the sweep C# is built once into a DLL under .agents, and the listing loads it instead of compiling', { skip: process.platform !== 'win32', timeout: 180000 }, async () => {
+  const dll = await procCwdDll()
+  assert.equal(dll, PROC_CWD_DLL)
+  const built = statSync(dll).mtimeMs
+  assert.equal(await procCwdDll(), dll)
+  assert.equal(statSync(dll).mtimeMs, built, 'the second call does not compile again')
+  assert.match(listNodeCwdScript(dll), /^Add-Type -LiteralPath '.*\.dll'\r?\n/)
+  assert.doesNotMatch(listNodeCwdScript(dll), /TypeDefinition/)
+  assert.match(listNodeCwdScript(null), /^Add-Type -TypeDefinition @'/, 'no DLL: compile inline, as before')
+  // Runs the listing as the sweep does and checks this node process is listed with its working directory.
+  const out = await new Promise((done, fail) => execFile('powershell', ['-NoProfile', '-Command', listNodeCwdScript(dll)], { encoding: 'utf8', timeout: 60000, windowsHide: true }, (err, o) => (err ? fail(err) : done(o))))
+  const me = [JSON.parse(out)].flat().find(p => p.ProcessId === process.pid)
+  assert.ok(me, 'this node process is listed')
+  const norm = s => String(s).replace(/[\\/]+$/, '').toLowerCase()
+  assert.equal(norm(me.Cwd), norm(process.cwd()))
 })
