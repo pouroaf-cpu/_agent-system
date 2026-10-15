@@ -12,7 +12,8 @@ import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inboxLog } from '../lib/inbox.mjs'
-import { inboxWake, planFails, planSinceFrom, settled, stuckDetail, withEventId } from './project-wait.mjs'
+import { wakeLedger } from '../lib/waiter-wakes.mjs'
+import { inboxWake, planFails, planSinceFrom, settled, stuckDetail, stuckKey, stuckList, withEventId } from './project-wait.mjs'
 
 const ROOT = process.env.KM_ROOT || 'C:/Users/PFrew/KanbanProjects'
 const INBOX = process.env.KM_INBOX || 'C:/Users/PFrew/Projects/_roles/KANBAN_MANAGER-INBOX.md'
@@ -27,16 +28,31 @@ const cards = () => readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isD
   }))
 const inboxLines = () => { try { return readFileSync(INBOX, 'utf8').split('\n').filter(Boolean) } catch { return [] } }
 const logLines = () => { try { return readFileSync(inboxLog(INBOX), 'utf8').split('\n').filter(Boolean) } catch { return [] } }
+// A respawned waiter forgets which stuck cards it already woke for, so a count that dips to 0 and rises
+// again would wake the Manager for the same card (operator, 2026-10-16). The ledger keeps those cards.
+const ledger = wakeLedger(process.env.KM_WAKES || join(tmpdir(), 'km-wait-wakes.json'))
+// Stuck cards read on the last check tick (undefined when the board could not list them).
+let listed
 const stuck = async () => {
+  listed = undefined
   try {
     const { projects } = await (await fetch(BOARD, { signal: AbortSignal.timeout(30000) })).json()
     // An operator hold (agent cap 0, or a paused project) leaves cards waiting on purpose: not a stall to wake for.
     const held = JSON.parse(readFileSync(new URL('../board.config.json', import.meta.url), 'utf8')).maxConcurrentAgents === 0
-    return Object.fromEntries(projects.map(p => [p.project, held || p.paused ? 0 : p.stuck || 0]))
+    const counts = Object.fromEntries(projects.map(p => [p.project, held || p.paused ? 0 : p.stuck || 0]))
+    listed = Object.values(counts).some(n => n > 0) ? await stuckList().catch(() => undefined) : []
+    return counts
   } catch { return null } // board down: the watchdog writes that to the inbox
 }
+const stuckHeld = () => (listed || []).map(stuckKey)
 
-const done = line => { console.log(withEventId(line)); process.exit(0) }
+// Every exit records the stuck cards it saw, persists them, then prints: the respawn reads this wake.
+const done = line => {
+  ledger.observe(stuckHeld(), Date.now())
+  ledger.flush(Date.now(), { force: true })
+  console.log(withEventId(line))
+  process.exit(0)
+}
 const seen = new Set(cards())
 let lines = inboxLines().length, logFrom = logLines().length
 let stuckBefore = await stuck() ?? {}, rising = {}
@@ -70,7 +86,18 @@ for (let tick = 0; ; tick++) {
       for (const p of Object.keys(rising)) if (!worse.includes(p)) delete rising[p]
       for (const p of worse) rising[p] = (rising[p] || 0) + 1
       const confirmed = worse.filter(p => rising[p] >= 4)
-      if (confirmed.length) done(`STUCK ${confirmed.map(p => `${p}=${now[p]}`).join(', ')}${await stuckDetail(confirmed)}`)
+      if (confirmed.length) {
+        // Silent when every listed card of these projects was already woken for; an empty or
+        // unreadable list wakes, so a count the list cannot explain is never swallowed.
+        const named = listed?.filter(c => confirmed.includes(c.project))
+        if (!named?.length || named.some(c => ledger.isNews(stuckKey(c), Date.now()))) {
+          done(`STUCK ${confirmed.map(p => `${p}=${now[p]}`).join(', ')}${await stuckDetail(confirmed)}`)
+        }
+        ledger.observe(stuckHeld(), Date.now())
+        for (const p of confirmed) { stuckBefore[p] = now[p]; delete rising[p] }
+      }
+      ledger.observe(stuckHeld(), Date.now())
+      ledger.flush(Date.now())
       if (!worse.length) stuckBefore = now
     }
   }
