@@ -21,7 +21,9 @@ const serve = (page, api, posted) => page.route('**/*', route => {
 })
 // Elements whose box runs past the right edge of the viewport.
 const overflowing = page => page.evaluate(() => [...document.querySelectorAll('body *')]
-  .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 })
+  // The phone header's button strip (.bar-right) scrolls sideways on purpose, so its
+  // buttons are reached by scrolling and are not page overflow (audit 2026-10-16 F2).
+  .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 && !e.closest('.bar-right') })
   .map(e => `${e.tagName.toLowerCase()}${e.className ? '.' + String(e.className).replace(/ /g, '.') : ''} right=${Math.round(e.getBoundingClientRect().right)}`))
 const boxes = (page, selector) => page.locator(selector).evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return { text: e.textContent, w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) } }))
 
