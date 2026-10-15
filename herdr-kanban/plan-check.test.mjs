@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { autoPlanCheck, finishPlanCheck, promotePlanned, spawnReviewer } from './lib/autospawn.mjs'
+import { autoPlanCheck, finishPlanCheck, holdsFor, promotePlanned, spawnReviewer } from './lib/autospawn.mjs'
 import { findCard, moveCard } from './lib/cards.mjs'
 import { reserveReview, updateReviewClaim, readReviewClaims, syncReviewClaims } from './lib/review-claims.mjs'
 import { evidenceFingerprint, readWorkflow } from './lib/workflow-state.mjs'
@@ -156,4 +156,18 @@ test('plan-check start failures, missing verdicts and RETRY share a hold and ski
     assert.equal(readWorkflow(tasksDir)[id].correction, undefined)
     assert.equal(recoveryState(readFileSync(findCard(tasksDir, id).path, 'utf8')).returns, 0)
   }
+})
+
+test('promotePlanned refuses a card with a failing plan, records why, and still promotes the rest', () => {
+  const root = mkdtempSync(join(tmpdir(), 'promote-refuse-')), tasksDir = join(root, 'TASKS')
+  try {
+    mkdirSync(join(tasksDir, 'backlog'), { recursive: true })
+    const card = (id, files) => `# ${id} — promote refusal\n**Workflow:** card-owned\n## Approved brief\nMake result true\n## Files\n${files}\n## Implementation plan\nCheck: node app.mjs\n## Acceptance criteria\nResult true\n`
+    writeFileSync(join(tasksDir, 'backlog', 'T-1.md'), card('T-1', '- `app.mjs`'))
+    writeFileSync(join(tasksDir, 'backlog', 'T-2.md'), card('T-2', '- `app.mjs` also `other.mjs`'))
+    assert.deepEqual(promotePlanned(tasksDir, { project: 'Proof', planCheck: false }), ['T-1'], 'one bad plan does not abort the pass')
+    assert.equal(findCard(tasksDir, 'T-1').column, 'queue')
+    assert.equal(findCard(tasksDir, 'T-2').column, 'planned')
+    assert.match(holdsFor('Proof', { tasksDir })['T-2'] ?? '', /Plan incomplete/, 'the refused card carries a hold reason')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

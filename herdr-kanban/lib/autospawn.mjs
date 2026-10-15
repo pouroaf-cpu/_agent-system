@@ -300,9 +300,11 @@ const holds = new Map() // project -> { cardId: reason }
 
 // Planned cards whose plan check waits on a file lock (TF136 sat 21 min with "no hold recorded", 2026-10-03).
 const planHolds = new Map() // project -> { cardId: reason }
+// Planned cards promotePlanned refused to queue (e.g. a failing plan). One bad card must not stop the pass, and its reason must show.
+const promoteRefusals = new Map() // project -> { cardId: reason }
 const holdContexts = new Map() // project -> file-lock settings, independent of dispatch selection
 export function holdsFor(project, context = holdContexts.get(project)) {
-  const held = { ...planHolds.get(project), ...holds.get(project) }
+  const held = { ...planHolds.get(project), ...promoteRefusals.get(project), ...holds.get(project) }
   if (!context?.projectPath) return held
   const { tasksDir, projectPath, gitSettings = {} } = context, board = readBoard(tasksDir), registry = readWorktrees(tasksDir)
   for (const card of [...board.planned, ...board.queue]) {
@@ -820,16 +822,23 @@ export async function autoPlanCheck({ mission, project, tasksDir, reviewRoot, in
 }
 
 export function promotePlanned(tasksDir, { mission, project, planCheck = true } = {}) {
-  const promoted = []
+  const promoted = [], refused = {}
   const board = readBoard(tasksDir)
   for (const card of board.planned) {
     if (planCheck && needsPlanCheck(card)) continue
     if (mission?.id && (mission.project && project !== mission.project || card.mission !== mission.id)) continue
     const unmet = unmetBlockers(card, board, readWorktrees(tasksDir))
     if (unmet.length) continue
-    moveCard(tasksDir, card.id, 'queue')
+    try {
+      moveCard(tasksDir, card.id, 'queue')
+    } catch (error) {
+      // A card whose plan fails validation stays Planned with its reason shown; the other cards still promote.
+      refused[card.id] = `promotion refused: ${error.message}`
+      continue
+    }
     promoted.push(card.id)
   }
+  if (project !== undefined) promoteRefusals.set(project, refused)
   return promoted
 }
 
