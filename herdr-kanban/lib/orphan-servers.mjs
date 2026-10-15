@@ -24,7 +24,20 @@ export async function stopServersInAsync(dir, { list = () => nodeProcessesAsync(
 function matchServersIn(rows, dir) {
   const needle = resolve(dir).toLowerCase()
   const inside = s => `${s.toLowerCase().replaceAll('/', '\\')}\\`.includes(`${needle}\\`)
-  return rows.filter(p => p.pid !== process.pid && (inside(p.cmd) || inside(p.cwd || '')))
+  const runs = testRunPids(rows)
+  return rows.filter(p => p.pid !== process.pid && !runs.has(p.pid) && (inside(p.cmd) || inside(p.cwd || '')))
+}
+
+// A board test run (test-handoff-runner.mjs) outlives the Builder session that submitted it, and its
+// Playwright workers inherit the worktree as cwd. The sweep when that session exits matched them and
+// killed the run 14-20 s after submit (IA235 and IA236, 2026-10-15). The runner and all it started are never swept.
+function testRunPids(rows) {
+  const kids = new Map()
+  for (const p of rows) if (p.ppid) kids.set(p.ppid, [...(kids.get(p.ppid) || []), p.pid])
+  const out = new Set()
+  const walk = pid => { if (out.has(pid)) return; out.add(pid); for (const k of kids.get(pid) || []) walk(k) }
+  for (const p of rows) if (/test-handoff-runner\.mjs/i.test(p.cmd)) walk(p.pid)
+  return out
 }
 
 function killTree(pid) {
@@ -52,7 +65,7 @@ export async function stopRunawayTsservers(root, { maxCpuSeconds = 2 * 3600, lis
 }
 
 // JSON, because PowerShell wraps long plain-text lines at the console width.
-const LIST_NODE = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Select-Object ProcessId, CommandLine, KernelModeTime, UserModeTime | ConvertTo-Json -Compress`
+const LIST_NODE = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Select-Object ProcessId, ParentProcessId, CommandLine, KernelModeTime, UserModeTime | ConvertTo-Json -Compress`
 
 // Windows exposes no process working directory, so it is read from the process's PEB
 // (x64: PEB+0x20 -> ProcessParameters, +0x38 -> CurrentDirectory.DosPath). "" when unreadable.
@@ -77,7 +90,7 @@ public static class ProcCwd {
   }
 }
 '@
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Created = [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds(); Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; CommandLine = $_.CommandLine; KernelModeTime = $_.KernelModeTime; UserModeTime = $_.UserModeTime; Created = [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds(); Cwd = [ProcCwd]::Of($_.ProcessId) } } | ConvertTo-Json -Compress`
 
 function nodeProcesses({ cwd = false } = {}) {
   if (process.platform !== 'win32') return []
@@ -89,7 +102,7 @@ function nodeProcesses({ cwd = false } = {}) {
 
 // Kernel/user times are in 100 ns units.
 function toNodeRow(p) {
-  return { pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }
+  return { pid: p.ProcessId, ppid: Number(p.ParentProcessId) || null, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }
 }
 
 // The sweep's listings run async. Each PowerShell start takes seconds on a loaded PC (LIST_NODE_CWD
