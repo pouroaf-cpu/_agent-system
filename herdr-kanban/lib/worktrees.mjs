@@ -7,7 +7,7 @@ import { renameSync } from './fs-retry.mjs'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard, filesOverlap, isGlob, globMatches } from './cards.mjs'
-import { evidenceFingerprint } from './workflow-state.mjs'
+import { evidenceFingerprint, updateWorkflow } from './workflow-state.mjs'
 import { recoveryState } from './recovery.mjs'
 import { previousBuilderAttempt, historyPath } from './card-history.mjs'
 import { lockOwnerReplaced } from './bindings.mjs'
@@ -1034,12 +1034,31 @@ function resumeResolvedConflict(tasksDir, entry, card) {
 // Bring a Completed card's one commit up to the integration HEAD in its own
 // worktree, so a project integrationCheck tests exactly what would land.
 // Null when reconcile should judge the card itself (not Completed, invalid commit).
+// A card's Workspace can change after its worktree was made (Injectbuddy I1322: the card moved from
+// public to '.' on 2026-10-15 while its worktree kept public, so its integration check ran in public/,
+// where the root's node script does not exist, and held the card as broken on master). The entry
+// follows the card's Workspace again, and the integration hold recorded for the old folder is cleared.
+function followWorkspace(tasksDir, cardId, entry, card) {
+  const integrationWorkspace = resolve(entry.repoRoot, card.workspace || '.')
+  const workspaceRel = slash(relative(entry.repoRoot, integrationWorkspace))
+  if (workspaceRel.startsWith('..') || resolve(entry.repoRoot, workspaceRel) !== integrationWorkspace) return entry
+  if (resolve(entry.integrationWorkspace || entry.repoRoot) === integrationWorkspace && (entry.workspaceRel || '') === workspaceRel) return entry
+  updateWorkflow(tasksDir, cardId, { integrationBroken: null })
+  return updateEntry(tasksDir, cardId, {
+    integrationWorkspace,
+    workspaceRel,
+    workspacePath: resolve(entry.worktreePath, workspaceRel),
+    files: [...new Set([...(entry.files || []), ...filesFor(card, integrationWorkspace)])],
+  })
+}
+
 export function rebaseCompletedOntoIntegration(tasksDir, cardId) {
   const card = readBoard(tasksDir).completed.find((c) => c.id === cardId)
   let entry = readWorktrees(tasksDir)[cardId]
   if (card) entry = resumeResolvedConflict(tasksDir, entry, card)
   if (entry?.blocked) return { status: 'conflict', blocked: true, reason: entry.blocked.reason, files: entry.blocked.files }
   if (!entry || !card || !['building', 'ready', 'issue', 'rebased'].includes(entry.state)) return null
+  entry = followWorkspace(tasksDir, cardId, entry, card)
   if (entry.rebaseTarget && git(entry.worktreePath, ['merge-base', '--is-ancestor', entry.rebaseTarget, 'HEAD'], { allowFailure: true }).status === 0) {
     entry = updateEntry(tasksDir, cardId, { baseCommit: entry.rebaseTarget, rebaseTarget: null })
   }

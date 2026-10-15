@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, cleanupPreparedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, cleanupPreparedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree, rebaseCompletedOntoIntegration } from './lib/worktrees.mjs'
+import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -1213,5 +1214,31 @@ test('HK78: a first Builder run gets no hand-over', () => {
     moveCard(f.tasks, 'T-1', 'planning'); moveCard(f.tasks, 'T-1', 'queue')
     const card = moveCard(f.tasks, 'T-1', 'working')
     assert.equal(prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).handover, undefined)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('a card whose Workspace moved after its worktree was made follows it back to the integration root', () => {
+  const f = fixture()
+  try {
+    mkdirSync(join(f.integration, 'public'))
+    writeFileSync(join(f.integration, 'public', 'app.js'), 'public base\n')
+    git(f.integration, 'add', 'public/app.js')
+    git(f.integration, 'commit', '-m', 'public folder')
+    const card = f.addCard('T-1', 'public/app.js')
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Workspace:** .', '**Workspace:** public'))
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: parseCard(card.path, 'queue'), gitSettings: f.settings })
+    assert.equal(prepared.entry.workspaceRel, 'public')
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'card one\n')
+    git(prepared.workspacePath, 'add', 'app.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Workspace:** public', '**Workspace:** .'))
+    updateWorkflow(f.tasks, 'T-1', { integrationBroken: { commit: 'old', command: 'check', reason: 'ran in public', at: new Date().toISOString() } })
+    f.complete('T-1')
+    assert.equal(rebaseCompletedOntoIntegration(f.tasks, 'T-1')?.status, 'current')
+    const entry = readWorktrees(f.tasks)['T-1']
+    assert.equal(entry.integrationWorkspace, prepared.entry.repoRoot)
+    assert.equal(entry.workspaceRel, '')
+    assert.equal(entry.workspacePath, entry.worktreePath)
+    assert.equal(readWorkflow(f.tasks)['T-1'].integrationBroken, null)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
