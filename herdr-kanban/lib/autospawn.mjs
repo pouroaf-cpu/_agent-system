@@ -304,9 +304,9 @@ const holdContexts = new Map() // project -> file-lock settings, independent of 
 export function holdsFor(project, context = holdContexts.get(project)) {
   const held = { ...planHolds.get(project), ...holds.get(project) }
   if (!context?.projectPath) return held
-  const { tasksDir, projectPath, gitSettings = {} } = context, board = readBoard(tasksDir)
+  const { tasksDir, projectPath, gitSettings = {} } = context, board = readBoard(tasksDir), registry = readWorktrees(tasksDir)
   for (const card of [...board.planned, ...board.queue]) {
-    const reason = overlapHoldReason({ tasksDir, projectPath, card, board, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles })
+    const reason = overlapHoldReason({ tasksDir, projectPath, card, board, registry, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles })
     if (filesBusyHolder(reason)) held[card.id] = reason
     else if (filesBusyHolder(held[card.id])) delete held[card.id]
   }

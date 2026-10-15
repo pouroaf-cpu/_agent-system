@@ -704,12 +704,11 @@ const notParallel = (projectPath, parallelFiles = [], generatedFiles = {}) => {
   return (file) => !listed.some(f => f === file || (isGlob(f) && globMatches(f, file)))
 }
 
-export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), parallelFiles, generatedFiles }) {
+export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoard(tasksDir), registry = readWorktrees(tasksDir), parallelFiles, generatedFiles }) {
   const all = filesFor(card, resolve(projectPath, card.workspace || '.'))
   if (!all.length) return 'card not ready — no exact files listed'
   const candidate = new Set(all.filter(notParallel(projectPath, parallelFiles, generatedFiles)))
   const cards = Object.values(board).flat()
-  const registry = readWorktrees(tasksDir)
   for (const [id, entry] of Object.entries(registry)) {
     if (id === card.id.toUpperCase()) {
       if (entry.state === 'integrated' && !entry.cleaned) return 'card is already integrated — cleanup pending'
