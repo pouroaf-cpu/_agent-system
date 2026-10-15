@@ -19,11 +19,15 @@ const serve = (page, api, posted) => page.route('**/*', route => {
   if (STATIC.includes(name)) return route.fulfill({ contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html', body: readFileSync(new URL('./public/' + name, import.meta.url), 'utf8') })
   return route.fulfill({ status: 404, body: '' })
 })
+// A paused project with one card in the first lane (the first board column).
+const phoneBoard = first => {
+  const board = { project: 'Proof', columns: COLUMNS, archive: { key: 'archive', label: 'Archive' }, board: Object.fromEntries([...COLUMNS.map(c => c.key), 'archive'].map(k => [k, []])), control: { paused: true }, config: { mode: 'auto', maxConcurrentAgents: 8, stallSeconds: 300, agentSettings: {}, supportedAgentSettings: {} }, slotsFree: 0, bindings: {}, planners: {}, workflow: {}, holds: {}, retries: {}, herdrUp: true, agents: [], cardRuns: [], cardRunEligibility: {}, cardUsage: {} }
+  board.board[first] = [{ id: 'T-1', title: 'Phone card', column: first, priority: 5, mtime: 1, createdAt: '2026-10-13T00:00:00Z', text: '# T-1 Phone card' }]
+  return board
+}
 // Elements whose box runs past the right edge of the viewport.
 const overflowing = page => page.evaluate(() => [...document.querySelectorAll('body *')]
-  // The phone header's button strip (.bar-right) scrolls sideways on purpose, so its
-  // buttons are reached by scrolling and are not page overflow (audit 2026-10-16 F2).
-  .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 && !e.closest('.bar-right') })
+  .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 })
   .map(e => `${e.tagName.toLowerCase()}${e.className ? '.' + String(e.className).replace(/ /g, '.') : ''} right=${Math.round(e.getBoundingClientRect().right)}`))
 const boxes = (page, selector) => page.locator(selector).evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return { text: e.textContent, w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) } }))
 
@@ -33,8 +37,7 @@ test('at 375 px the Settings steps wrap inside the viewport and every drawer and
     const page = await browser.newPage({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' })
     const errors = []; page.on('pageerror', e => errors.push(e.message))
     const first = COLUMNS[0].key
-    const board = { project: 'Proof', columns: COLUMNS, archive: { key: 'archive', label: 'Archive' }, board: Object.fromEntries([...COLUMNS.map(c => c.key), 'archive'].map(k => [k, []])), control: { paused: true }, config: { mode: 'auto', maxConcurrentAgents: 8, stallSeconds: 300, agentSettings: {}, supportedAgentSettings: {} }, slotsFree: 0, bindings: {}, planners: {}, workflow: {}, holds: {}, retries: {}, herdrUp: true, agents: [], cardRuns: [], cardRunEligibility: {}, cardUsage: {} }
-    board.board[first] = [{ id: 'T-1', title: 'Phone card', column: first, priority: 5, mtime: 1, createdAt: '2026-10-13T00:00:00Z', text: '# T-1 Phone card' }]
+    const board = phoneBoard(first)
     const posted = []
     await serve(page, { '/api/board': board, '/api/projects': { projects: ['Proof'] } }, posted)
     await page.goto('http://mobile.test/?project=Proof')
@@ -61,6 +64,44 @@ test('at 375 px the Settings steps wrap inside the viewport and every drawer and
     for (const s of drawer) assert.ok(s.w >= 44 && s.h >= 44 && s.right <= 375, `drawer step ${JSON.stringify(s)}`)
     assert.deepEqual(await overflowing(page), [])
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})
+
+test('at 375 px the header row 2 holds Pause, Builders, Open herdr and Metrics with no sideways scroll, and the first lane header starts within 160 px (audit 2026-10-16 F2 AC1, AC2)', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' })
+    const errors = []; page.on('pageerror', e => errors.push(e.message))
+    const first = COLUMNS[0].key
+    await serve(page, { '/api/board': phoneBoard(first), '/api/projects': { projects: ['Proof'] } }, [])
+    await page.goto('http://mobile.test/?project=Proof')
+    await page.locator('.card[data-id="T-1"]').waitFor()
+
+    const header = await page.evaluate(() => {
+      const right = document.querySelector('.bar-right')
+      const at = e => { const r = e.getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width), h: Math.round(r.height) } }
+      const lane = [...document.querySelectorAll('.lane-head')].find(e => e.offsetParent)
+      return {
+        stripScrolls: right.scrollWidth > right.clientWidth,
+        controls: Object.fromEntries(['.project-control', '#slots', '#herdr-open', '.metrics-link'].map(s => [s, at(document.querySelector(s))])),
+        laneHeadTop: Math.round(lane.getBoundingClientRect().top),
+        statusText: document.getElementById('project-status').textContent,
+      }
+    })
+    assert.equal(header.stripScrolls, false, 'row 2 does not scroll sideways')
+    const middle = box => box.top + box.h / 2
+    const row = middle(header.controls['.project-control'])
+    for (const [selector, box] of Object.entries(header.controls)) {
+      assert.ok(box.left >= 0 && box.right <= 375, `${selector} inside the 375 px viewport: ${JSON.stringify(box)}`)
+      assert.ok(Math.abs(middle(box) - row) <= 2, `${selector} is on the same row as Pause: ${JSON.stringify(box)}`)
+    }
+    assert.ok(header.controls['.project-control'].h >= 44 && header.controls['.metrics-link'].w >= 44 && header.controls['.metrics-link'].h >= 44, 'Pause and Metrics are 44 px targets')
+    assert.ok(header.laneHeadTop <= 160, `first lane header top ${header.laneHeadTop} px`)
+    // The state word is hidden on a phone but still in the page for screen readers.
+    assert.equal(header.statusText, 'Paused')
+    assert.equal(await page.getByRole('link', { name: 'Metrics' }).count(), 1)
+    assert.deepEqual(await overflowing(page), [])
     assert.deepEqual(errors, [])
   } finally { await browser.close() }
 })
