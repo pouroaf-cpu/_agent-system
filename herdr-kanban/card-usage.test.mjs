@@ -18,5 +18,9 @@ try {
   assert.equal(result['T-1'].agents[0].finishedAt, run.finish.at)
   assert.equal(result['T-1'].agents[0].steps, 7)
   assert.equal(result['T-1'].agents.find((a) => a.runId === 'batch').steps, null)
+  // The summary is reused while the file is unchanged, and a rewritten file is read again.
+  assert.equal(cardUsageSummary(dir), result)
+  writeFileSync(join(dir, '.request-usage.json'), JSON.stringify({ runs: { later: { ...run, runId: 'later', steps: 3, delta: { ...delta, total: 40 } } } }))
+  assert.equal(cardUsageSummary(dir)['T-1'].tokens.total, 40)
   console.log('Card attribution checks passed')
 } finally { rmSync(dir, { recursive: true, force: true }) }

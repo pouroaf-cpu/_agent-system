@@ -377,8 +377,12 @@ function boardPayload(project) {
 
 // The lane summary sent on every change: counts, not cards. A tab refetches /api/board when
 // the version moved on from the one it holds.
-function boardSummary(project, payload = boardPayload(project)) {
-  return { project, version: payload.version, lanes: Object.fromEntries(COLUMNS.map(c => [c.key, payload.board[c.key].length])), archiveCount: payload.archiveCount }
+// Without a payload (an SSE connect) the same counts come from the lanes alone: a full payload
+// build costs about 0.5 s on Injectbuddy, and a tab connecting does not need its cards.
+function boardSummary(project, payload) {
+  if (payload) return { project, version: payload.version, lanes: Object.fromEntries(COLUMNS.map(c => [c.key, payload.board[c.key].length])), archiveCount: payload.archiveCount }
+  const board = readBoard(tasksDirOf(project))
+  return { project, version: boardVersion(project), lanes: Object.fromEntries(COLUMNS.map(c => [c.key, board[c.key].length])), archiveCount: archiveCount(tasksDirOf(project)) }
 }
 
 // Archived cards with their usage, workflow and planner records, on demand.

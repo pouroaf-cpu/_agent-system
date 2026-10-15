@@ -538,8 +538,26 @@ export function mergeUsageSummaries(summaries) {
   return Object.fromEntries(result)
 }
 
+// The summary is rebuilt from the usage file on every board payload (a 4.8 MB file on
+// Injectbuddy, about 160 ms per broadcast, several a minute while a card runs). It only
+// changes when the file does, so the last result is reused while the file's mtime and size
+// are unchanged. Callers only serialize it; none edits it.
+const usageSummaryCache = new Map()
+function usageStamp(tasksDir) {
+  try { const st = statSync(file(tasksDir)); return `${st.mtimeMs}:${st.size}` } catch { return 'absent' }
+}
+
 // Card totals only include runs exclusively attributable to this card.
 export function cardUsageSummary(tasksDir) {
+  const stamp = usageStamp(tasksDir)
+  const cached = usageSummaryCache.get(tasksDir)
+  if (cached?.stamp === stamp) return cached.out
+  const out = buildCardUsageSummary(tasksDir)
+  usageSummaryCache.set(tasksDir, { stamp, out })
+  return out
+}
+
+function buildCardUsageSummary(tasksDir) {
   const out = {}
   for (const run of Object.values(readUsage(tasksDir).runs)) {
     if (run.duplicateOf) continue
