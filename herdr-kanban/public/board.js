@@ -692,6 +692,8 @@ function renderScreen(resetScroll) {
 
   const scrollTop = resetScroll ? 0 : el.screenBody.scrollTop;
 
+  archiveFocusPending = document.activeElement?.id === 'archive-search';
+
   el.screenBody.innerHTML = '';
 
   if (view === 'agents') renderAgentsScreen();
@@ -1045,9 +1047,19 @@ function renderAgentsScreen() {
 
 
 
+// Audit 2026-10-16 F6: the Archive can be searched and is drawn ARCHIVE_PAGE cards at a time.
+const ARCHIVE_PAGE = 100;
+let archiveQuery = '';
+let archiveLimit = ARCHIVE_PAGE;
+let archiveFocusPending = false;   // set by renderScreen before it clears the screen
+
 function renderArchiveScreen() {
 
   const cards = state.board.archive || [];
+
+  const total = state.archiveCount ?? cards.length;
+
+  el.screenTitle.textContent = 'Archive (' + total.toLocaleString('en-NZ') + ')';
 
   const stale = !MOCK && (!archiveData || (state.version !== undefined && archiveData.version !== state.version)) && state.archiveCount !== 0;
 
@@ -1061,13 +1073,74 @@ function renderArchiveScreen() {
 
   if (!cards.length) return el.screenBody.append(note('Nothing archived yet.'));
 
+  // Keep the search field focused when a live refresh redraws the screen mid-typing.
+  const hadFocus = archiveFocusPending;
+
+  archiveFocusPending = false;
+
+  const label = document.createElement('label');
+
+  label.className = 'archive-search';
+
+  label.textContent = 'Search archive';
+
+  const search = document.createElement('input');
+
+  search.type = 'search';
+
+  search.id = 'archive-search';
+
+  search.placeholder = 'Card id or title';
+
+  search.value = archiveQuery;
+
+  label.append(search);
+
+  const status = document.createElement('p');
+
+  status.className = 'screen-note';
+
   const grid = document.createElement('div');
 
   grid.className = 'archive-grid';
 
-  cards.forEach(c => grid.append(cardNode(c)));
+  const more = document.createElement('button');
 
-  el.screenBody.append(grid);
+  more.type = 'button';
+
+  more.className = 'btn archive-more';
+
+  more.addEventListener('click', () => { archiveLimit += ARCHIVE_PAGE; paint(); });
+
+  const paint = () => {
+
+    const query = archiveQuery.trim().toLowerCase();
+
+    const matches = query ? cards.filter(c => (c.id + ' ' + (c.title || '')).toLowerCase().includes(query)) : cards;
+
+    const shown = matches.slice(0, archiveLimit);
+
+    grid.replaceChildren(...shown.map(cardNode));
+
+    status.textContent = query
+      ? matches.length.toLocaleString('en-NZ') + ' of ' + total.toLocaleString('en-NZ') + ' archived cards match'
+      : 'Showing ' + shown.length.toLocaleString('en-NZ') + ' of ' + total.toLocaleString('en-NZ') + ' archived cards';
+
+    const left = matches.length - shown.length;
+
+    more.hidden = left <= 0;
+
+    more.textContent = 'Show ' + Math.min(ARCHIVE_PAGE, left).toLocaleString('en-NZ') + ' more';
+
+  };
+
+  search.addEventListener('input', () => { archiveQuery = search.value; archiveLimit = ARCHIVE_PAGE; paint(); });
+
+  paint();
+
+  el.screenBody.append(label, status, grid, more);
+
+  if (hadFocus) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); }
 
 }
 
