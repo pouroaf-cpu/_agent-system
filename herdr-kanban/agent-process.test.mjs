@@ -42,3 +42,23 @@ test('an agent that reports its turn complete but stays up is ended after the gr
   assert.ok(existsSync(exitFile), 'exit recorded')
   assert.ok(Date.now() - started < 100000, 'ended long before the agent would have')
 })
+
+test('a process the agent started and left behind is ended by its BOARD_AGENT_ID marker, even when no snapshot saw it', { skip: process.platform !== 'win32' }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-process-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const id = `test-${process.pid}-${Date.now()}`
+  const leftover = join(dir, 'leftover.pid')
+  // The fake agent starts a detached sleeper and exits at once, so no 30 s snapshot can have seen it.
+  // The sleeper inherits the supervisor's environment, which carries BOARD_AGENT_ID.
+  const agent = join(dir, 'agent.mjs')
+  writeFileSync(agent, `import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs'
+const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: 'ignore', windowsHide: true }); c.unref()
+writeFileSync(${JSON.stringify(leftover)}, String(c.pid))`)
+  const spec = join(dir, 'spec.json'), exitFile = join(dir, 'exit.json')
+  writeFileSync(spec, JSON.stringify({ exe: process.execPath, args: [agent], cwd: dir, exitFile }))
+  const sup = spawn(process.execPath, [join(import.meta.dirname, 'scripts', 'agent-process.mjs'), spec], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true, env: { ...process.env, BOARD_AGENT_ID: id } })
+  await new Promise(resolve => sup.once('exit', resolve))
+  assert.ok(existsSync(exitFile), 'exit recorded')
+  const pid = Number(readFileSync(leftover, 'utf8'))
+  assert.equal(alive(pid), false, `leftover ${pid} should be gone`)
+})

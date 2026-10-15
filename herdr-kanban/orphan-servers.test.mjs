@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stopServersIn, stopServersInAsync, stopRunawayTsservers, stopOrphanWebKit } from './lib/orphan-servers.mjs'
+import { stopServersIn, stopServersInAsync, stopRunawayTsservers, stopOrphanWebKit, stopAgentLeftovers, stopDeadParentLeftovers } from './lib/orphan-servers.mjs'
 
 test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', async () => {
   const list = () => [
@@ -77,4 +77,57 @@ test('the async variant used when an agent finishes stops the same servers as th
   assert.deepEqual(await stopServersInAsync('C:\\Work\\.kanban-worktrees\\Tradeflow\\tf63-x', { list, kill: async pid => killed.push(pid) }), [1])
   assert.deepEqual(killed, [1])
   assert.deepEqual(await stopServersInAsync('C:/Work/.worktrees/Injectbuddy/cards/i227-x', { list, kill: async () => {} }), [27744])
+})
+
+// Agent leftovers (2026-10-16): the supervisor ends what the agent started when its turn ends. The rows
+// stand for processes whose BOARD_AGENT_ID matches. Test runs and operator tools are kept.
+test('the leftovers of a finished agent are ended; its test run, operator tools and the supervisor are not', async () => {
+  const list = async id => { assert.equal(id, 'b-ab12'); return [
+    { pid: 10, ppid: 900, cmd: 'node C:/Users/PFrew/KanbanProjects/Injectbuddy/node_modules/.bin/next dev' },
+    { pid: 11, ppid: 10, cmd: 'node playwright worker' },
+    { pid: 12, ppid: 900, cmd: 'node C:/Users/PFrew/Projects/herdr-kanban/lib/test-handoff-runner.mjs C:/rec.json' },
+    { pid: 13, ppid: 12, cmd: 'node playwright worker' },
+    { pid: 14, ppid: 900, cmd: 'bash -c "npx expo start"' },
+    { pid: 15, ppid: 900, cmd: 'python -m basic_memory mcp' },
+    { pid: process.pid, ppid: 900, cmd: 'node scripts/agent-process.mjs spec.json' },
+  ] }
+  const killed = []
+  assert.deepEqual(await stopAgentLeftovers('b-ab12', { list, kill: async pid => killed.push(pid) }), [10, 11])
+  assert.deepEqual(killed, [10, 11])
+})
+
+test('an agent id that is not a plain token lists nothing', async () => {
+  const killed = []
+  assert.deepEqual(await stopAgentLeftovers('x; rm -rf /', { list: async () => [{ pid: 1, cmd: 'node x' }], kill: async pid => killed.push(pid) }), [])
+  assert.deepEqual(killed, [])
+})
+
+// The 2 h `find /` with no parent (2026-10-16): its parent is gone and it is older than 10 min, so it is ended.
+test('dead-parent find, python, bash and board-path node leftovers older than 10 min are ended; the rest are not', async () => {
+  const now = 1e12, old = now - 3600e3, young = now - 60e3
+  let procs = [
+    { pid: 1, ppid: 900, name: 'find.exe', cmd: 'find / -name "*.md"', created: old },
+    { pid: 2, ppid: 901, name: 'python.exe', cmd: 'python -m basic_memory mcp', created: old },
+    { pid: 3, ppid: 902, name: 'bash.exe', cmd: 'bash -c "npx expo start"', created: old },
+    { pid: 4, ppid: 903, name: 'node.exe', cmd: 'node C:\\Users\\PFrew\\Projects\\Injectbuddy\\node_modules\\next\\dist\\bin\\next dev', created: old },
+    { pid: 5, ppid: 904, name: 'node.exe', cmd: 'node C:\\Users\\PFrew\\KanbanProjects\\Injectbuddy\\stray.js', created: old },
+    { pid: 6, ppid: 7, name: 'find.exe', cmd: 'find .', created: old - 1000 },
+    { pid: 7, ppid: 1, name: 'explorer.exe', cmd: 'explorer', created: old - 5000 },
+    { pid: 8, ppid: 900, name: 'find.exe', cmd: 'find . -name x', created: young },
+    { pid: 9, ppid: 8, name: 'python.exe', cmd: 'python worker.py', created: old },
+    { pid: 10, ppid: 905, name: 'chrome.exe', cmd: 'chrome', created: old },
+    { pid: 20, ppid: 906, name: 'node.exe', cmd: 'node C:/Users/PFrew/Projects/herdr-kanban/lib/test-handoff-runner.mjs', created: old },
+    { pid: 21, ppid: 20, name: 'find.exe', cmd: 'find . -name y', created: old },
+  ]
+  const list = async () => procs, killed = []
+  // pid 9's parent (pid 8) is younger than pid 9, so pid 9 is an orphan by pid reuse. This mock keeps pid 9 alive,
+  // so it is killed but not reported.
+  const stopped = await stopDeadParentLeftovers({ now, list, kill: async pid => { killed.push(pid); if (pid !== 9) procs = procs.filter(p => p.pid !== pid) } })
+  assert.deepEqual(stopped, [{ pid: 1, name: 'find.exe', cmd: 'find / -name "*.md"' }, { pid: 5, name: 'node.exe', cmd: 'node C:\\Users\\PFrew\\KanbanProjects\\Injectbuddy\\stray.js' }])
+  assert.deepEqual(killed, [1, 5, 9])
+})
+
+test('a dead-parent leftover is reported only once it is gone after the kill', async () => {
+  const now = 1e12, old = now - 3600e3
+  assert.deepEqual(await stopDeadParentLeftovers({ now, list: async () => [{ pid: 1, ppid: 900, name: 'find.exe', cmd: 'find /', created: old }], kill: async () => {} }), [])
 })

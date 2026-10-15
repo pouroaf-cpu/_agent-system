@@ -146,11 +146,99 @@ function cimTerminateAsync(pids) {
   return new Promise(done => execFile('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "${pids.map(pid => `ProcessId=${Number(pid)}`).join(' or ')}" | Invoke-CimMethod -MethodName Terminate | Out-Null`], { timeout: 20000, windowsHide: true }, () => done()))
 }
 
-const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } | ConvertTo-Json -Compress`
+const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } | ConvertTo-Json -Compress`
 
 async function allProcessesAsync() {
   if (process.platform !== 'win32') return []
-  try { return [JSON.parse(await psAsync(LIST_ALL) || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', created: Number(p.Created) || 0 })) } catch { return [] }
+  try { return [JSON.parse(await psAsync(LIST_ALL) || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', cmd: p.CommandLine || '', created: Number(p.Created) || 0 })) } catch { return [] }
+}
+
+// Reads a process's environment block from its PEB (x64: PEB+0x20 -> ProcessParameters, +0x80 -> Environment)
+// and returns the process's BOARD_AGENT_ID value only when it equals the agent id passed in. Values are never printed.
+// The block is NUL-separated; the NUL pair is built with new string() so no escape sequence is needed in this JS template.
+const PROC_ENV_CS = `Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class ProcEnv {
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr h, IntPtr at, byte[] buf, int size, out IntPtr read);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, IntPtr[] info, int size, out int len);
+  static bool Read(IntPtr h, long at, byte[] b, int n) { IntPtr r; return ReadProcessMemory(h, new IntPtr(at), b, n, out r) && r.ToInt64() == n; }
+  public static string Of(int pid) {
+    IntPtr h = OpenProcess(0x0410, false, pid);
+    if (h == IntPtr.Zero) return null;
+    try {
+      var pbi = new IntPtr[6]; int len;
+      if (NtQueryInformationProcess(h, 0, pbi, IntPtr.Size * 6, out len) != 0) return null;
+      var word = new byte[8];
+      if (!Read(h, pbi[1].ToInt64() + 0x20, word, 8)) return null;
+      long pp = BitConverter.ToInt64(word, 0);
+      if (!Read(h, pp + 0x80, word, 8)) return null;
+      long at = BitConverter.ToInt64(word, 0);
+      string nul2 = new string((char)0, 2);
+      var block = new StringBuilder();
+      for (int i = 0; i < 64; i++) {
+        int chunk = (int)(4096 - (at % 4096));
+        var buf = new byte[chunk];
+        if (!Read(h, at, buf, chunk)) break;
+        string s = Encoding.Unicode.GetString(buf);
+        int end = s.IndexOf(nul2, StringComparison.Ordinal);
+        if (end >= 0) { block.Append(s, 0, end + 1); break; }
+        block.Append(s); at += chunk;
+      }
+      return block.ToString();
+    } catch { return null; } finally { CloseHandle(h); }
+  }
+}
+'@
+`
+
+// Only the agent's own marker is listed. The script takes the id from the caller, which has checked it is
+// plain letters, digits, '-' or '_'.
+const agentMarkedScript = agentId => `${PROC_ENV_CS}$m = 'BOARD_AGENT_ID=${agentId}'
+Get-CimInstance Win32_Process | ForEach-Object { $e = [ProcEnv]::Of([int]$_.ProcessId); if ($e -and (($e -split [char]0) -contains $m)) { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } } | ConvertTo-Json -Compress`
+
+async function agentMarkedProcessesAsync(agentId) {
+  if (process.platform !== 'win32') return []
+  try { return [JSON.parse(await psAsync(agentMarkedScript(agentId)) || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: Number(p.ParentProcessId) || null, name: p.Name || '', cmd: p.CommandLine || '', created: Number(p.Created) || 0 })) } catch { return [] }
+}
+
+// Operator processes that a board agent's leftovers must never take with them: the Expo and basic-memory
+// tools the operator runs, the board server and the agent supervisors, and the test runner (see testRunPids).
+const PROTECTED = /basic[-_]memory|\bexpo\b|server\.mjs|agent-process\.mjs|test-handoff-runner\.mjs/i
+
+// A board agent's supervisor stamps BOARD_AGENT_ID into the agent's environment (headless.mjs agentPrompt).
+// Every process the agent starts inherits it, even after its parent exits, so the marker finds the
+// leftovers that the tree snapshots miss (a grandchild born and orphaned between two 30 s snapshots).
+// Runs when the turn ends, from the supervisor. Test runs that outlive the Builder session keep running.
+// Returns the pids it issued a kill for (no re-list after the kill).
+export async function stopAgentLeftovers(agentId, { list = agentMarkedProcessesAsync, kill = killTreeAsync } = {}) {
+  if (!/^[A-Za-z0-9_-]+$/.test(agentId || '')) return []
+  const rows = await list(agentId)
+  const runs = testRunPids(rows)
+  const hits = rows.filter(p => p.pid !== process.pid && !runs.has(p.pid) && !PROTECTED.test(p.cmd))
+  for (const p of hits) try { await kill(p.pid) } catch {}
+  return hits.map(p => p.pid)
+}
+
+// A helper the agent started and left behind has no one to report to once its parent is gone. A find
+// ran for 2 h on 2026-10-16 with no parent, and KM ended it by hand. Only these four programs are considered.
+// node.exe needs a board path in its command line, so an operator dev server in a non-board folder is left alone.
+const LEFTOVER_NAMES = /^(find|python|bash|node)\.exe$/i
+const BOARD_PATH = /KanbanProjects|herdr-kanban|\.kanban-worktrees|\.worktrees/i
+
+// Ends leftovers whose parent is gone (or whose parent pid now belongs to a younger process) and that are
+// older than minAgeMs. Returns { pid, name, cmd } only for pids that are gone afterwards, so the log never
+// claims a stop that did not happen.
+export async function stopDeadParentLeftovers({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcessesAsync, kill = killTreeAsync } = {}) {
+  const all = await list(), byPid = new Map(all.map(p => [p.pid, p]))
+  const runs = testRunPids(all)
+  const orphan = p => { const parent = byPid.get(p.ppid); return !parent || parent.created > p.created }
+  const hits = all.filter(p => p.pid !== process.pid && !runs.has(p.pid) && LEFTOVER_NAMES.test(p.name) && p.created && now - p.created > minAgeMs && orphan(p) && !PROTECTED.test(p.cmd) && (!/^node\.exe$/i.test(p.name) || BOARD_PATH.test(p.cmd)))
+  if (!hits.length) return []
+  for (const p of hits) try { await kill(p.pid) } catch {}
+  const left = new Set((await list()).map(p => p.pid))
+  return hits.filter(p => !left.has(p.pid)).map(p => ({ pid: p.pid, name: p.name, cmd: p.cmd }))
 }
 
 // Free commit (RAM + pagefile), the limit Windows kills at; os.freemem() is RAM only.

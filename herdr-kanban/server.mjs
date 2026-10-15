@@ -10,7 +10,7 @@ import { renameSync } from './lib/fs-retry.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
-import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, freeCommitGb } from './lib/orphan-servers.mjs'
+import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, stopDeadParentLeftovers, freeCommitGb } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
 import { realertDecisionWaits } from './lib/decision-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
@@ -2046,6 +2046,7 @@ async function startPollers() {
       if (stale.length) boardLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
       const webkit = await stopOrphanWebKit()
       if (webkit.length) boardLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
+      for (const p of await stopDeadParentLeftovers()) boardLog(`stopped leftover ${p.name} pid ${p.pid} (parent gone, over 10 min): ${p.cmd.slice(0, 300)}`, 'warn')
       // A cleanup deferred at integration was only retried while the card sat in Completed or
       // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
       for (const project of config.projects) {
