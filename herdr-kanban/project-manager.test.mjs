@@ -188,7 +188,7 @@ test('summary and board share card, file, decision and slot waits, separate from
   try {
     const summary = (await get('/api/summary')).body.projects[0]
     const byId = Object.fromEntries(summary.waitingCards.map(c => [c.id, c]))
-    for (const [card, on] of [[dependency, `cards ${fresh.id}, ${files.id}`], [files, 'files public/new.html'], [decision, 'decision'], [slot, 'free Planner slot'], [queueSlot, 'free Builder slot']]) {
+    for (const [card, on] of [[dependency, `cards ${fresh.id}, ${files.id}`], [files, 'files public/new.html'], [decision, 'waiting on decision'], [slot, 'free Planner slot'], [queueSlot, 'free Builder slot']]) {
       assert.deepEqual(byId[card.id], { id: card.id, lane: card.id === queueSlot.id ? 'queue' : 'planning', on })
       const board = (await get('/api/board?project=Proj')).body
       assert.equal(board.cardWaits[card.id].on, on)

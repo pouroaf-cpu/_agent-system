@@ -347,15 +347,21 @@ export function writeCurrentFeedback(tasksDir, card, heading, note, { ask = true
 // operator only hears from Pou. I326's Planner question stayed in Planning and reached
 // the operator through the Planner's own session instead (2026-09-27). Projects without
 // a manager ask the Kanban Manager. Folders that are not board projects (tests) skip it.
+// The manager inbox a project's questions go to: { project, inbox }, or null for a folder that is not a board project.
+export function managerInbox(tasksDir) {
+  const here = dirname(dirname(fileURLToPath(import.meta.url)))
+  const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || join(here, 'board.config.json'), 'utf8'))
+  const project = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(dirname(tasksDir)).toLowerCase())
+  if (!project) return null
+  const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+  return { project, inbox }
+}
 export function askManager(tasksDir, card, note, max = 600) {
   try {
-    const here = dirname(dirname(fileURLToPath(import.meta.url)))
-    const config = JSON.parse(readFileSync(process.env.KANBAN_CONFIG || join(here, 'board.config.json'), 'utf8'))
-    const project = config.projects?.find(p => resolve(config.projectsRoot, p).toLowerCase() === resolve(dirname(tasksDir)).toLowerCase())
-    if (!project) return
-    const inbox = config.projectSettings?.[project]?.manager?.inbox || process.env.KANBAN_MANAGER_INBOX || join(here, '..', '_roles', 'KANBAN_MANAGER-INBOX.md')
+    const target = managerInbox(tasksDir)
+    if (!target) return
     const question = String(note).replace(/^\s*Needs you:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, max)
-    postInbox(inbox, `- ${formatNZTime()} ASK ${project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
+    postInbox(target.inbox, `- ${formatNZTime()} ASK ${target.project} ${card.id} (${basename(dirname(card.path))}): ${formatNZText(question)}
 `, undefined, 'AS')
   } catch { /* the question is still on the card; routing is best effort */ }
 }

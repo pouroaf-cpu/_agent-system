@@ -12,6 +12,7 @@ import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyP
 import { plannersStarting } from './lib/planner-state.mjs'
 import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, freeCommitGb } from './lib/orphan-servers.mjs'
 import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
+import { realertDecisionWaits } from './lib/decision-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
@@ -557,7 +558,7 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const asked = card.column === 'owner' && !held ? ownerReason(readFileSync(card.path, 'utf8')) : ''
     const decisionWait = !!wait?.decision || held
     const on = quota[card.id] ? `${[SIGN_IN, MODEL_REJECTED].find(why => quota[card.id].includes(why)) ?? 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
-      : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'decision')
+      : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'waiting on decision')
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
@@ -565,7 +566,7 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const integrationHold = integrationHolds.get(project)?.[card.id] || null
     return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), ...(integrationHold && { integrationHold }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting on decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }
@@ -625,7 +626,7 @@ function summaryText(summaries) {
     if (s.pou.length) parts.push(`Pou ${s.pou.join(' ')}`)
     if (s.owner.length) parts.push(`Owner ${s.owner.join(' ')}`)
     if (s.stuck) parts.push(`${s.stuck} stuck`)
-    const decisions = s.waitingCards.filter(c => c.on === 'decision').map(c => c.id)
+    const decisions = s.waitingCards.filter(c => c.on === 'waiting on decision').map(c => c.id)
     if (s.waiting) parts.push(`${s.waiting} waiting${decisions.length ? ` (decision: ${decisions.join(' ')})` : ''}`)
     if (s.oldestCard) parts.push(`oldest ${s.oldestCard.id} ${s.oldestCard.lane} ${hours(s.oldestCard.minutes)}`)
     if (s.release) parts.push('release')
@@ -762,6 +763,12 @@ async function pollProject(project) {
     // Pushover alert for every card that newly lands in Owner (one attempt each).
     alertOwnerCards({ project, tasksDir }).then(ids => { if (ids.length) activity(project, ids.join(','), 'owner-alert', 'Pushover sent') })
       .catch(err => { if (lastActivityHold.get(`${project}:owner-alert`) !== err.message) { lastActivityHold.set(`${project}:owner-alert`, err.message); activity(project, '-', 'owner-alert', `Pushover failed: ${err.message}`, 'error') } })
+    // A decision wait nobody answers is asked again in the manager chat every few hours (no phone page).
+    try {
+      const { ids, errors } = realertDecisionWaits({ tasksDir })
+      if (ids.length) activity(project, ids.join(','), 'decision-realert', `manager asked again (${ids.length})`)
+      if (errors.length) throw errors[0]
+    } catch (err) { if (lastActivityHold.get(`${project}:decision-realert`) !== err.message) { lastActivityHold.set(`${project}:decision-realert`, err.message); activity(project, '-', 'decision-realert', `re-ask failed: ${err.message}`, 'error') } }
     // Before the stall check, so a reviewer slot freed here counts.
     try {
       for (const claim of await reconcileReviewers({ reviewRoot: REVIEW_ROOT, boardRoot: HERE, project, tasksDir, agents })) activity(project, claim.cards.join(',') || '-', 'cleanup', `reviewer claim ${claim.paneId || claim.id} retired: ${claim.closeReason}`)

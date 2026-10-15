@@ -24,6 +24,17 @@ export function updateWorkflow(dir, id, patch) {
   return state[id]
   })
 }
+// updateWorkflow, applied only while `when` holds for the card's record read under the board lock.
+// Returns null (and writes nothing) when it no longer holds.
+export function updateWorkflowWhen(dir, id, when, patch) {
+  return withBoardLock(dir, () => {
+    const state = readWorkflow(dir)
+    if (!when(state[id])) return null
+    state[id] = { ...state[id], ...patch }
+    writeWorkflow(dir, state)
+    return state[id]
+  })
+}
 export function recordBuilderAttempt(dir, card, difficulty) {
   const attempt = recoveryState(readFileSync(card.path, 'utf8')).attempt
   difficulty = builderDifficulty({ difficulty }, readWorkflow(dir)[card.id])
