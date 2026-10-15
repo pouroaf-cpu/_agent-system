@@ -721,7 +721,7 @@ async function loadAudits() {
     const response = await fetch('/api/tests/routes?project=' + encodeURIComponent(PROJECT));
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not load pages');
-    testRoutes = { ...result, error: '' };
+    testRoutes = { routes: [], types: [], ...result, error: result.note || '' };
   } catch (err) { testRoutes = { routes: [], types: [], error: err.message }; }
   await loadTests();
 }

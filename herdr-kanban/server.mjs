@@ -1087,11 +1087,40 @@ function badMutationOrigin(req) {
 
 // --- routes ----------------------------------------------------------------
 
+// One body parser for every route (audit 2026-10-15 F7): a body that is not a JSON object
+// answers 400 with a message instead of a 500 with a stack on stderr; an empty body is {}.
+const BODY_CAP = 60000
+async function readJsonBody(req) {
+  let body = ''
+  for await (const chunk of req) {
+    body += chunk
+    if (body.length > BODY_CAP) return { ok: false, status: 413, error: 'Request body too large' }
+  }
+  if (!body.trim()) return { ok: true, input: {} }
+  let input
+  try { input = JSON.parse(body) } catch (err) { return { ok: false, status: 400, error: `Request body is not valid JSON: ${err.message}` } }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, status: 400, error: 'Request body must be a JSON object' }
+  return { ok: true, input }
+}
+
 const handleRequest = async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
   const project = url.searchParams.get('project') ?? config.projects[0]
 
   if (badMutationOrigin(req)) return json(res, 403, { ok: false, error: 'invalid origin' })
+  let posted = {}
+  if (req.method !== 'GET') {
+    const parsed = await readJsonBody(req)
+    if (!parsed.ok) return json(res, parsed.status, { ok: false, error: parsed.error })
+    posted = parsed.input
+  }
+  // The card routes below take a project and a card id in the body; both are checked here.
+  const cardInput = () => {
+    const { project: p = config.projects[0], id } = posted
+    if (!config.projects.includes(p)) throw new Error('Unknown project')
+    if (!isCardId(id)) throw new Error('Invalid card identity')
+    return { p, id: String(id).toUpperCase() }
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/agent-log') {
     const id = url.searchParams.get('id')
@@ -1155,16 +1184,17 @@ const handleRequest = async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/tests/routes') {
     try {
-      if (!config.projects.includes(project) || !TEST_RUNNERS[project]) throw new Error('No e2e audit writer for this project')
-      return json(res, 200, { routes: staticAppRoutes(join(integrationPathOf(project), 'app')), types: Object.keys(TEST_TYPES) })
+      if (!config.projects.includes(project)) throw new Error('Unknown project')
+      // A project without an e2e audit writer is the normal case for most boards: an empty
+      // list with a note, not a 400 the page logs on every load (audit 2026-10-15 F7).
+      if (!TEST_RUNNERS[project]) return json(res, 200, { ok: true, routes: [], types: [], note: 'No e2e audit writer for this project' })
+      return json(res, 200, { ok: true, routes: staticAppRoutes(join(integrationPathOf(project), 'app')), types: Object.keys(TEST_TYPES) })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/tests/request') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const input = JSON.parse(body)
+      const input = posted
       if (!config.projects.includes(input.project) || !TEST_RUNNERS[input.project]) throw new Error('No e2e audit writer for this project')
       return json(res, 200, { ok: true, request: addRequest(tasksDirOf(input.project), input, join(integrationPathOf(input.project), 'app')) })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
@@ -1177,20 +1207,16 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/agent-open') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: selected, paneId } = JSON.parse(body)
+      const { project: selected, paneId } = posted
       if (!config.projects.includes(selected)) throw new Error('Unknown project')
       await focusAgent(paneId, sessionOf(selected))
       return json(res, 200, { ok: true })
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
   if (req.method === 'POST' && url.pathname === '/api/herdr-open') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: selected } = JSON.parse(body)
+      const { project: selected } = posted
       if (!config.projects.includes(selected)) throw new Error('Unknown project')
       await openProjectSession(selected)
       return json(res, 200, { ok: true })
@@ -1205,10 +1231,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/card-run') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: selected, id, requestId, cancel } = JSON.parse(body)
+      const { project: selected, id, requestId, cancel } = posted
       if (!config.projects.includes(selected)) throw new Error('Unknown project')
       if (cancel === true) {
         stopCardRun(selected, id, 'Cancelled by operator; current turn may finish')
@@ -1229,10 +1253,8 @@ const handleRequest = async (req, res) => {
     } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
   }
   if (req.method === 'POST' && url.pathname === '/api/project-control') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: selected, paused } = JSON.parse(body)
+      const { project: selected, paused } = posted
       Object.assign(config, setProjectPaused(selected, paused, CONFIG_PATH))
       broadcastBoard(selected)
       return json(res, 200, { ok: true, control: controlState(selected, CONFIG_PATH) })
@@ -1242,10 +1264,8 @@ const handleRequest = async (req, res) => {
   // A project chat's release: start pauses and reports readiness, finish fast-forwards the
   // integration checkout to the released commit and unpauses, abort just unpauses.
   if (req.method === 'POST' && url.pathname.startsWith('/api/release/')) {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p, commit } = JSON.parse(body)
+      const { project: p, commit } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const action = url.pathname.slice('/api/release/'.length)
       const active = controlState(p, CONFIG_PATH).release
@@ -1301,7 +1321,8 @@ const handleRequest = async (req, res) => {
         source: REQUESTS_PATH,
         generatedAt: new Date().toISOString(),
         usage,
-        tasks: readManagerTasks(REQUESTS_PATH),
+        // No request log yet (a fresh board, a test root) is an empty list, not an error.
+        tasks: existsSync(REQUESTS_PATH) ? readManagerTasks(REQUESTS_PATH) : [],
       })
     } catch (err) {
       return json(res, 500, { ok: false, error: err.message })
@@ -1325,10 +1346,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/request-usage/start') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], requestId, cardIds, role = 'manual', paneId, tabId, model, name, agentSession } = JSON.parse(body || '{}')
+      const { project: p = config.projects[0], requestId, cardIds, role = 'manual', paneId, tabId, model, name, agentSession } = posted
       if (!requestId) throw new Error('requestId is required')
       const identity = name ? (await agentList(sessionOf(p), { ensureSession: false })).find(a => a.name === name) : null
       const run = recordUsageStart({ tasksDir: tasksDirOf(p), project: p, requestId, cardIds, role, paneId: identity?.pane_id || paneId, tabId: identity?.tab_id || tabId, model, name, agentSession: identity?.agent_session || agentSession })
@@ -1339,10 +1358,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/request-usage/finish') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], runId, paneId, status = 'complete', agentSession } = JSON.parse(body || '{}')
+      const { project: p = config.projects[0], runId, paneId, status = 'complete', agentSession } = posted
       const run = await recordUsageFinish({ tasksDir: tasksDirOf(p), runId, paneId, agent: { agent_session: agentSession }, status })
       return json(res, 200, { ok: true, run })
     } catch (err) {
@@ -1354,13 +1371,8 @@ const handleRequest = async (req, res) => {
 
 
   if (req.method === 'POST' && url.pathname === '/api/cards') {
-    let body = ''
-    for await (const chunk of req) {
-      body += chunk
-      if (body.length > 60000) return json(res, 413, { error: 'Brief too large' })
-    }
     try {
-      const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '', priority, blockedBy } = JSON.parse(body)
+      const { project: p, title, brief, category = 'code', workspace = '.', audit = '', tools = '', priority, blockedBy } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       // Audits run off the board (Tradeflow TF49 was created here by mistake).
       if (audit) throw new Error('Audits do not go on the board: follow C:/Users/PFrew/Projects/_roles/AUDIT-REQUESTS.md (auditor agent, report in Projects/_audits)')
@@ -1375,10 +1387,8 @@ const handleRequest = async (req, res) => {
 
   // Card-ready audit findings: GET to read them, POST to turn them into cards.
   if (url.pathname === '/api/audit-cards' && ['GET', 'POST'].includes(req.method)) {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const input = req.method === 'GET' ? { project: url.searchParams.get('project'), id: url.searchParams.get('id'), report: url.searchParams.get('report') || undefined } : JSON.parse(body || '{}')
+      const input = req.method === 'GET' ? { project: url.searchParams.get('project'), id: url.searchParams.get('id'), report: url.searchParams.get('report') || undefined } : posted
       const p = input.project
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       // Off-board Auditor reports live only under Projects/_audits (_roles/AUDITOR.md).
@@ -1404,13 +1414,8 @@ const handleRequest = async (req, res) => {
 
   // Orchestrators maintain their own cards here: priority, blockers and dated notes.
   if (req.method === 'POST' && url.pathname === '/api/card-update') {
-    let body = ''
-    for await (const chunk of req) {
-      body += chunk
-      if (body.length > 60000) return json(res, 413, { error: 'Update too large' })
-    }
     try {
-      const { project: p, id, priority, addBlockedBy, removeBlockedBy, note } = JSON.parse(body)
+      const { project: p, id, priority, addBlockedBy, removeBlockedBy, note } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const tasksDir = tasksDirOf(p), current = findCard(tasksDir, id)
       const lockBlockers = ['working', 'review', 'completed'].includes(current.column) && !!(readBindings(tasksDir)[current.id] || reviewClaimFor(REVIEW_ROOT, tasksDir, current.id))
@@ -1428,10 +1433,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/move') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], id, to } = JSON.parse(body)
+      const { project: p = config.projects[0], id, to } = posted
       const before = findCard(tasksDirOf(p), id)
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
       // A person moving a Planning card with any Planner wait is the answer: lift the hold.
@@ -1450,10 +1453,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/approve') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], id } = JSON.parse(body)
+      const { project: p = config.projects[0], id } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const { card, investigation } = operatorApprove(tasksDirOf(p), id)
       activity(p, card.id, 'move', `owner -> ${card.column} (approved by operator${investigation ? '; investigation approved' : ''})`)
@@ -1467,11 +1468,9 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/finish') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     let p
     try {
-      const parsed = JSON.parse(body)
+      const parsed = posted
       p = parsed.project ?? config.projects[0]
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       // Same guard as the poll: one integration pass per project at a time.
@@ -1503,9 +1502,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/spawn') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], id } = JSON.parse(body || '{}')
+    let p, id
+    try { ({ p, id } = cardInput()) } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
     const tasksDir = tasksDirOf(p)
     try {
       if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
@@ -1557,10 +1555,8 @@ const handleRequest = async (req, res) => {
   // A project chat registers as its project's manager: hkb found then goes to its inbox
   // instead of the Kanban Manager's. { project, chat: null } unregisters.
   if (url.pathname === '/api/project-manager' && ['GET', 'POST'].includes(req.method)) {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const input = req.method === 'GET' ? { project: url.searchParams.get('project') } : JSON.parse(body || '{}')
+      const input = req.method === 'GET' ? { project: url.searchParams.get('project') } : posted
       const p = input.project
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       if (req.method === 'POST') {
@@ -1606,10 +1602,8 @@ const handleRequest = async (req, res) => {
   // Settings are applied to the running server and written back to disk, so a
   // change takes effect on the next poll rather than at the next restart.
   if (req.method === 'POST' && url.pathname === '/api/config') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const patch = JSON.parse(body || '{}')
+      const patch = posted
       if ('agentBackend' in patch) validateAgentBackend(patch.agentBackend)
       // Other writers (project pause, hand edits like workflowLimits) change the
       // file after startup; patch the current file, not the startup copy.
@@ -1685,11 +1679,10 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/priority') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], id, priority } = JSON.parse(body || '{}')
+    let p, id
+    try { ({ p, id } = cardInput()) } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
     try {
-      json(res, 200, { ok: true, card: setPriority(tasksDirOf(p), id, priority) })
+      json(res, 200, { ok: true, card: setPriority(tasksDirOf(p), id, posted.priority) })
     } catch (err) {
       json(res, 400, { ok: false, error: err.message })
     }
@@ -1700,10 +1693,8 @@ const handleRequest = async (req, res) => {
   // Open the card in the editor. `code` is a .cmd shim on Windows, so it needs a
   // shell; detached so closing the board never takes the editor with it.
   if (req.method === 'POST' && url.pathname === '/api/open') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], id, reportId } = JSON.parse(body || '{}')
+      const { project: p = config.projects[0], id, reportId } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       if (!reportId && !isCardId(id)) throw new Error('Invalid card identity')
       const path = reportId ? resolveAuditReport(config, p, reportId) : findCard(tasksDirOf(p), id).path
@@ -1721,11 +1712,10 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/auto-review') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], id, on } = JSON.parse(body || '{}')
+    let p, id
+    try { ({ p, id } = cardInput()) } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
     try {
-      const card = setAutoReview(tasksDirOf(p), id, !!on)
+      const card = setAutoReview(tasksDirOf(p), id, !!posted.on)
       json(res, 200, { ok: true, card })
     } catch (err) {
       json(res, 400, { ok: false, error: err.message })
@@ -1746,10 +1736,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/review-groups') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p, groups } = JSON.parse(body)
+      const { project: p, groups } = posted
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       json(res, 200, { ok: true, groups: saveReviewGroups(tasksDirOf(p), groups) })
     } catch (err) { json(res, 400, { ok: false, error: err.message }) }
@@ -1757,10 +1745,8 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/card-settings') {
-    let body = ''
-    for await (const chunk of req) body += chunk
     try {
-      const { project: p = config.projects[0], id, stage, settings } = JSON.parse(body || '{}')
+      const { project: p = config.projects[0], id, stage, settings } = posted
       if (!config.projects.includes(p) || !STAGES.includes(stage) || !settings || typeof settings !== 'object') throw new Error('Known project, card stage and settings object required')
       const card = findCard(tasksDirOf(p), id)
       const next = setCardOverride(tasksDirOf(p), card.id, stage, settings, config)
@@ -1771,9 +1757,9 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/review') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], cardIds } = JSON.parse(body || '{}')
+    const { project: p = config.projects[0], cardIds } = posted
+    if (!config.projects.includes(p)) return json(res, 400, { ok: false, error: 'Unknown project' })
+    if (cardIds !== undefined && !(Array.isArray(cardIds) && cardIds.every(isCardId))) return json(res, 400, { ok: false, error: 'cardIds must be a list of card ids' })
     try {
       if (breakerState(p).breakerTripped) throw new Error('circuit breaker tripped — auto-spawn halted, reset from Settings')
       const result = await spawnReviewer({
@@ -1818,12 +1804,11 @@ const handleRequest = async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { project: p = config.projects[0], id } = JSON.parse(body || '{}')
+    let p, id
+    try { ({ p, id } = cardInput()) } catch (err) { return json(res, 400, { ok: false, error: err.message }) }
     const tasksDir = tasksDirOf(p)
     try {
-      const binding = readBindings(tasksDir)[String(id).toUpperCase()]
+      const binding = readBindings(tasksDir)[id]
       await stopCard({ tasksDir, paneId: binding?.pane_id, cardId: id, project: p })
       json(res, 200, { ok: true })
     } catch (err) {

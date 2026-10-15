@@ -11,8 +11,9 @@ import { createCard, findCard, moveCard } from './lib/cards.mjs'
 import { bind } from './lib/bindings.mjs'
 import { historyPath } from './lib/card-history.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
+import { chromium } from 'playwright'
 
-let root, tasks, child, base
+let root, tasks, child, base, stderr = ''
 before(async () => {
   root = mkdtempSync(join(tmpdir(), 'hkb-card-api-'))
   tasks = join(root, 'Proj', 'TASKS')
@@ -33,6 +34,8 @@ before(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
+  child.stderr.on('data', chunk => { stderr += chunk })
+  child.stdout.on('data', () => {})
   base = `http://127.0.0.1:${port}`
   for (let i = 0; ; i++) {
     try { if ((await fetch(`${base}/api/board?project=Proj`)).ok) break } catch {}
@@ -154,4 +157,95 @@ test('a card with a live agent takes notes and priority but not blocker changes'
   r = await post('/api/card-update', { id: w.id, priority: 9, note: { heading: 'Decision', text: 'Ship it.' } })
   assert.equal(r.status, 200, r.body.error)
   assert.match(text(w.id), /\*\*Priority\*\* 9\/10/)
+})
+
+// Audit 2026-10-15 F7: a bad request body is a 400 with a message, never a 500 with a stack
+// on stderr; the card routes check the project and the card id before any work.
+const raw = async (path, body, method = 'POST') => {
+  const r = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json' }, body })
+  return { status: r.status, body: await r.json() }
+}
+
+test('F7 AC1: malformed and empty JSON bodies answer 400 on every card route with nothing on stderr', async () => {
+  const before = stderr.length
+  for (const path of ['/api/spawn', '/api/priority', '/api/auto-review', '/api/review', '/api/stop', '/api/cards', '/api/card-update', '/api/open', '/api/config']) {
+    let r = await raw(path, '{bad')
+    assert.equal(r.status, 400, `${path} with malformed JSON`)
+    assert.match(r.body.error, /not valid JSON/)
+    r = await raw(path, '[1]')
+    assert.equal(r.status, 400, `${path} with a JSON array`)
+    assert.match(r.body.error, /JSON object/)
+    r = await raw(path, '')
+    // An empty body is {}: a config save with nothing to change is fine, a card route is not.
+    if (path !== '/api/config') assert.ok(r.status >= 400 && r.status < 500, `${path} with an empty body answered ${r.status}`)
+  }
+  assert.equal(stderr.slice(before), '', 'no stack on stderr for a client error')
+})
+
+test('F7 AC2: card routes refuse an unknown project or a bad card id with 400 and keep the board up', async () => {
+  const before = stderr.length
+  for (const path of ['/api/spawn', '/api/priority', '/api/auto-review', '/api/stop']) {
+    let r = await raw(path, JSON.stringify({ project: 'Nope', id: 'P1' }))
+    assert.equal(r.status, 400, path); assert.equal(r.body.error, 'Unknown project')
+    r = await raw(path, JSON.stringify({ project: 'Proj', id: '../x' }))
+    assert.equal(r.status, 400, path); assert.equal(r.body.error, 'Invalid card identity')
+    r = await raw(path, JSON.stringify({ project: 'Proj' }))
+    assert.equal(r.status, 400, path); assert.equal(r.body.error, 'Invalid card identity')
+  }
+  let r = await raw('/api/review', JSON.stringify({ project: 'Nope' }))
+  assert.equal(r.status, 400); assert.equal(r.body.error, 'Unknown project')
+  r = await raw('/api/review', JSON.stringify({ project: 'Proj', cardIds: ['../x'] }))
+  assert.equal(r.status, 400); assert.match(r.body.error, /cardIds/)
+  assert.equal(stderr.slice(before), '')
+  assert.equal(child.exitCode, null)
+  assert.equal((await fetch(`${base}/api/board?project=Proj`)).status, 200)
+})
+
+test('F7 AC3: /api/priority refuses a value outside 0-10 instead of clamping it', async () => {
+  const a = createCard(tasks, { title: 'Pri', brief: 'x', prefix: 'P' })
+  let r = await post('/api/priority', { id: a.id, priority: 99 })
+  assert.equal(r.status, 400); assert.match(r.body.error, /priority/i)
+  r = await post('/api/priority', { id: a.id, priority: 2.5 })
+  assert.equal(r.status, 400); assert.match(r.body.error, /priority/i)
+  r = await post('/api/priority', { id: a.id, priority: '7' })
+  assert.equal(r.status, 400); assert.match(r.body.error, /priority/i)
+  assert.doesNotMatch(text(a.id), /Priority\*\* 10\/10/)
+  r = await post('/api/priority', { id: a.id.toLowerCase(), priority: 0 })
+  assert.equal(r.status, 200, r.body.error)
+  assert.match(text(a.id), /\*\*Priority\*\* 0\/10/)
+  r = await post('/api/priority', { id: a.id, priority: 10 })
+  assert.equal(r.status, 200, r.body.error)
+})
+
+test('F7: a fresh board answers the page-load GETs with 200', async () => {
+  const tasksRoutes = await fetch(`${base}/api/tests/routes?project=Proj`)
+  assert.equal(tasksRoutes.status, 200)
+  assert.deepEqual(await tasksRoutes.json(), { ok: true, routes: [], types: [], note: 'No e2e audit writer for this project' })
+  assert.equal((await fetch(`${base}/api/tests/routes?project=Nope`)).status, 400)
+  const managerTasks = await fetch(`${base}/api/manager-tasks`)
+  assert.equal(managerTasks.status, 200)
+  const body = await managerTasks.json()
+  assert.deepEqual([body.ok, body.tasks], [true, []])
+  for (const path of ['/api/audits?project=Proj', '/api/tests?project=Proj', '/api/projects', '/api/archive?project=Proj']) {
+    assert.equal((await fetch(base + path)).status, 200, path)
+  }
+})
+
+test('F7 AC4: the board page loads against a real server with no console error and no 4xx or 5xx response', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    const errors = [], failed = []
+    page.on('pageerror', e => errors.push(e.message))
+    page.on('console', m => { if (m.type() === 'error') errors.push(m.text()) })
+    page.on('response', r => { if (r.status() >= 400) failed.push(`${r.status()} ${new URL(r.url()).pathname}`) })
+    await page.goto(`${base}/?project=Proj`)
+    await page.locator('#menu-archive').waitFor({ state: 'attached' })
+    for (const view of ['tasks', 'audits', 'settings', 'board']) {
+      await page.evaluate(v => document.querySelector(`[data-view="${v}"]`).click(), view)
+      await page.waitForTimeout(300)
+    }
+    assert.deepEqual(errors, [])
+    assert.deepEqual(failed, [])
+  } finally { await browser.close() }
 })

@@ -2308,15 +2308,16 @@ test('explicit operator pause survives a later circuit breaker reset', async () 
   const route = new Function('json', 'writeFileSync', 'readFileSync', 'resetBreaker', `
     const CONFIG_PATH = 'unused'; const clients = []; const res = {}; const announcedBreakers = new Set(); const activity = () => {};
     let config = {maxConcurrentAgents:0};
-    return async (req, url) => { ${source.slice(start, end)} };
+    return async (req, url, posted = {}) => { ${source.slice(start, end)} };
   `)((_res, _status, value) => { response = structuredClone(value) }, () => {}, () => onDisk, () => {})
-  await route({method:'POST', async *[Symbol.asyncIterator]() {yield '{"maxConcurrentAgents":0}'}}, {pathname:'/api/config'})
+  // Audit 2026-10-15 F7: handleRequest parses the body once into "posted" before any route runs.
+  await route({method:'POST'}, {pathname:'/api/config'}, {maxConcurrentAgents:0})
   assert.equal(response.config.maxConcurrentAgents, 0)
   assert.equal(response.config.workflowLimits.maxRunsPerStage, 25)
   await route({method:'POST'}, {pathname:'/api/breaker-reset'})
   assert.equal(response.config.maxConcurrentAgents, 0)
   // Audit 2026-10-15 F4: caps and a project's integration check are set live through the route, merged into the file's values.
-  const post = body => route({method:'POST', async *[Symbol.asyncIterator]() {yield JSON.stringify(body)}}, {pathname:'/api/config'})
+  const post = body => route({method:'POST'}, {pathname:'/api/config'}, body)
   await post({workflowLimits:{maxTokensPerCard:12000000, maxStepsPerRun:60}})
   assert.deepEqual(response.config.workflowLimits, {maxRunsPerStage:25, maxTokensPerCard:12000000, maxStepsPerRun:60})
   await post({workflowLimits:{maxStepsPerRun:-1}})

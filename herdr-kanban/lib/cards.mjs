@@ -743,9 +743,11 @@ export function hasOperatorCompletion(card) {
 
 // Priority lives in the card's metadata line, same as everything else the board
 // reads. Editing it here keeps the file the single source of truth.
+// 0 to 10 whole: the drawer's lowest step is 0. Out of range is refused, never clamped
+// (audit 2026-10-15 F7: 99 was saved as 10 while /api/cards refused 11).
 export function setPriority(tasksDir, cardId, priority) {
-  const n = Math.max(0, Math.min(10, Math.round(Number(priority))))
-  if (!Number.isFinite(n)) throw new Error(`priority must be 0-10, got: ${priority}`)
+  const n = priority
+  if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error(`priority must be a whole number from 0 to 10, got: ${JSON.stringify(priority)}`)
 
   const card = findCard(tasksDir, cardId)
   const text = readFileSync(card.path, 'utf8')
