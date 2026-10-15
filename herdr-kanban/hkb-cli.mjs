@@ -43,7 +43,7 @@ import { approvedManagedModel } from './lib/agent-launch.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { postInbox } from './lib/inbox.mjs'
-import { appendHistory, writeCurrentFeedback, repairHandoffSections, repeatedFinding, lastPlannerDecisionWait, decisionDigest } from './lib/card-history.mjs'
+import { appendHistory, historyPath, writeCurrentFeedback, repairHandoffSections, repeatedFinding, lastPlannerDecisionWait, decisionDigest } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -536,6 +536,11 @@ let decisionWait = false
 let boardWait = false
 let ownerDeclined = false
 let plannerIssues = 0
+let secondBuilderReturn = false
+// Builder returns on one card, from its history (recordBuilderReturn writes one per attempt).
+const builderReturnCount = (tasksDir, id) => {
+  try { return readFileSync(historyPath(tasksDir, id), 'utf8').split('\n').filter(line => line.includes('"event":"builder-return"')).length } catch { return 0 }
+}
 let escalated = false
 let auditNotReady = ''
 let coveringCard
@@ -662,8 +667,15 @@ try {
     // cards, so the Builder's [implementation] issue was refused outright. It needs a Planner.
     const planless = !repeat && target === 'queue' && current.column === 'working' && current.cardOwned && !planPasses(readFileSync(current.path, 'utf8'))
     if (planless) target = 'planning'
-    const routed = repeat ? 'planning: second Builder implementation failure on the same plan' : planless ? 'planning: the card has no plan that passes the plan check, so a Builder cannot take it again' : null
+    let routed = repeat ? 'planning: second Builder implementation failure on the same plan' : planless ? 'planning: the card has no plan that passes the plan check, so a Builder cannot take it again' : null
     if (current.column === 'working') recordBuilderReturn(tasksDir, current, note)
+    // Audit 2026-10-16 F3: a card that came back from a Builder twice (I1319: 3 returns, 4 Planner
+    // runs, 570 min) goes to the owner, not to a third Planner run. The alert carries the latest note.
+    if (current.column === 'working' && builderReturnCount(tasksDir, current.id) >= 2 && ['queue', 'planning'].includes(target)) {
+      target = 'owner'
+      secondBuilderReturn = true
+      routed = 'owner: second Builder return on this card'
+    }
     appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note, ...(routed ? { routed } : {}) })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note, plan } })
@@ -736,6 +748,7 @@ else if (decisionWait) writeCurrentFeedback(tasksDir, card, 'Needs you', `${note
 Record the answer on the card, then move it to Planning (or Planned).
 `, { ask: !boardWait })
 else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready${escalated ? ` (after one Codex Planner, the ${ESCALATION_MODEL} escalation Planners also failed)` : ''}. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
+else if (secondBuilderReturn && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `${card.id} came back from a Builder twice. The latest Builder note:\n\n${note}\n\nDecide the scope or the plan, then move the card to Planning (or Queue) with the answer on the card.`)
 else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {
   const tail = capped
