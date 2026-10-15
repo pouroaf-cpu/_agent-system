@@ -48,6 +48,8 @@ export function cardReadyFindings(text) {
   for (const f of list) {
     const at = `Finding ${f?.n}`
     if (!Number.isInteger(f?.n) || f.n < 1) throw new Error('Each finding needs a positive integer n')
+    // No Workspace means the project root. Never guess one from a file path: app/layout.tsx made 'app' (I1323, I1324, 2026-10-15).
+    if (f.workspace === undefined || f.workspace === null || (typeof f.workspace === 'string' && !f.workspace.trim())) f.workspace = '.'
     if (!text1(f.title) || f.title.length > 120 || /[\r\n]/.test(f.title)) throw new Error(`${at}: title must be one line of at most 120 characters`)
     if (!['high', 'medium', 'low'].includes(f.severity)) throw new Error(`${at}: severity must be high, medium or low`)
     if (!Number.isInteger(f.priority) || f.priority < 0 || f.priority > 10) throw new Error(`${at}: priority must be an integer 0-10`)

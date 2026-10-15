@@ -134,6 +134,20 @@ test('audit-cards: off-board report.md source links in the report and never arch
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('audit-cards: a finding with no Workspace gets the project root, not a folder from its file path', () => {
+  const dir = fixture()
+  try {
+    const tasks = join(dir, 'tasks')
+    mkdirSync(tasks)
+    const audit = createCard(tasks, { title: 'Journey', brief: 'Visual flow', audit: 'general', prefix: 'I' })
+    fill(audit, report([finding(1, { workspace: undefined, files: ['app/layout.tsx'] }), finding(2, { workspace: '  ', files: ['app/page.tsx'] })]))
+    moveCard(tasks, audit.id, 'owner')
+    const { created } = cardsFromAudit(tasks, { id: audit.id, findings: 'all', decline: [], prefix: 'I' })
+    assert.equal(created.length, 2)
+    for (const { id } of created) assert.equal(findCard(tasks, id).workspace, '.')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('audit-cards: a Workspace folder missing from the project is refused before anything is written', () => {
   const dir = fixture()
   try {
