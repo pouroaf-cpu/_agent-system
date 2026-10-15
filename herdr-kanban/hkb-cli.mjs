@@ -42,7 +42,7 @@ import { approvedManagedModel } from './lib/herdr.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { postInbox } from './lib/inbox.mjs'
-import { appendHistory, writeCurrentFeedback, repairHandoffSections, repeatedFinding } from './lib/card-history.mjs'
+import { appendHistory, writeCurrentFeedback, repairHandoffSections, repeatedFinding, lastPlannerDecisionWait, decisionDigest } from './lib/card-history.mjs'
 import { failureCategory, failureDestination, updateWorkflow, recordOperationalFailure, readWorkflow } from './lib/workflow-state.mjs'
 import { stopCardRun } from './lib/card-run.mjs'
 import { recoveryState } from './lib/recovery.mjs'
@@ -600,9 +600,13 @@ try {
   boardWait = decisionCategory === 'board'
   if (decisionWait) {
     target = 'planning'
+    // Fix 4: the same [board] question on an unchanged card is not asked again.
+    const digest = decisionDigest(readFileSync(current.path, 'utf8'))
+    const last = lastPlannerDecisionWait(tasksDir, current.id)
+    const sameAsk = last?.board === true && last.digest === digest && String(last.note).replace(/\s+/g, ' ').trim() === note.replace(/\s+/g, ' ').trim()
     updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, ...(decisionCategory === 'board' ? { board: true } : {}), why: note, since: new Date().toISOString() } })
-    appendHistory(tasksDir, current.id, { event: 'planner-decision-wait', stage: 'planning', note })
-    if (decisionCategory === 'board') tellManager(`BOARD ${basename(dirname(tasksDir))} ${current.id} (planning): ${note.replace(/\s+/g, ' ')}`, true, 'BQ')
+    appendHistory(tasksDir, current.id, { event: 'planner-decision-wait', stage: 'planning', note, board: decisionCategory === 'board', digest })
+    if (decisionCategory === 'board' && !sameAsk) tellManager(`BOARD ${basename(dirname(tasksDir))} ${current.id} (planning): ${note.replace(/\s+/g, ' ')}`, true, 'BQ')
   }
   prerequisiteWait = verb === 'issue' && !approvalWait && !decisionWait && current.column === 'planning' && waitingOnPrerequisites(current, readBoard(tasksDir), readWorktrees(tasksDir)).length > 0
   if (prerequisiteWait) {

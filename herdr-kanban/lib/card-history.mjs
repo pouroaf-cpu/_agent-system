@@ -2,7 +2,7 @@ import { formatNZTime, formatNZText } from './nz-time.mjs'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { isCardId } from './ids.mjs'
 import { postInbox } from './inbox.mjs'
 
@@ -130,6 +130,27 @@ export function lastTransition(tasksDir, id) {
     try { const e = JSON.parse(line); if (e.event === 'transition') last = e } catch { /* torn line */ }
   }
   return last
+}
+// The card's last planner-decision-wait event from history, or null.
+export function lastPlannerDecisionWait(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  if (!existsSync(path)) return null
+  let last = null
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.includes('"planner-decision-wait"')) continue
+    try { const e = JSON.parse(line); if (e.event === 'planner-decision-wait') last = e } catch { /* torn line */ }
+  }
+  return last
+}
+// Fix 4 (2026-10-15): a Planner that re-issues the same [board] question on a card nobody has
+// changed asks the Kanban Manager again for nothing (BQ 12700 on I1323). The digest is the card's
+// text without the replaceable '## Current feedback' note and without the Recovery/attempt
+// records appended after it, which the Planner's own runs rewrite.
+export function decisionDigest(text) {
+  const body = String(text)
+    .replace(/^## Current feedback\r?\n[\s\S]*?(?=^## |^\*\*Recovery:\*\*|^---\s*$|^\*\*(?:Build attempt|Failed return \d+)\*\*|$(?![\s\S]))/m, '')
+    .replace(/^(?:\*\*Recovery:\*\*|\*\*(?:Build attempt|Failed return \d+)\*\*)[\s\S]*$/m, '')
+  return createHash('sha256').update(body.replace(/\s+/g, ' ').trim()).digest('hex')
 }
 // True when the Builder's hkb done/unchanged is recorded since the card last entered Working.
 export function builderHandedOff(tasksDir, id) {

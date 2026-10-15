@@ -158,3 +158,25 @@ try {
   assert.deepEqual(unmetBlockers({ blockedBy: ['T-31'] }, board, { 'T-31': { state: 'integrated' } }), [])
   assert.deepEqual(unmetBlockers({ blockedBy: ['T-31'] }, board, { 'T-31': { state: 'building' } }), ['T-31'])
 }
+
+// Fix 4 (2026-10-15): a [board] question is asked again only when the card text has changed.
+// The digest ignores the replaceable Current feedback note and the Recovery/attempt records after it.
+{
+  const { decisionDigest, lastPlannerDecisionWait, appendHistory } = await import('./lib/card-history.mjs')
+  const card = '# I9 — x\n\n**Workspace:** app\n\n## Approved brief\nDo it\n'
+  const d = decisionDigest(card)
+  assert.equal(decisionDigest(card + '\n## Current feedback\nNeeds you: first\nHistory entry: a\n'), decisionDigest(card + '\n## Current feedback\nNeeds you: second\nHistory entry: b\n'), 'the feedback note is not part of the digest')
+  assert.equal(decisionDigest(card + '\n**Recovery:** 2 of 3\n'), d, 'Recovery records are not part of the digest')
+  assert.equal(decisionDigest(card + '\n**Build attempt** 1\n'), d, 'attempt records are not part of the digest')
+  assert.notEqual(decisionDigest(card.replace('**Workspace:** app', '**Workspace:** .')), d, 'a changed header is a changed card')
+  const dir = mkdtempSync(join(tmpdir(), 'decision-digest-'))
+  try {
+    mkdirSync(join(dir, 'tasks'))
+    assert.equal(lastPlannerDecisionWait(join(dir, 'tasks'), 'I9'), null)
+    appendHistory(join(dir, 'tasks'), 'I9', { event: 'planner-decision-wait', stage: 'planning', note: 'old', board: true, digest: 'a' })
+    appendHistory(join(dir, 'tasks'), 'I9', { event: 'planner-decision-wait', stage: 'planning', note: 'new', board: true, digest: 'b' })
+    appendHistory(join(dir, 'tasks'), 'I9', { event: 'transition', from: 'planning', to: 'queue' })
+    assert.equal(lastPlannerDecisionWait(join(dir, 'tasks'), 'I9').digest, 'b')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+  console.log('Decision digest passed')
+}
