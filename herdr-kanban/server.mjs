@@ -1079,7 +1079,16 @@ function broadcast(project, event, data) {
 // A change bumps the version and sends the summary once. A broadcast whose payload equals the
 // last one sent (Windows delivers a lane folder's change event after the file's own, past the
 // debounce; a poll with nothing new) is no change: no version, no event, no tab refetch.
-const broadcastBoard = (project) => {
+// A throw here (a card file renamed between listing and read, a payload bug) is logged and retried
+// once, never thrown: its callers include request handlers and timers with nothing above them.
+const broadcastBoard = (project, retry = true) => {
+  try { broadcastBoardNow(project) }
+  catch (err) {
+    console.error(`${project}: board broadcast failed — ${err.message}`)
+    if (retry) setTimeout(() => broadcastBoard(project, false), 1000)
+  }
+}
+const broadcastBoardNow = (project) => {
   const payload = boardPayload(project)
   const body = JSON.stringify({ ...payload, version: null })
   if (lastBroadcast.get(project) === body) return
@@ -1117,7 +1126,7 @@ function openFeed(project) {
     if (file && (/(^|[\\/])\./.test(file) || /\.(tmp|log|jsonl?)$/i.test(file))) return
     clearTimeout(feed.debounce)
     // Nothing sits above this timer: an error thrown here ends the server process.
-    feed.debounce = setTimeout(() => { try { broadcastBoard(project) } catch (err) { console.error(`${project}: board broadcast failed — ${err.message}`) } }, 150)
+    feed.debounce = setTimeout(() => broadcastBoard(project), 150)
   }
 
   const startWatch = () => {
