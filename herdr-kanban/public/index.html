@@ -14,7 +14,6 @@
       </button>
       <select id="project-pick" class="project-pick" title="Project" aria-label="Project"></select>
       <select id="stage-pick" class="stage-pick" title="Jump to state" aria-label="Jump to board state"></select>
-      <span id="project-status" class="project-status" role="status"></span>
       <span id="conn" class="conn offline" title="Connection to the board server">offline</span>
       <div id="agents" class="agents"></div>
     </div>
@@ -25,9 +24,9 @@
       <button id="archive-cancel" class="btn" hidden>Cancel</button>
       <span id="slots" class="slots"></span>
       <button id="herdr-open" class="btn" type="button">Open herdr</button>
-      <button id="project-control" class="btn" type="button" aria-label="Pause" title="Pause selected project">
-        <span id="project-control-icon" aria-hidden="true"></span>
-        <span id="project-control-label">Pause</span>
+      <button id="project-control" class="btn project-control" type="button" aria-label="Pause" aria-describedby="project-status" title="Pause selected project">
+        <span class="pc-state"><span class="pc-dot" aria-hidden="true"></span><span id="project-status" class="project-status">Running</span></span>
+        <span class="pc-action"><span id="project-control-icon" aria-hidden="true"></span><span id="project-control-label">Pause</span></span>
       </button>
     </div>
   </header>

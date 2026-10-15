@@ -85,8 +85,19 @@ select {
 .bar-right { flex: 0 0 auto; margin-left: auto; }
 .project-pick { font-weight: 600; cursor: pointer; max-width: 240px; }
 .stage-pick { display: none; }
-.project-status { font-weight: 600; color: var(--ok); white-space: nowrap; }
-.project-status.paused { color: var(--owner); }
+/* Pause is the one project control, not a nav button: a state half (running or paused,
+   with a dot) joined to the action half. Its focus ring is the global :focus-visible outline. */
+.project-control { padding: 0; gap: 0; overflow: hidden; }
+.project-control .pc-state, .project-control .pc-action {
+  display: inline-flex; align-items: center; gap: 8px; height: 100%; padding: 0 12px;
+}
+.project-control .pc-state { font-weight: 600; color: var(--ok); border-right: 1px solid var(--line); }
+.project-control .pc-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.project-control .pc-action { padding: 0 14px; color: var(--text); }
+.project-control[data-state="paused"] .pc-state { color: var(--owner); }
+.project-control.start .pc-action { background: var(--active); color: var(--on-active); }
+.project-control.start:hover .pc-action { background: var(--active-hover); color: var(--on-active); }
+.project-status { white-space: nowrap; }
 .conn { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .conn.live { display: none; }
 .conn.offline { color: var(--problem); font-weight: 600; }

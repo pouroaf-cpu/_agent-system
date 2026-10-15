@@ -2114,12 +2114,13 @@ function render() {
   dependencyHover.reset();
   const status = document.getElementById('project-status');
   status.textContent = projectPaused() ? 'Paused' : 'Running';
-  status.classList.toggle('paused', projectPaused());
   const projectAction = projectPaused() && !explicitCardRunning() ? 'Start' : 'Pause';
   const projectButton = document.getElementById('project-control');
   document.getElementById('project-control-label').textContent = projectAction;
   document.getElementById('project-control-icon').innerHTML = projectAction === 'Start' ? START_ICON : PAUSE_ICON;
-  projectButton.classList.toggle('primary', projectAction === 'Start');
+  // The control carries the state (running or paused) and the action it will take.
+  projectButton.dataset.state = projectPaused() ? 'paused' : 'running';
+  projectButton.classList.toggle('start', projectAction === 'Start');
   projectButton.setAttribute('aria-label', projectAction);
   projectButton.title = projectAction + ' project: ' + PROJECT;
 
