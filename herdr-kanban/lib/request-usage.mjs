@@ -87,6 +87,15 @@ const claudeCounters = (u) => {
   return { input, cachedInput, uncachedInput: input - cachedInput, output, reasoningOutput: Number(u.output_tokens_details?.thinking_tokens) || 0, total: input + output }
 }
 
+// The engine's error on a Codex task_complete, one line, trimmed. On 2026-10-12 Codex answered
+// every gpt-6-sol start with HTTP 400 "model is not supported" and the run ended with no
+// token_count row: the model used nothing, so the run's usage is a known zero, not unknown
+// (audit 2026-10-15 F11: all 17 gpt-6-sol runs sat at unknown usage).
+const refusal = (error) => {
+  const text = typeof error === 'string' ? error : error?.message
+  return text ? String(text).replace(/\s+/g, ' ').trim().slice(0, 200) : null
+}
+
 // Every poll reads every open run's session; a file is parsed again only once it changes.
 // ponytail: never evicted, one small entry per session file the board process has read.
 const parsed = new Map()
@@ -127,7 +136,7 @@ function sessionEvents(sessionId, { root } = {}) {
       } else if (row.type === 'response_item' && row.payload?.role === 'user') {
         rows.push({ kind: 'user', timestamp: row.timestamp, ordinal })
       } else if (type === 'task_complete') {
-        rows.push({ kind: 'task_complete', file: path, timestamp: row.timestamp, ordinal })
+        rows.push({ kind: 'task_complete', file: path, timestamp: row.timestamp, ordinal, error: refusal(row.payload?.error) })
       }
     } catch {}
   }
@@ -181,9 +190,10 @@ function completionSnapshot(sessionId, startOrdinal, { root } = {}) {
   const boundary = events.find((r) => r.kind === 'task_complete' && (r.ordinal ?? 0) > (startOrdinal ?? -1))
   if (!boundary) return null
   const tokens = events.filter((r) => r.kind === 'token_count' && (r.ordinal ?? 0) <= boundary.ordinal).at(-1)
-  return tokens
-    ? { ...tokens, complete: { timestamp: boundary.timestamp, ordinal: boundary.ordinal } }
-    : { file: sessionFile(sessionId, root), timestamp: boundary.timestamp, ordinal: boundary.ordinal, counters: null, missing: true, complete: { timestamp: boundary.timestamp, ordinal: boundary.ordinal } }
+  const complete = { timestamp: boundary.timestamp, ordinal: boundary.ordinal }
+  if (tokens) return { ...tokens, complete }
+  if (boundary.error) return { file: sessionFile(sessionId, root), timestamp: boundary.timestamp, ordinal: boundary.ordinal, counters: { ...ZERO }, refused: boundary.error, complete }
+  return { file: sessionFile(sessionId, root), timestamp: boundary.timestamp, ordinal: boundary.ordinal, counters: null, missing: true, complete }
 }
 
 export function usageDelta(start, finish) {
@@ -299,12 +309,18 @@ export function runSteps(run, { root } = {}) {
 }
 
 function closeRun(run, finish, status, at, root) {
-  const delta = usageDelta(run.start, finish)
+  // A refused run used nothing whatever its start snapshot says (audit 2026-10-15 F11).
+  const delta = finish?.refused ? { status: 'ok', counters: { ...ZERO } } : usageDelta(run.start, finish)
   Object.assign(run, {
     status: delta.status === 'ok' ? status : delta.status,
     finish: { at, ...finish },
     delta: delta.counters,
   })
+  // Audit 2026-10-15 F11 AC1: a finished run at zero tokens says why (20 Planner runs were
+  // complete at 0 with nothing to tell a silent-zero from a lost record).
+  const zeroReason = finish?.refused ? `model refused the run: ${finish.refused}`
+    : delta.counters?.total === 0 ? 'the session transcript records no model usage between the run start and finish' : null
+  if (zeroReason) run.zeroReason = zeroReason; else delete run.zeroReason
   run.steps = runSteps(run, { root })
   delete run.pendingFinish
   if (run.tokenAlert !== 'sent') run.tokenAlert = 'due'
@@ -540,4 +556,32 @@ export function cardUsageSummary(tasksDir) {
     }
   }
   return out
+}
+
+// Audit 2026-10-15 F11 AC2: a run with no usable usage (session not found at its start,
+// several runs on one pane, a transcript without counters) counts toward the per-card token
+// cap by estimate instead of making the cap impossible to apply (47 Builder and 20 Planner
+// runs at zero and 39 cards marked unknown on 2026-10-15, with the cap refusing them all).
+// A shared or multi-card run with a delta is split evenly over its cards; a run without a
+// delta takes the median of the board's known runs in its role, else its session file at
+// four bytes a token. Returns a function of a run: { tokens, estimated, basis }.
+export function usageEstimator(runs, { root } = {}) {
+  const known = {}
+  for (const r of runs) {
+    if (r.duplicateOf || !r.delta || r.shared || (r.cardIds?.length || 0) !== 1 || !(r.delta.total > 0)) continue
+    ;(known[r.role] ??= []).push(r.delta.total)
+  }
+  const median = Object.fromEntries(Object.entries(known).map(([role, totals]) => [role, totals.sort((a, b) => a - b)[Math.floor(totals.length / 2)]]))
+  return (run) => {
+    const cards = Math.max(1, run.cardIds?.length || 1)
+    if (run.delta && !run.shared && cards === 1) return { tokens: run.delta.total || 0, estimated: false }
+    if (run.delta) return { tokens: Math.round((run.delta.total || 0) / cards), estimated: true, basis: `shared run split over ${cards} cards` }
+    if (median[run.role] != null) return { tokens: median[run.role], estimated: true, basis: `median of ${known[run.role].length} known ${run.role} runs` }
+    let size = 0
+    try {
+      const file = run.finish?.file || run.start?.file || (run.sessionId ? sessionFile(run.sessionId, root) : null)
+      size = file ? statSync(file).size : 0
+    } catch { /* no transcript to size */ }
+    return { tokens: Math.round(size / 4), estimated: true, basis: size ? 'session file size at four bytes a token' : 'no session file' }
+  }
 }

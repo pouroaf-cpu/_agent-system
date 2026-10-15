@@ -83,3 +83,46 @@ test('task project and category use explicit choices and group Kanban consistent
  const tasks=parseManagerTasks('### REQ-20260911-025 - Fix token usage\nProject: Kanban\nCategory: Usage & Costs\nStatus: working\n')
  assert.equal(tasks[0].project,'Orchestration and Tools');assert.equal(tasks[0].category,'Usage & Costs')
 })
+
+// Audit 2026-10-15 F11 AC1: a finished run at zero tokens carries the reason. The 17 gpt-6-sol
+// Builder runs of 2026-10-12 ended at task_complete with the HTTP 400 refusal and no
+// token_count row, and sat at unknown usage; 20 Planner runs were complete at 0 with no reason.
+test('a Codex run whose model was refused closes as a known zero with the refusal as its reason',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'usage-refused-'))
+ try {
+  const at=new Date('2026-10-12T17:23:00Z')
+  recordUsageStart({tasksDir:dir,requestId:'I1147',cardIds:['I1147'],role:'builder',paneId:'w1:p7',name:'b-i1147',model:'gpt-6-sol',now:at,root:dir})
+  const error={message:JSON.stringify({type:'error',status:400,error:{type:'invalid_request_error',message:"The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account."}})}
+  const rows=[{type:'session_meta',timestamp:'2026-10-12T17:23:01Z',payload:{}},{type:'response_item',timestamp:'2026-10-12T17:23:02Z',payload:{role:'user'}},{type:'turn_context',timestamp:'2026-10-12T17:23:03Z',payload:{model:'gpt-6-sol'}},{type:'event_msg',timestamp:'2026-10-12T17:23:09Z',payload:{type:'task_complete',last_agent_message:null,error}}]
+  writeFileSync(join(dir,'rollout-sol-id.jsonl'),rows.map(JSON.stringify).join('\n'))
+  const agents=[{name:'b-i1147',pane_id:'w1:p7',agent_session:{agent:'codex',value:'sol-id'}}]
+  reconcileUsage(dir,agents,{root:dir})
+  const run=Object.values(readUsage(dir).runs)[0]
+  assert.equal(run.status,'complete')
+  assert.equal(run.delta.total,0)
+  assert.match(run.zeroReason,/^model refused the run: .*gpt-6-sol' model is not supported/)
+  const summary=usageSummary(dir,{root:dir})[0]
+  assert.equal(summary.unknown,0);assert.equal(summary.tokens.total,0)
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})
+test('a Claude run that finishes with no model usage after its start is a zero with a reason; a run with usage has none',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'usage-zero-'))
+ try {
+  const id='c1a0de00-0000-4000-8000-00000000000f'
+  recordUsageStart({tasksDir:dir,requestId:'I192',cardIds:['I192'],role:'planner',paneId:'wG:pZZ@default',name:'p-i192',now:new Date('2026-09-26T00:00:00Z'),root:dir})
+  const u=(input,output)=>({input_tokens:input,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:output})
+  const rows=[{type:'assistant',timestamp:'2026-09-25T23:59:00Z',message:{id:'before',usage:u(1000,1000)}},{type:'user',timestamp:'2026-09-26T00:00:05Z',message:{role:'user',content:'plan'}}]
+  mkdirSync(join(dir,'x'));writeFileSync(join(dir,'x',`${id}.jsonl`),rows.map(r=>JSON.stringify(r)).join('\n')+'\n')
+  const agent={name:'p-i192',pane_id:'wG:pZZ',agent_session:{agent:'claude',kind:'id',source:'herdr:claude',value:id}}
+  reconcileUsage(dir,[agent],{root:dir})
+  const zero=await recordUsageFinish({tasksDir:dir,paneId:'wG:pZZ@default',agent,status:'complete',now:new Date('2026-09-26T00:01:00Z'),root:dir})
+  assert.equal(zero.status,'complete');assert.equal(zero.delta.total,0)
+  assert.equal(zero.zeroReason,'the session transcript records no model usage between the run start and finish')
+  // The same session with usage after the start: no reason on the run.
+  writeFileSync(join(dir,'x',`${id}.jsonl`),[...rows,{type:'assistant',timestamp:'2026-09-26T00:02:00Z',message:{id:'m1',usage:u(10,5)}}].map(r=>JSON.stringify(r)).join('\n')+'\n')
+  recordUsageStart({tasksDir:dir,requestId:'I192',cardIds:['I192'],role:'planner',paneId:'wG:pZZ@default',name:'p-i192',now:new Date('2026-09-26T00:01:30Z'),root:dir})
+  reconcileUsage(dir,[agent],{root:dir})
+  const used=await recordUsageFinish({tasksDir:dir,paneId:'wG:pZZ@default',agent,status:'complete',now:new Date('2026-09-26T00:03:00Z'),root:dir})
+  assert.equal(used.delta.total,15);assert.equal('zeroReason' in used,false)
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})

@@ -24,7 +24,7 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
   } })
   mock.module('./lib/bindings.mjs', { namedExports: { readBindings: () => ({}), unbind: () => {} } })
   mock.module('./lib/cards.mjs', { namedExports: { readBoard: () => ({ queue: [card] }), findCard: () => card, moveCard: () => card, columnByKey: () => ({}), needsBrowser: () => true } })
-  mock.module('./lib/request-usage.mjs', { namedExports: { recordUsageFinish: async () => {}, readUsage: () => ({}) } })
+  mock.module('./lib/request-usage.mjs', { namedExports: { recordUsageFinish: async () => {}, readUsage: () => ({}), usageEstimator: () => () => ({ tokens: 0, estimated: false }) } })
   mock.module('./lib/project-control.mjs', { namedExports: { assertPromptAllowed: () => { calls.push(['pause-check']); if (paused) throw new Error('paused') } } })
   mock.module('./lib/card-run.mjs', { namedExports: {
     assertCardRunSelection: (p, ids, stage) => { assert.deepEqual([p, ids, stage], ['Fixture', ['T-1'], 'builder']); calls.push(['identity-check']) },
