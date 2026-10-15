@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, utimesSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, utimesSync, symlinkSync } from 'node:fs'
+import { join, parse, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { applyDiskReading, pruneAgentLogs, DISK_LOW_GB, DISK_RESUME_GB, AGENT_LOG_KEEP_MS } from './lib/disk-guard.mjs'
+import { applyDiskReading, pruneAgentLogs, npmCacheDir, diskWatchRoots, DISK_LOW_GB, DISK_RESUME_GB, AGENT_LOG_KEEP_MS } from './lib/disk-guard.mjs'
 import { sweepCleanedCaches } from './lib/worktrees.mjs'
 
 test('disk floor: pauses under 6 GB, resumes above 8 GB, and holds in between', () => {
@@ -89,6 +89,28 @@ test('cache sweep: deletes node_modules and .next of cleaned integrated card che
   assert.equal(existsSync(join(building, 'node_modules')), true)
   assert.equal(existsSync(join(outside, 'node_modules')), true)
   assert.equal(existsSync(join(repo, 'node_modules')), true)
+})
+
+test('npm cache dir: env wins, then the user .npmrc cache line, then npm default', () => {
+  const home = mkdtempSync(join(tmpdir(), 'disk-guard-npmrc-'))
+  assert.equal(npmCacheDir({ env: { npm_config_cache: 'D:/env-cache' }, home, platform: 'win32' }), 'D:/env-cache')
+  assert.equal(npmCacheDir({ env: {}, home, platform: 'win32' }), join(home, 'AppData', 'Local', 'npm-cache'))
+  assert.equal(npmCacheDir({ env: {}, home, platform: 'linux' }), join(home, '.npm'))
+  writeFileSync(join(home, '.npmrc'), 'registry=https://example.test/\r\n  cache = "F:/npm-cache"  \r\n')
+  assert.equal(npmCacheDir({ env: {}, home, platform: 'win32' }), 'F:/npm-cache')
+})
+
+test('disk roots: a junction onto the same drive and a missing projects root each give one root', () => {
+  const base = mkdtempSync(join(tmpdir(), 'disk-guard-roots-'))
+  const home = join(base, 'home')
+  mkdirSync(home)
+  const target = join(base, 'target')
+  mkdirSync(target)
+  const projects = join(base, 'projects')
+  symlinkSync(target, projects, 'junction')
+  const root = parse(resolve(base)).root
+  assert.deepEqual(diskWatchRoots(projects, { env: {}, home, platform: process.platform }), [root])
+  assert.deepEqual(diskWatchRoots(join(base, 'missing'), { env: {}, home, platform: process.platform }), [root])
 })
 
 test('cache sweep: at most `limit` checkouts per call', () => {

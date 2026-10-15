@@ -55,7 +55,7 @@ const { cachedAsync, execText } = await import('./lib/async-cache.mjs')
 const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
-const { applyDiskReading, pruneAgentLogs, DISK_SAMPLE_MS, DISK_RESUME_GB } = await import('./lib/disk-guard.mjs')
+const { applyDiskReading, pruneAgentLogs, diskWatchRoots, DISK_SAMPLE_MS, DISK_RESUME_GB } = await import('./lib/disk-guard.mjs')
 const { sweepArchivedEvidence } = await import('./lib/evidence-sweep.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
 const { isCardId } = await import('./lib/ids.mjs')
@@ -181,15 +181,18 @@ function schedulerActivity(project, message) {
 }
 
 // Low-disk pause, shared by every project (lib/disk-guard.mjs). The drive is sampled every minute.
-// Under 6 GB free no new agents, card worktrees or installs start, and the board sweeps the caches
-// of its own cleaned card checkouts; above 8 GB they resume. Headless run logs older than 7 days
-// are pruned hourly. The 2026-10-15 and 2026-10-16 fills of C: are in lib/disk-guard.mjs.
+// The lowest of the drives the board writes to (lib/disk-guard.mjs diskWatchRoots: projects root, its
+// junction target, npm cache). Under 6 GB free no new agents, card worktrees or installs start, and the
+// board sweeps the caches of its own cleaned card checkouts; above 8 GB they resume. Headless run logs
+// older than 7 days are pruned hourly. The 2026-10-15 and 2026-10-16 fills of C: are in lib/disk-guard.mjs.
 const disk = { low: false, gb: Infinity, lastPrune: 0 }
 const diskLow = () => disk.low
 function checkDisk(now = Date.now()) {
-  let gb
-  try { gb = freeGb(config.projectsRoot) } catch { return }
-  const drive = config.projectsRoot.slice(0, 2)
+  const readings = diskWatchRoots(config.projectsRoot).flatMap(root => { try { return [{ root, gb: freeGb(root) }] } catch { return [] } })
+  if (!readings.length) return
+  const lowest = readings.reduce((a, b) => (b.gb < a.gb ? b : a))
+  const gb = lowest.gb
+  const drive = lowest.root.slice(0, 2)
   disk.gb = gb
   const next = applyDiskReading(disk, gb)
   disk.low = next.low
