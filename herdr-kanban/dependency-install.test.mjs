@@ -39,10 +39,11 @@ for (const version of ['15.5.18', '15.5.27']) test(`shared integration Next ${ve
   }
   mkdirSync(join(f.folder, 'node_modules', 'next'), { recursive: true })
   writeFileSync(join(f.folder, 'node_modules', 'next', 'package.json'), JSON.stringify({ version }))
+  writeFileSync(join(f.folder, 'node_modules', '.package-lock.json'), '{}') // what a finished install leaves
   symlinkSync(join(f.folder, 'node_modules'), join(card, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   const entry = { workspacePath: card, integrationWorkspace: f.folder }
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry }))
-  const calls = [], install = dir => { calls.push(dir); writeFileSync(join(dir, 'node_modules', 'next', 'package.json'), '{"version":"15.5.27"}') }
+  const calls = [], install = dir => { calls.push(dir); writeFileSync(join(dir, 'node_modules', 'next', 'package.json'), '{"version":"15.5.27"}'); writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}') }
   if (version === '15.5.18') {
     assert.throws(() => prepareWorktreeEnvironment(entry), err => err.installIn === f.folder)
     assert.equal(f.hold({ install }), `installing dependencies in ${f.folder}`)
@@ -67,6 +68,7 @@ test('a missing node_modules starts one background install; the card waits, then
   assert.deepEqual(f.calls, ['npm ci --no-audit --no-fund'])
   mkdirSync(join(f.folder, 'node_modules', 'dep'), { recursive: true }) // what a finished install leaves
   writeFileSync(join(f.folder, 'node_modules', 'dep', 'package.json'), '{}')
+  writeFileSync(join(f.folder, 'node_modules', '.package-lock.json'), '{}')
   f.settle().ok(); await tick()
   assert.equal(f.hold(), null)
 })
@@ -174,9 +176,32 @@ test('a Workspace that is a plain folder under the package root links the root n
   }
   mkdirSync(join(integ, 'node_modules', 'dep'), { recursive: true })
   writeFileSync(join(integ, 'node_modules', 'dep', 'package.json'), '{"version":"1.0.0"}')
+  writeFileSync(join(integ, 'node_modules', '.package-lock.json'), '{}')
   prepareWorktreeEnvironment({ workspacePath: join(card, 'public'), integrationWorkspace: join(integ, 'public') })
   assert.equal(lstatSync(join(card, 'node_modules')).isSymbolicLink(), true)
   assert.ok(existsSync(join(card, 'node_modules', 'dep', 'package.json')))
+})
+
+// IA235 (Injectbuddy, 16 Oct 2026 00:33 NZ): a killed npm ci left the card's top-level packages without
+// node_modules/.package-lock.json, and the card started on a partial react-native (392 tsc errors). It is reinstalled now.
+test('a card whose install was killed (top-level packages, no .package-lock.json) is reinstalled, not started', t => {
+  const root = mkdtempSync(join(tmpdir(), 'hkb-deps-killed-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const integ = join(root, 'integration'), card = join(root, 'card')
+  for (const dir of [integ, card]) {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), '{"dependencies":{"dep":"1"}}')
+    writeFileSync(join(dir, 'package-lock.json'), '{}')
+    writeFileSync(join(dir, '.gitignore'), 'node_modules/\n')
+    spawnSync('git', ['-C', dir, 'init'], { windowsHide: true })
+    mkdirSync(join(dir, 'node_modules', 'dep'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'dep', 'package.json'), '{"version":"1.0.0"}')
+  }
+  writeFileSync(join(integ, 'node_modules', '.package-lock.json'), '{}')
+  const entry = { workspacePath: card, integrationWorkspace: integ }
+  assert.throws(() => prepareWorktreeEnvironment(entry), err => err.installIn === card)
+  writeFileSync(join(card, 'node_modules', '.package-lock.json'), '{}') // the install finished
+  prepareWorktreeEnvironment(entry)
 })
 
 // IA97 2026-10-09: stale .expo/types made tsc reject /auth/login after the auth cards landed.

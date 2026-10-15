@@ -54,6 +54,7 @@ test('dependency drift installs in the card workspace after detaching the juncti
   git(f.integration, 'add', '.'); git(f.integration, 'commit', '-m', 'deps')
   mkdirSync(join(site, 'node_modules', 'dep'), { recursive: true })
   writeFileSync(join(site, 'node_modules', 'dep', 'package.json'), '{}')
+  writeFileSync(join(site, 'node_modules', '.package-lock.json'), '{}') // what a finished install leaves
   const card = f.add('T-34', ['site/app.js'])
   const first = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
   const modules = join(first.workspacePath, 'node_modules')

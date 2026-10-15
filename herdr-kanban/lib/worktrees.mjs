@@ -207,6 +207,10 @@ export function resolveGitSettings({ projectPath, gitSettings }) {
 // Drift or missing packages carry `installIn`: the board installs in that card
 // workspace in the background instead of routing the card to Owner (Tradeflow T-34).
 const needsInstall = (workspacePath, message) => Object.assign(new Error(`dependency setup needed: ${message}; installing dependencies in ${workspacePath}`), { installIn: workspacePath })
+// npm writes node_modules/.package-lock.json only once an install has finished. A killed install keeps its
+// top-level packages without it: IA235 (Injectbuddy, 16 Oct 2026 00:33 NZ) had 4,056 of 4,589 react-native
+// files and 392 tsc errors, and the top-level check still passed. So a folder with a lockfile needs the marker.
+const installFinished = (root) => !existsSync(join(root, 'package-lock.json')) || existsSync(join(root, 'node_modules', '.package-lock.json'))
 const LOCKFILES = ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']
 const sameText = (a, b) => existsSync(a) === existsSync(b) && (!existsSync(a) || readFileSync(a, 'utf8').replaceAll('\r\n', '\n') === readFileSync(b, 'utf8').replaceAll('\r\n', '\n'))
 const versionChecks = new Map()
@@ -260,6 +264,7 @@ function prepareDependencies(workspacePath, source) {
   const requireInstalled = (root) => {
     const missing = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).filter(name => !existsSync(join(root, 'node_modules', name, 'package.json')))
     if (missing.length) throw needsInstall(workspacePath, `missing ${missing.slice(0, 4).join(', ')}`)
+    if (!installFinished(root)) throw needsInstall(workspacePath, `install in ${root} did not finish (no .package-lock.json)`)
   }
   const local = join(workspacePath, 'node_modules')
   if (existsSync(local) && !lstatSync(local).isSymbolicLink()) { requireInstalled(workspacePath); return }
@@ -437,7 +442,7 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
 // half-installed, so the board never repaired them and every card downloaded its own copy.
 function installedIn(folder, root) {
   const manifest = JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))
-  return Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).every(name => existsSync(join(root, 'node_modules', name, 'package.json')))
+  return installFinished(root) && Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).every(name => existsSync(join(root, 'node_modules', name, 'package.json')))
 }
 
 // The operator moving a held card out of Owner/Pou is the retry: forget its failed installs, or
