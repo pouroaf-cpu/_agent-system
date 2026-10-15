@@ -249,6 +249,10 @@ function logIntegrationResults(project, results, waiting = {}) {
       const key = `${project}:${result.id}:handoff`
       if (result.repeat || lastActivityHold.get(key) !== result.reason) activity(project, result.id, 'integration-held', result.reason, 'error')
       lastActivityHold.set(key, result.reason)
+      // Audit 2026-10-15 F3: a check that cannot run, or fails on master without the card, is the
+      // Kanban Manager's (one inbox line per key within the alert cooldown), never a Builder's.
+      if (result.alert) notifyManagerException({ boardRoot: HERE, key: `${result.alert.key}:${project}`, title: `${project}: ${result.alert.title}`, detail: result.alert.detail, code: 'HO' })
+        .catch(err => console.error(`integration hold inbox alert failed: ${err.message}`))
     }
   }
   return dirty

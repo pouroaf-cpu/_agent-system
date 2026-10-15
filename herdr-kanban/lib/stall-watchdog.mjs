@@ -120,7 +120,7 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
   // A Completed card with a live worktree is an allowed wait while a check is running or the
   // poll reports its queue position; with no hold reported at all it gets three windows for the
   // integration pass to reach it, then it is a stall like any other card.
-  const INTEGRATION_WAIT = /is running in the background$|^integration made no progress this poll \(worktree state (?:building|ready|rebased)\b|^Waiting for (?:retired Builder pane|Builder handoff turn)/
+  const INTEGRATION_WAIT = /is running in the background$|^integration check .* (?:could not run in|broken on master)|^integration made no progress this poll \(worktree state (?:building|ready|rebased)\b|^Waiting for (?:retired Builder pane|Builder handoff turn)/
   // 'window' (no hold reported) does not restart the clock, so the three windows can run out.
   const integrationWait = (card, since) => {
     const entry = registry[card.id]

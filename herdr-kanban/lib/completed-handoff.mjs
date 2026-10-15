@@ -47,6 +47,43 @@ function checkTimedOut(tasksDir, cardId, what, now, why = 'timed out (machine un
   return { id: cardId, status: 'held', reason }
 }
 
+// Audit 2026-10-15 F3: every non-transient check failure went back to a Builder as "failed on
+// current master" (14 herdr-kanban kick-backs since 2026-10-08, mostly flaky files unrelated to
+// the card; a MODULE_NOT_FOUND got the same wording). Only a failure the card causes returns it.
+// A non-zero exit with no test output (command not found, missing module, ENOENT) is a
+// configuration hold naming the command and the cwd. Otherwise the failing files are rerun once
+// on the card; still failing, they run on integration HEAD without the card (the project's
+// integration checkout) and a failure there holds the card as broken on master for the Kanban
+// Manager, no Builder spent. The check runs with cwd = the card's Workspace folder (board.config
+// integrationCheck must be written for that folder: herdr-kanban uses node herdr-kanban/...).
+const CANNOT_RUN = /MODULE_NOT_FOUND|Cannot find module|ENOENT|is not recognized as|command not found|CommandNotFoundException|No such file or directory/
+const RAN_TESTS = /^(ℹ|#) (tests|pass|fail) \d+|^\d+ files, \d+ tests|^(ok|not ok|FAIL) |error TS\d+/m
+export const cannotRun = output => CANNOT_RUN.test(output) && !RAN_TESTS.test(output)
+export const cannotRunLine = output => (output.split('\n').find(l => CANNOT_RUN.test(l)) || '').trim().slice(0, 200)
+// run-tests.mjs names each failing file on a FAIL line: the rerun and the base run take only those.
+export function narrowedCheck(command, output) {
+  const files = [...new Set([...output.matchAll(/^FAIL  (\S+)/gm)].map(m => m[1]))]
+  if (!files.length || !/run-tests\.mjs/.test(command)) return command
+  return command.replace(/(run-tests\.mjs)\b.*$/, `$1 ${files.join(' ')}`)
+}
+// { ok, timedOut, output, verdict: config | flaky | card | base, rerun } for the card at entry.
+async function checkWithVerdict(io, command, entry, busy = () => false) {
+  const first = await io.runIntegrationCheck(command, entry.workspacePath, 900000)
+  if (first.ok || isTransient(first) || busy()) return first // busy: an install started meanwhile, the caller waits for it
+  if (cannotRun(first.output)) return { ...first, verdict: 'config' }
+  const rerun = narrowedCheck(command, first.output)
+  const section = (label, r) => `\n\n=== ${label}: ${r.ok ? 'PASS' : r.timedOut ? 'TIMED OUT' : 'FAIL'} ===\n${r.output}`
+  const second = await io.runIntegrationCheck(rerun, entry.workspacePath, 900000)
+  if (isTransient(second) || busy()) return second
+  const output = `${first.output}${section(`rerun on the card: ${rerun}`, second)}`
+  if (second.ok) return { ok: true, output, verdict: 'flaky', rerun }
+  if (!entry.integrationWorkspace) return { ok: false, output, verdict: 'card', rerun }
+  const base = await io.runIntegrationCheck(rerun, entry.integrationWorkspace, 900000)
+  if (isTransient(base)) return base
+  return { ok: false, output: `${output}${section(`on integration HEAD without the card in ${entry.integrationWorkspace}: ${rerun}`, base)}`, verdict: base.ok ? 'card' : 'base', rerun, basePassed: base.ok }
+}
+const BROKEN_RECHECK_MS = 60 * 60000
+
 // Project integrationCheck (board.config.json projectSettings): the card commit,
 // rebased onto current master in its own worktree, must pass it before the pick.
 // Null means go ahead and integrate; otherwise the card went back.
@@ -65,6 +102,14 @@ async function gateIntegration(tasksDir, card, command, io, now, background = fa
   if (up.status === 'conflict') return returnIntegrationConflict(tasksDir, card.id, up)
   const entry = readWorktrees(tasksDir)[card.id]
   if (entry.integrationChecked === up.commit) return null
+  // Held for the Kanban Manager (not the card's fault): the result carries the alert, the server
+  // sends it. A broken-master hold is kept for this commit and command, rechecked hourly or
+  // as soon as master moves (the rebase gives a new commit), so the three runs are not repeated
+  // every poll; a configuration hold reruns each poll, since it fails at once.
+  const hold = (verdict, reason) => ({ id: card.id, status: 'held', reason, alert: { key: `integration-check:${verdict}`,
+    title: verdict === 'config' ? `integration check cannot run for ${card.id}` : `integration check broken on master, ${card.id} held`, detail: reason } })
+  const broken = readWorkflow(tasksDir)[card.id]?.integrationBroken
+  if (broken && broken.commit === up.commit && broken.command === command && now - Date.parse(broken.at) < BROKEN_RECHECK_MS) return hold('base', broken.reason)
   // The rebase may bring routes other cards added, dependency changes other cards made, or
   // leave this worktree's own stale Expo/Next route types behind (I957, I1006, IA133: all three
   // passed on a plain retry with no code change, so the check's own environment was at fault).
@@ -78,24 +123,31 @@ async function gateIntegration(tasksDir, card, command, io, now, background = fa
   const waiting = installing && waitForInstall()
   if (waiting) return waiting
   let check
-  if (!background) check = await io.runIntegrationCheck(command, entry.workspacePath, 900000)
+  if (!background) check = await checkWithVerdict(io, command, entry, busy)
   else if (job?.commit === up.commit) check = job.result
   else {
     const started = { commit: up.commit, result: null }
     runningChecks.set(key, started)
-    Promise.resolve().then(() => io.runIntegrationCheck(command, entry.workspacePath, 900000))
+    Promise.resolve().then(() => checkWithVerdict(io, command, entry, busy))
       .catch(err => ({ ok: false, output: `${command}\n${err?.message || err}` }))
       .then(result => { started.result = result })
     return { id: card.id, status: 'held', reason: `integration check ${command} is running in the background` }
   }
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
   const evidence = join(tasksDir, '.evidence', `${card.id}-integration-check-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
-  writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}\n\n${check.output}\n`)
-  appendHistory(tasksDir, card.id, { event: 'integration-check', ok: check.ok, command, commit: up.commit, evidence })
+  writeFileSync(evidence, `cwd: ${entry.workspacePath}\ncommit: ${up.commit}\nresult: ${check.ok ? 'PASS' : 'FAIL'}${check.verdict ? ` (${check.verdict})` : ''}\n\n${check.output}\n`)
+  appendHistory(tasksDir, card.id, { event: 'integration-check', ok: check.ok, command, commit: up.commit, evidence, ...(check.verdict ? { verdict: check.verdict } : {}) })
   const timedOut = !check.ok && (isTransient(check) ? checkTimedOut(tasksDir, card.id, `integration check ${command}`, now) : busy() && waitForInstall())
   if (timedOut) return timedOut
-  if (!check.ok) return returnIntegrationConflict(tasksDir, card.id, { reason: `integration check ${command} failed on current master (full output: ${evidence})`, output: check.output.slice(-3000) })
+  if (check.verdict === 'config') return hold('config', `integration check ${command} could not run in ${entry.workspacePath}: ${cannotRunLine(check.output)} (full output: ${evidence})`)
+  if (check.verdict === 'base') {
+    const reason = `integration check ${check.rerun} broken on master: it fails on integration HEAD without the card too, in ${entry.integrationWorkspace} (full output: ${evidence})`
+    updateWorkflow(tasksDir, card.id, { integrationBroken: { commit: up.commit, command, reason, at: new Date(now).toISOString() } })
+    return hold('base', reason)
+  }
+  if (!check.ok) return returnIntegrationConflict(tasksDir, card.id, { reason: `integration check ${check.rerun || command} failed on current master${check.basePassed ? ' and passes there without the card' : ''} (full output: ${evidence})`, output: check.output.slice(-3000) })
   updateWorktree(tasksDir, card.id, { integrationChecked: up.commit })
+  updateWorkflow(tasksDir, card.id, { integrationBroken: null })
   return null
 }
 
@@ -136,7 +188,7 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
     : failures >= 2 ? `Integration conflict with master again: ${summary}. Stop resolving it and start fresh on the new base. ${checkoutOverride} In your worktree ${entry.worktreePath}: git rebase --abort if one is in progress, git branch kanban-backup/${cardId}-${failures} HEAD, git reset --hard ${target}, then re-apply the same change by hand using git show kanban-backup/${cardId}-${failures} as the reference. In shared list files add only your own entry at the end; leave other entries and shared helpers alone unless the card needs them. Keep exactly one card commit, run your check once, then hkb done.${diff}`
     : `Integration conflict with master: ${summary}. ${checkoutOverride} Resolve it in your own worktree ${entry.worktreePath}: git rebase --onto ${target} ${entry.baseCommit}, fix ${files.join(', ') || 'the conflicting files'}, keep exactly one card commit, re-run your check, then hkb done.${diff}`)
   // Not an 'implementation' correction: that would demand the retired Builder pane back.
-  updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null })
+  updateWorkflow(tasksDir, cardId, { correction: { category: 'integration', note: summary }, operational: null, integrationRetry: null, integrationBroken: null })
   return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}${planError ? ` (not returned to a Builder: ${planError})` : ''}. ${action}` : detail }
 }
 

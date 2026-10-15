@@ -185,6 +185,9 @@ test('Completed cards waiting on the integration check queue are never stalls; e
   for (const id of ['T-1', 'T-2', 'T-3', 'T-4']) assert.equal(findCard(tasks, id).column, 'completed')
   // A timed-out check backing off is a retry hold: allowed as before.
   assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], holds: { ...holds, 'T-1': `integration check node run-tests.mjs timed out (machine under load?); retrying at ${new Date(T + 100 * MIN).toISOString()}` }, now: T + 95 * MIN }), [])
+  // A check that cannot run or is broken on master is the Kanban Manager's (F3 alerts it): the card waits in Completed.
+  const km = { ...holds, 'T-1': 'integration check node run-tests.mjs could not run in C:\\w\\T-1: Cannot find module (full output: x.log)', 'T-2': 'integration check node run-tests.mjs a.test.mjs broken on master: it fails on integration HEAD without the card too, in C:\\main (full output: y.log)' }
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], holds: km, now: T + 150 * MIN }), [])
 })
 
 test('a Completed card with a worktree but no hold reported gets three windows for the integration pass, then stalls (HK55/HK56 waited 44/53 min)', t => {

@@ -583,6 +583,83 @@ test('the integration check gets at least 900000 ms so a full suite is not kille
   assert.ok(seen >= 900000, `timeout ${seen}`)
 })
 
+// Audit 2026-10-15 F3. One Completed card with a worktree and the project's integration checkout;
+// `outcomes(command, where)` is what the check returns in each folder ('card' or 'main').
+function verdictFixture(t, outcomes, command = 'node herdr-kanban/run-tests.mjs --changed master') {
+  const root = mkdtempSync(join(tmpdir(), 'check-verdict-')), tasksDir = join(root, 'TASKS'), card = join(root, 'card'), main = join(root, 'main')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  writeFileSync(join(tasksDir, 'completed', 'T-1.md'), `# T-1 — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: npm test\nResult: passed\n`)
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building', worktreePath: card, workspacePath: card, integrationWorkspace: main, baseCommit: 'b0' } }))
+  const calls = []
+  let commit = 'c1'
+  const io = { agentList: async () => [], rebase: () => ({ status: 'rebased', commit }), installRunning: () => false,
+    runIntegrationCheck: async (cmd, cwd) => { const where = cwd === card ? 'card' : cwd === main ? 'main' : cwd; calls.push([cmd, where]); return outcomes(cmd, where) },
+    reconcile: ({ onlyIds }) => [{ id: onlyIds[0], status: 'integrated' }] }
+  const run = (now = Date.now()) => reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], integrationCheck: command, io, now })
+  const registry = () => JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1']
+  return { tasksDir, card, main, calls, run, registry, moveMaster: c => { commit = c } }
+}
+const suiteFail = 'node herdr-kanban/run-tests.mjs --changed master\nok    syntax.test.mjs (1) 20s\nFAIL  builder-role-size.test.mjs (exit 1)\nnot ok 1 - size\n\n2 files, 3 tests, 1 failing files: builder-role-size.test.mjs'
+
+test('a check failing on the card and on integration HEAD without it holds the card for the Kanban Manager, no Builder return (audit 2026-10-15 F3 AC1)', async t => {
+  const f = verdictFixture(t, () => ({ ok: false, output: suiteFail }))
+  const t0 = Date.now()
+  const [held] = await f.run(t0)
+  assert.equal(held.status, 'held')
+  assert.match(held.reason, /^integration check node herdr-kanban\/run-tests\.mjs builder-role-size\.test\.mjs broken on master: it fails on integration HEAD without the card too, in .*main \(full output: /)
+  assert.doesNotMatch(held.reason, /failed on current master/)
+  assert.deepEqual([held.alert.key, held.alert.title], ['integration-check:base', 'integration check broken on master, T-1 held'])
+  // Full suite on the card, the failing file again on the card, then that file on master without the card.
+  assert.deepEqual(f.calls, [['node herdr-kanban/run-tests.mjs --changed master', 'card'], ['node herdr-kanban/run-tests.mjs builder-role-size.test.mjs', 'card'], ['node herdr-kanban/run-tests.mjs builder-role-size.test.mjs', 'main']])
+  assert.equal(findCard(f.tasksDir, 'T-1').column, 'completed')
+  assert.deepEqual([f.registry().state, f.registry().conflictFailures], ['building', undefined])
+  assert.equal(readWorkflow(f.tasksDir)['T-1'].integrationBroken.commit, 'c1')
+  // The hold is kept for this commit: the next poll repeats it without running anything.
+  const [again] = await f.run(t0 + 60000)
+  assert.deepEqual([again.status, again.reason, f.calls.length], ['held', held.reason, 3])
+  // Master moved (new rebased commit): checked again.
+  f.moveMaster('c2')
+  assert.equal((await f.run(t0 + 120000))[0].status, 'held')
+  assert.equal(f.calls.length, 6)
+})
+
+test('a check command that cannot start is a configuration hold naming the command and cwd, not a failure on master (audit 2026-10-15 F3 AC2)', async t => {
+  const f = verdictFixture(t, () => ({ ok: false, output: "node herdr-kanban/run-tests.mjs --changed master\nnode:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'C:\\w\\T-1\\herdr-kanban\\run-tests.mjs'\n    at Module._resolveFilename\n  code: 'MODULE_NOT_FOUND'" }))
+  const [held] = await f.run()
+  assert.equal(held.status, 'held')
+  assert.ok(held.reason.startsWith(`integration check node herdr-kanban/run-tests.mjs --changed master could not run in ${f.card}: Error: Cannot find module`), held.reason)
+  assert.doesNotMatch(held.reason, /failed on current master/)
+  assert.equal(held.alert.key, 'integration-check:config')
+  assert.equal(f.calls.length, 1, 'no rerun of a command that cannot start')
+  assert.equal(findCard(f.tasksDir, 'T-1').column, 'completed')
+  assert.equal(f.registry().conflictFailures, undefined)
+})
+
+test('a check that fails only on the card still returns it to a Builder; one that passes on rerun integrates (audit 2026-10-15 F3 AC3)', async t => {
+  const f = verdictFixture(t, (cmd, where) => ({ ok: where === 'main', output: where === 'main' ? 'ok    builder-role-size.test.mjs (1) 2s\n1 files, 1 tests, 0 failing files' : suiteFail }))
+  const [returned] = await f.run()
+  assert.deepEqual([returned.status, returned.to], ['returned', 'queue'])
+  assert.match(returned.reason, /integration check node herdr-kanban\/run-tests\.mjs builder-role-size\.test\.mjs failed on current master and passes there without the card/)
+  assert.equal(f.calls.length, 3)
+  assert.deepEqual([f.registry().state, f.registry().conflictFailures], ['conflict', 1])
+  assert.equal(findCard(f.tasksDir, 'T-1').column, 'queue')
+  assert.match(readFileSync(findCard(f.tasksDir, 'T-1').path, 'utf8'), /Kicked back: integration check[\s\S]*=== on integration HEAD without the card/)
+
+  let tries = 0
+  const flaky = verdictFixture(t, () => ({ ok: ++tries > 1, output: tries > 1 ? '1 files, 1 tests, 0 failing files' : suiteFail }))
+  const [integrated] = await flaky.run()
+  assert.equal(integrated.status, 'integrated')
+  assert.deepEqual(flaky.calls.map(c => c[0]), ['node herdr-kanban/run-tests.mjs --changed master', 'node herdr-kanban/run-tests.mjs builder-role-size.test.mjs'])
+  assert.equal(flaky.registry().integrationChecked, 'c1')
+  // A command that does not name failing files reruns whole; a type error that ran is the card's.
+  const { cannotRun, narrowedCheck } = await import('./lib/completed-handoff.mjs')
+  assert.equal(narrowedCheck('npx tsc --noEmit && npm test', 'FAIL  x.test.mjs'), 'npx tsc --noEmit && npm test')
+  assert.equal(narrowedCheck('node herdr-kanban/run-tests.mjs', 'no FAIL lines'), 'node herdr-kanban/run-tests.mjs')
+  assert.equal(cannotRun("error TS2307: Cannot find module 'expo-router'"), false)
+  assert.equal(cannotRun("'npx' is not recognized as an internal or external command"), true)
+})
+
 test('a replacement Builder recorded with the previous pane session is still retired', async t => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-replaced-')), tasksDir = join(root, 'TASKS')
   t.after(() => rmSync(root, { recursive: true, force: true }))
