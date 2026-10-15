@@ -17,9 +17,10 @@ try {
     } else {
         "$(Get-Date -Format o) DOWN - checking recovery" | Out-File -Append -Encoding utf8 $log
         # Retries over about a minute (4 tries, 10 s timeout, 15 s apart); the test hook shortens the gap.
+        # /api/projects is the cheap probe: /api/board builds every card and can miss 10 s under load (audit 2026-10-16 F5).
         $retryDelay = if ($env:WATCHDOG_RETRY_SECONDS) { [int]$env:WATCHDOG_RETRY_SECONDS } else { 15 }
         $recovery = Get-BoardFailureStatus -DelaySeconds $retryDelay -Request {
-            Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 10 | Out-Null
+            Invoke-WebRequest "http://127.0.0.1:$port/api/projects" -UseBasicParsing -TimeoutSec 10 | Out-Null
         } -ListenerCheck {
             # A failed listener query counts as a listener: only a clean "none" can end in a relaunch.
             try { [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop) } catch { $true }

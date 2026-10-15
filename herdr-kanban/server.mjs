@@ -33,6 +33,7 @@ import { TEST_RUNNERS, TEST_TYPES, staticAppRoutes, readTestRuns, startTestRun, 
 import { activeQuota, quotaHolds, quotaKey, selectQuotaAssignment, SIGN_IN, MODEL_REJECTED } from './lib/quota.mjs'
 import { startProjectPolling } from './lib/project-polling.mjs'
 import { getHeadlessAgent, pruneClosedRows } from './lib/headless.mjs'
+import { createLanListener } from './lib/lan-listener.mjs'
 import { eventEntries, readTimes, fillTimes } from './scripts/agent-view.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -1189,7 +1190,8 @@ function badMutationOrigin(req) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return false
   const origin = req.headers.origin
   const allowed = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`])
-  if (lanHost) allowed.add(`http://${lanHost}:${port}`)
+  const lanNow = lanListener?.host()
+  if (lanNow) allowed.add(`http://${lanNow}:${port}`)
   if (origin && !allowed.has(origin)) return true
   return req.headers['sec-fetch-site'] === 'cross-site'
 }
@@ -2051,11 +2053,11 @@ async function startPollers() {
   }, 10 * 60000)
 }
 
+// The phone listener follows this PC's LAN address when DHCP moves it (lib/lan-listener.mjs, audit 2026-10-16 F5).
+let lanListener = null
 function startLan() {
   if (!lanHost) return
-  const lanServer = createServer(serve)
-  lanServer.on('error', (err) => console.error(`kanban lan ${lanHost}:${port}: ${err.message}`))
-  lanServer.listen(port, lanHost, () => console.log(`kanban lan: http://${lanHost}:${port}`))
+  lanListener = createLanListener({ port, handler: serve, host: lanHost }).start()
 }
 
 server.on('error', (err) => {
