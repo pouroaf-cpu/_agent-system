@@ -9,7 +9,11 @@
     html, body { height: auto; min-height: 100%; }
     body { display: block; overflow: auto; }
     main { width: min(100%, 1000px); margin: 0 auto; padding: 20px 16px 48px; }
-    header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+    header { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -20px -16px 16px; padding: 20px 16px 8px; background: var(--canvas); }
+    header a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+    details.raw { border-top: 1px solid var(--line); }
+    details.raw > summary { padding: 6px 12px; font-size: 12px; color: var(--muted); }
+    details.raw > pre { padding: 0 12px 12px; }
     h1 { flex: 1 1 100%; margin: 0 0 4px; font-size: 20px; overflow-wrap: anywhere; }
     .follow { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; }
     #entries { display: grid; gap: 8px; }
@@ -27,7 +31,7 @@
     #status { color: var(--muted); margin: 0 0 12px; }
     @media (max-width: 520px) {
       main { padding: 14px 10px 32px; }
-      header { gap: 6px; }
+      header { gap: 6px; margin: -14px -10px 16px; padding: 14px 10px 8px; }
       header .btn { padding: 0 10px; }
       summary { flex-wrap: wrap; gap: 4px 8px; }
       .preview { flex: 1 1 100%; white-space: normal; overflow-wrap: anywhere; }
@@ -38,6 +42,7 @@
   <main>
     <header>
       <h1 id="heading">Agent log</h1>
+      <a class="btn" href="/">Back to board</a>
       <button id="collapse" class="btn" type="button">Collapse all</button>
       <button id="expand" class="btn" type="button">Expand all</button>
       <label class="follow"><input id="follow" type="checkbox" checked> Follow</label>
@@ -53,6 +58,21 @@
     const follow = document.getElementById('follow');
     let offset = 0, firstLoad = true;
     const labels = { sent: 'SENT →', received: 'RECEIVED ←', agent: 'AGENT', thinking: 'THINKING', error: 'ERROR', info: 'INFO' };
+    // A sent tool call arrives as "→ Name {json}". Parsing it lets the row show the file name and
+    // the fields as plain text, so backslashes in paths are not doubled.
+    function toolCall(text) {
+      const match = /^→ (\S+) (\{[\s\S]*\})$/.exec(text);
+      if (!match) return null;
+      try { const input = JSON.parse(match[2]); return input && typeof input === 'object' ? { name: match[1], input } : null; } catch { return null; }
+    }
+    function toolTarget(input) {
+      const path = input.file_path || input.path;
+      if (path) return String(path).split(/[\\/]/).pop();
+      return String(input.command || input.pattern || input.query || input.url || '');
+    }
+    function toolBody(input) {
+      return Object.entries(input).map(([key, value]) => key + ': ' + (typeof value === 'string' ? value : JSON.stringify(value))).join('\n');
+    }
     function appendEntry(item, receivedAt) {
       const detail = document.createElement('details');
       detail.className = 'entry ' + item.kind + (item.kind === 'received' && item.text.startsWith('← ERROR') ? ' error' : '');
@@ -65,10 +85,21 @@
       const label = document.createElement('span');
       label.className = 'label'; label.textContent = labels[item.kind] || 'INFO';
       const preview = document.createElement('span');
-      preview.className = 'preview'; preview.textContent = String(item.text).split('\n', 1)[0].slice(0, 160);
+      const call = item.kind === 'sent' ? toolCall(item.text) : null;
+      if (call) {
+        preview.textContent = (call.name + ' ' + toolTarget(call.input)).slice(0, 160);
+        if (call.input.file_path) preview.title = String(call.input.file_path);
+      } else preview.textContent = String(item.text).split('\n', 1)[0].slice(0, 160);
       summary.append(time, label, preview);
-      const body = document.createElement('pre'); body.textContent = item.text;
-      detail.append(summary, body); entries.append(detail);
+      const body = document.createElement('pre'); body.textContent = call ? toolBody(call.input) : item.text;
+      detail.append(summary, body);
+      if (call) {
+        const raw = document.createElement('details'); raw.className = 'raw';
+        const rawSummary = document.createElement('summary'); rawSummary.textContent = 'Raw JSON';
+        const rawBody = document.createElement('pre'); rawBody.textContent = item.text;
+        raw.append(rawSummary, rawBody); detail.append(raw);
+      }
+      entries.append(detail);
     }
     async function poll(initial = false) {
       if (!id) { status.textContent = 'No agent id was provided.'; return; }
