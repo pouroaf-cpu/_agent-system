@@ -271,7 +271,7 @@ test('hook: the step whose tool call handed the card off ends the run, caps or n
 test('both Claude settings files register the hook as a PostToolUse group for every tool', () => {
   for (const name of ['claude-agent-settings.json', 'claude-planner-settings.json']) {
     const groups = JSON.parse(readFileSync(join(import.meta.dirname, name), 'utf8')).hooks.PostToolUse
-    const group = groups.find(g => g.hooks.some(h => h.command.includes('run-cap-hook.mjs')))
+    const group = groups.find(g => g.hooks.some(h => h.command.includes('scripts/hooks/post.mjs')))
     assert.equal(group?.matcher, '*', name)
   }
 })

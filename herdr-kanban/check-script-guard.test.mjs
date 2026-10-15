@@ -59,8 +59,9 @@ test('other roles and garbage input are ignored', t => {
 
 test('board Claude agents load the check-script guard for Bash and PowerShell', () => {
   const hooks = JSON.parse(readFileSync(new URL('./claude-agent-settings.json', import.meta.url), 'utf8')).hooks
-  for (const [event, flag] of [['PreToolUse', '--pre'], ['PostToolUse', '--post']])
-    assert.equal(hooks[event].find(h => JSON.stringify(h).includes(`check-script-guard.mjs ${flag}`))?.matcher, 'Bash|PowerShell')
+  // The check runs inside the merged hook (scripts/hooks/pre.mjs and post.mjs, lib/agent-hooks.mjs).
+  assert.equal(hooks.PreToolUse.find(h => JSON.stringify(h).includes('scripts/hooks/pre.mjs'))?.matcher, 'Write|Edit|MultiEdit|Bash|PowerShell')
+  assert.equal(hooks.PostToolUse.find(h => JSON.stringify(h).includes('scripts/hooks/post.mjs'))?.matcher, '*')
 })
 
 test('AC1: a planner shell command that writes the plan file is refused, naming Edit or Write', t => {

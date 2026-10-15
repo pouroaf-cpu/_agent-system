@@ -129,9 +129,10 @@ test('the hook fails open on input it cannot read', () => {
 test('both board Claude settings files run the evidence guard before and after Write, Edit and shell tools', () => {
   for (const file of ['claude-agent-settings.json', 'claude-planner-settings.json']) {
     const hooks = JSON.parse(readFileSync(join(import.meta.dirname, file), 'utf8')).hooks
-    for (const [event, flag] of [['PreToolUse', '--pre'], ['PostToolUse', '--post']]) {
-      const group = hooks[event].find(g => g.hooks.some(h => h.command.includes(`evidence-guard.mjs ${flag}`)))
-      assert.equal(group?.matcher, 'Write|Edit|MultiEdit|Bash|PowerShell', `${file} ${event}`)
+    // The guard runs inside the merged hooks (scripts/hooks/pre.mjs and post.mjs, lib/agent-hooks.mjs).
+    for (const [event, file] of [['PreToolUse', 'pre.mjs'], ['PostToolUse', 'post.mjs']]) {
+      const group = hooks[event].find(g => g.hooks.some(h => h.command.includes(`scripts/hooks/${file}`)))
+      assert.equal(group?.matcher, event === 'PreToolUse' ? 'Write|Edit|MultiEdit|Bash|PowerShell' : '*', `${file} ${event}`)
     }
   }
 })

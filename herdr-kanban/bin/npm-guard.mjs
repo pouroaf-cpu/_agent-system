@@ -41,6 +41,11 @@ export function commandRefusal(command, cwd) {
   return null
 }
 
+// The refusal for a PowerShell PreToolUse hook input, or null (scripts/hooks/pre.mjs).
+export function hookRefusal(input) {
+  return commandRefusal(input.tool_input?.command || '', input.cwd || process.cwd())
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // Claude SessionStart hook: its Bash tool sources CLAUDE_ENV_FILE before each command.
   if (process.argv[2] === '--env') {
@@ -50,7 +55,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   if (process.argv[2] === '--hook') {
     const input = JSON.parse(readFileSync(0, 'utf8'))
-    const why = commandRefusal(input.tool_input?.command || '', input.cwd || process.cwd())
+    const why = hookRefusal(input)
     if (why) { console.error(why); process.exit(2) }
     process.exit(0)
   }

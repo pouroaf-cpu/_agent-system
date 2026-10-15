@@ -63,10 +63,11 @@ test('AC3: a non-hkb command, a Reviewer, and garbage stdin all leave the agent 
   assert.equal(r.stdout, '')
 })
 
-test('both Claude settings files register the hook as a PostToolUse hook on Bash|PowerShell', () => {
+test('both Claude settings files run the handoff check inside the merged PostToolUse hook (scripts/hooks/post.mjs)', () => {
   for (const file of ['claude-agent-settings.json', 'claude-planner-settings.json']) {
     const groups = JSON.parse(readFileSync(join(import.meta.dirname, file), 'utf8')).hooks.PostToolUse
-    const group = groups.find(g => g.hooks.some(h => h.command.includes('agent-handoff-hook.mjs')))
-    assert.equal(group?.matcher, 'Bash|PowerShell', file)
+    const group = groups.find(g => g.hooks.some(h => h.command.includes('scripts/hooks/post.mjs')))
+    assert.equal(group?.matcher, '*', file)
+    assert.equal(groups.filter(g => g.hooks.some(h => h.command.includes('agent-handoff-hook.mjs'))).length, 0, `${file}: no separate handoff process`)
   }
 })

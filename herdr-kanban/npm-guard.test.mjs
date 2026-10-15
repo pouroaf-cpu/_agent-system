@@ -31,5 +31,6 @@ test('npm installs are refused under a node_modules junction and allowed in a no
 test('board Claude agents load the npm guard for Bash and PowerShell', () => {
   const hooks = JSON.parse(readFileSync(new URL('./claude-agent-settings.json', import.meta.url), 'utf8')).hooks
   assert.match(JSON.stringify(hooks.SessionStart), /npm-guard\.mjs --env/)
-  assert.equal(hooks.PreToolUse.find(h => /npm-guard\.mjs --hook/.test(JSON.stringify(h)))?.matcher, 'PowerShell')
+  // The PowerShell check runs inside the merged PreToolUse hook (scripts/hooks/pre.mjs, lib/agent-hooks.mjs).
+  assert.equal(hooks.PreToolUse.find(h => /scripts\/hooks\/pre\.mjs/.test(JSON.stringify(h)))?.matcher, 'Write|Edit|MultiEdit|Bash|PowerShell')
 })
