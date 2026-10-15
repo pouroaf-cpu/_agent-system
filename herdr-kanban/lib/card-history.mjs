@@ -196,7 +196,26 @@ export function laneEnteredAt(tasksDir, id, column) {
   }
   return entered.get(path).at
 }
-const HISTORY_LABELS = 'Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \\d+|Technical recovery|Diagnostic recovery|Dirty snapshot'
+// When the board last tried to integrate the card (an integration-check or rebase-check event):
+// each attempt is activity for the stall clock (audit 2026-10-15 F2). Cached by file stat like
+// laneEnteredAt. 0 when there is no history or no attempt.
+const attempts = new Map()
+export function lastIntegrationAttempt(tasksDir, id) {
+  const path = historyPath(tasksDir, id)
+  let stat
+  try { stat = statSync(path) } catch { return 0 }
+  const key = `${stat.size}:${stat.mtimeMs}`
+  if (attempts.get(path)?.key !== key) {
+    let at = 0
+    for (const line of readFileSync(path, 'utf8').split('\n')) {
+      if (!line.includes('"integration-check"') && !line.includes('"rebase-check"')) continue
+      try { const e = JSON.parse(line); if (['integration-check', 'rebase-check'].includes(e.event)) at = Math.max(at, Date.parse(e.at) || 0) } catch { /* torn line */ }
+    }
+    attempts.set(path, { key, at })
+  }
+  return attempts.get(path).at
+}
+const HISTORY_LABELS ='Build attempt|Kicked back|Spawn failed|Review feedback|Failed return \\d+|Technical recovery|Diagnostic recovery|Dirty snapshot'
 const historyMarker = new RegExp(`^\\*\\*(?:${HISTORY_LABELS})\\*\\*`, 'm')
 const notLabel = new RegExp(`^(?:${HISTORY_LABELS}|Needs you)$`)
 // A POST /api/card note (lib/cards.mjs updateCard): "**<Heading>** <ISO time>", blank line, plain body.

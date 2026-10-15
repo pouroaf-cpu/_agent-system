@@ -11,7 +11,7 @@ import { readBindings } from './bindings.mjs'
 import { readCardPlanners, requestPlannerCorrection } from './card-planner.mjs'
 import { plannersStarting } from './planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './workflow-state.mjs'
-import { appendHistory, writeCurrentFeedback, laneEnteredAt, lastBlockerLanded } from './card-history.mjs'
+import { appendHistory, writeCurrentFeedback, laneEnteredAt, lastBlockerLanded, lastIntegrationAttempt } from './card-history.mjs'
 import { readUsage } from './request-usage.mjs'
 import { readDelivery } from './delivery-state.mjs'
 import { sessionOf } from './herdr.mjs'
@@ -92,6 +92,7 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
   const reset = id => { if (now - ms(workflow[id]?.stallResetAt) >= 60000) workflow[id] = updateWorkflow(tasksDir, id, { stallResetAt: new Date(now).toISOString() }) }
   const sinceOf = card => Math.max(card.mtime, ms(resumedAt), ms(gapEndedAt), laneEnteredAt(tasksDir, card.id, card.column) || 0, ms(bindings[card.id]?.started),
     ms(workflow[card.id]?.stallRecovery?.at), ms(workflow[card.id]?.stallResetAt),
+    card.column === 'completed' ? lastIntegrationAttempt(tasksDir, card.id) : 0,
     ...runs.filter(r => r.cardIds?.includes(card.id)).flatMap(r => [ms(r.start?.at), ms(r.finish?.at)]))
 
   const byId = new Map(Object.keys(board).filter(k => k !== 'archive').flatMap(key => board[key]).map(c => [c.id, c]))
@@ -113,7 +114,22 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
     const current = filesBusyHolder(overlapHoldReason({ tasksDir, projectPath, card, board, parallelFiles: gitSettings?.parallelFiles, generatedFiles: gitSettings?.generatedFiles }))
     return !!current && byId.has(current)
   }
-  const allowedWait = (card) => {
+  // Integration is the board's own work in progress, never the card's stall (audit 2026-10-15 F2:
+  // 9 of 11 herdr-kanban stall moves were Completed cards waiting on a 5-10 min check queue;
+  // HK55/HK56 waited 44/53 min with no hold recorded because the integration pass had not run).
+  // A Completed card with a live worktree is an allowed wait while a check is running or the
+  // poll reports its queue position; with no hold reported at all it gets three windows for the
+  // integration pass to reach it, then it is a stall like any other card.
+  const INTEGRATION_WAIT = /is running in the background$|^integration made no progress this poll \(worktree state (?:building|ready|rebased)\b|^Waiting for (?:retired Builder pane|Builder handoff turn)/
+  // 'window' (no hold reported) does not restart the clock, so the three windows can run out.
+  const integrationWait = (card, since) => {
+    const entry = registry[card.id]
+    if (!entry || entry.state === 'integrated') return false
+    const hold = String(holds[card.id] || '')
+    if (INTEGRATION_WAIT.test(hold)) return true
+    return !hold && ['building', 'ready', 'rebased'].includes(entry.state) && now - since < 3 * minutes * 60000 ? 'window' : false
+  }
+  const allowedWait = (card, since) => {
     if (paused) return true // paused (low disk, operator or release): nothing may start, so nothing is stuck (I393/I398/I401/I404 went to Owner mid-release, 2026-09-28)
     // A transient failure backing off (a start, an install, a timed-out check) waits for its retry.
     if (isRetryHold(holds[card.id]) || inBackoff(workflow[card.id]?.startFailure, now)) return true
@@ -140,8 +156,9 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
     if (card.column === 'planning' && workflow[card.id]?.waitFor) return true
     // Waiting for one of the capped Planner slots (card-planner maxPlanners), or its turn while Planners keep starting.
     if (card.column === 'planning' && (plannerSlotsFree <= 0 || plannersStarting(planners, now, card.id)) && !agents.some(a => a.pane_id === planners[card.id]?.paneId)) return true
-    // Legacy Completed cards with no board worktree wait for the operator's disposition by design.
-    if (card.column === 'completed' && !registry[card.id]) return true
+    // A Completed card with no board worktree and no hold is nobody's work: it stalls like any
+    // other card (audit 2026-10-15 F2 AC2; the legacy "waits by design" exemption is gone).
+    if (card.column === 'completed') { const wait = integrationWait(card, since); if (wait) return wait }
     return card.column === 'review' && reviewerSlotsFree <= 0 && !workflow[card.id]?.operational
   }
 
@@ -174,7 +191,8 @@ export function checkStalls({ tasksDir, projectPath = resolve(tasksDir, '..'), g
     // three windows before the operator is asked (Injectbuddy I182/I193 went to Owner twice).
     const started = runs.some(r => r.cardIds?.includes(card.id)) || (['planning', 'issues'].includes(card.column) ? planners[card.id]?.paneId : (bindings[card.id]?.pane_id || workflow[card.id]?.builder?.pane_id))
     if (['planning', 'queue'].includes(card.column) && !started && !card.blockedBy?.length && !workflow[card.id]?.operational && now - since < 3 * minutes * 60000) continue
-    if (allowedWait(card)) { reset(card.id); continue }
+    const allowed = allowedWait(card, since)
+    if (allowed) { if (allowed !== 'window') reset(card.id); continue }
     const at = new Date(now).toISOString(), mins = Math.round((now - since) / 60000)
     const lane = columnByKey(card.column).label
     // One retry per lane visit. A visit starts when the card enters the lane; an agent

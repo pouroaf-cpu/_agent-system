@@ -160,16 +160,53 @@ test('a stopped Builder still stuck after T-11 recovery goes straight to Owner, 
   assert.match(readWorkflow(tasks)['T-1'].operational.reason, /Builder handoff/, 'T-11 evidence and hold are preserved')
 })
 
-test('cards queued behind a stalled prerequisite stay queued; only the prerequisite escalates; legacy Completed waits', t => {
+test('cards queued behind a stalled prerequisite stay queued; only the prerequisite escalates; a Completed card with no worktree and no hold stalls too', t => {
   const { tasks, put } = board(t)
   put('planning', 'T-41')
   put('queue', 'T-42', '**Blocked by:** T-41\n')
   put('completed', 'T-25')
   checkStalls({ tasksDir: tasks, agents: [], now: T })
+  // Audit 2026-10-15 F2 AC2: the old "legacy Completed waits by design" exemption is gone.
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 19 * MIN }), [])
   const stalls = checkStalls({ tasksDir: tasks, agents: [], now: T + 60 * MIN })
-  assert.deepEqual(stalls.map(s => s.id), ['T-41'])
+  assert.deepEqual(stalls.map(s => s.id).sort(), ['T-25', 'T-41'])
   assert.equal(findCard(tasks, 'T-42').column, 'queue')
-  assert.equal(findCard(tasks, 'T-25').column, 'completed')
+  assert.equal(findCard(tasks, 'T-25').column, 'owner')
+})
+
+test('Completed cards waiting on the integration check queue are never stalls; each attempt restarts the clock (audit 2026-10-15 F2)', t => {
+  const { tasks, put } = board(t)
+  for (const id of ['T-1', 'T-2', 'T-3', 'T-4']) put('completed', id)
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify(Object.fromEntries(['T-1', 'T-2', 'T-3', 'T-4'].map(id => [id, { cardId: id, state: 'building' }]))))
+  // What the integration poll reports: one check running, the others queued behind it.
+  const holds = { 'T-1': 'integration check node run-tests.mjs is running in the background', 'T-2': 'integration made no progress this poll (worktree state building)', 'T-3': 'integration made no progress this poll (worktree state building)', 'T-4': 'Waiting for retired Builder pane to close' }
+  checkStalls({ tasksDir: tasks, agents: [], holds, now: T })
+  for (const at of [20, 25, 45, 90]) assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], holds, now: T + at * MIN }), [], `${at} min behind a 25-min check`)
+  for (const id of ['T-1', 'T-2', 'T-3', 'T-4']) assert.equal(findCard(tasks, id).column, 'completed')
+  // A timed-out check backing off is a retry hold: allowed as before.
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], holds: { ...holds, 'T-1': `integration check node run-tests.mjs timed out (machine under load?); retrying at ${new Date(T + 100 * MIN).toISOString()}` }, now: T + 95 * MIN }), [])
+})
+
+test('a Completed card with a worktree but no hold reported gets three windows for the integration pass, then stalls (HK55/HK56 waited 44/53 min)', t => {
+  const { tasks, put } = board(t)
+  put('completed', 'T-1')
+  put('completed', 'T-2')
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-1': { cardId: 'T-1', state: 'building' }, 'T-2': { cardId: 'T-2', state: 'building' } }))
+  checkStalls({ tasksDir: tasks, agents: [], now: T })
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 25 * MIN }), [])
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 55 * MIN }), [])
+  // T-2's check ran at 50 min (history event): that attempt is activity, so only T-1 is stuck at 60.
+  mkdirSync(join(tasks, '.history'), { recursive: true })
+  writeFileSync(join(tasks, '.history', 'T-2.jsonl'), JSON.stringify({ event: 'integration-check', ok: false, at: new Date(T + 50 * MIN).toISOString() }) + '\n')
+  const stalls = checkStalls({ tasksDir: tasks, agents: [], now: T + 60 * MIN })
+  assert.deepEqual(stalls.map(s => s.id), ['T-1'])
+  assert.equal(findCard(tasks, 'T-1').column, 'owner')
+  assert.equal(findCard(tasks, 'T-2').column, 'completed')
+  // An integrated worktree still sitting in Completed is not an integration wait.
+  put('completed', 'T-3')
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ 'T-3': { cardId: 'T-3', state: 'integrated' } }))
+  checkStalls({ tasksDir: tasks, agents: [], now: T })
+  assert.deepEqual(checkStalls({ tasksDir: tasks, agents: [], now: T + 20 * MIN }).map(s => s.id), ['T-3'])
 })
 
 test('with nothing recorded, the Owner note says what the board observed (Healthypets legacy cards)', t => {
