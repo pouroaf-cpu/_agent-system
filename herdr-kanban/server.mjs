@@ -1916,23 +1916,33 @@ async function startPollers() {
     onBusy: project => { if (actingPolls.has(project)) recordHealthyPoll(tasksDirOf(project)) },
     onError: err => console.error(`kanban polling: ${err.message}`),
   })
-  setInterval(() => {
-    const pids = stopRunawayTsservers(config.projectsRoot)
-    if (pids.length) boardLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
-    const stale = stopStaleE2eServers()
-    if (stale.length) boardLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
-    const webkit = stopOrphanWebKit()
-    if (webkit.length) boardLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
-    // A cleanup deferred at integration was only retried while the card sat in Completed or
-    // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
-    for (const project of config.projects) {
-      try {
-        const tasksDir = tasksDirOf(project), board = readBoard(tasksDir)
-        const live = new Set([...board.completed, ...board.review].map(c => c.id))
-        const onlyIds = Object.values(readWorktrees(tasksDir)).filter(e => e.state === 'integrated' && !e.cleaned && !live.has(e.cardId)).map(e => e.cardId)
-        if (onlyIds.length) logIntegrationResults(project, reconcileCompletedWorktrees({ tasksDir, onlyIds }))
-      } catch (err) { boardLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
-    }
+  // The listings are PowerShell processes that take seconds on a loaded PC; they are awaited, and
+  // a tick that finds the last sweep still running is skipped, so the board's event loop stays free
+  // (board stalls 2026-10-15 21:14 to 23:44 NZ came after sweep ticks).
+  let sweeping = false
+  setInterval(async () => {
+    if (sweeping) return
+    sweeping = true
+    try {
+      const pids = await stopRunawayTsservers(config.projectsRoot)
+      if (pids.length) boardLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
+      const stale = await stopStaleE2eServers()
+      if (stale.length) boardLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
+      const webkit = await stopOrphanWebKit()
+      if (webkit.length) boardLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
+      // A cleanup deferred at integration was only retried while the card sat in Completed or
+      // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
+      for (const project of config.projects) {
+        await new Promise(done => setImmediate(done))
+        try {
+          const tasksDir = tasksDirOf(project), board = readBoard(tasksDir)
+          const live = new Set([...board.completed, ...board.review].map(c => c.id))
+          const onlyIds = Object.values(readWorktrees(tasksDir)).filter(e => e.state === 'integrated' && !e.cleaned && !live.has(e.cardId)).map(e => e.cardId)
+          if (onlyIds.length) logIntegrationResults(project, reconcileCompletedWorktrees({ tasksDir, onlyIds }))
+        } catch (err) { boardLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
+      }
+    } catch (err) { boardLog(`sweep: ${err.message}`, 'warn') }
+    finally { sweeping = false }
   }, 10 * 60000)
 }
 

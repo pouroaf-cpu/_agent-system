@@ -22,20 +22,20 @@ function killTree(pid) {
 // Operator-chat e2e runs work in C:/Users/PFrew/claude-e2e-* (outside the board) and leave
 // their `next dev`/`next start` running for a day (3 servers, ~2.1 GB, efficiency audit
 // 2026-10-03 F2). A server there older than maxAgeMs is abandoned: stop its tree.
-export function stopStaleE2eServers({ maxAgeMs = 4 * 3600e3, now = Date.now(), list = () => nodeProcesses({ cwd: true }), kill = killTree } = {}) {
+export async function stopStaleE2eServers({ maxAgeMs = 4 * 3600e3, now = Date.now(), list = () => nodeProcessesAsync({ cwd: true }), kill = killTreeAsync } = {}) {
   const e2e = p => /[\\/]claude-e2e-/i.test(p.cwd || '') || /[\\/]claude-e2e-/i.test(p.cmd)
-  const hits = list().filter(p => p.pid !== process.pid && /\bnext\b/i.test(p.cmd) && e2e(p) && p.created && now - p.created > maxAgeMs)
-  for (const p of hits) try { kill(p.pid) } catch {}
+  const hits = (await list()).filter(p => p.pid !== process.pid && /\bnext\b/i.test(p.cmd) && e2e(p) && p.created && now - p.created > maxAgeMs)
+  for (const p of hits) try { await kill(p.pid) } catch {}
   return hits.map(p => p.pid)
 }
 
 // An editor's tsserver opened on a board project folder indexes TASKS/.evidence (browser
 // profiles, captures) and spins for hours: 10 CPU-hours on KanbanProjects/Injectbuddy
 // (2026-09-25) and on Tradeflow-t30 (2026-09-24). Its client restarts it on demand.
-export function stopRunawayTsservers(root, { maxCpuSeconds = 2 * 3600, list = nodeProcesses, kill = pid => process.kill(pid) } = {}) {
+export async function stopRunawayTsservers(root, { maxCpuSeconds = 2 * 3600, list = () => nodeProcessesAsync(), kill = pid => process.kill(pid) } = {}) {
   const needle = resolve(root).toLowerCase()
-  const hits = list().filter(p => p.cpuSeconds > maxCpuSeconds && /tsserver\.js/i.test(p.cmd) && p.cmd.toLowerCase().replaceAll('/', '\\').includes(needle))
-  for (const p of hits) try { kill(p.pid) } catch {}
+  const hits = (await list()).filter(p => p.cpuSeconds > maxCpuSeconds && /tsserver\.js/i.test(p.cmd) && p.cmd.toLowerCase().replaceAll('/', '\\').includes(needle))
+  for (const p of hits) try { await kill(p.pid) } catch {}
   return hits.map(p => p.pid)
 }
 
@@ -72,8 +72,31 @@ function nodeProcesses({ cwd = false } = {}) {
   const r = spawnSync('powershell', ['-NoProfile', '-Command', cwd ? LIST_NODE_CWD : LIST_NODE], { encoding: 'utf8', timeout: 20000, windowsHide: true })
   let rows = []
   try { rows = [JSON.parse(r.stdout || '[]')].flat() } catch {}
-  // Kernel/user times are in 100 ns units.
-  return rows.map(p => ({ pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }))
+  return rows.map(toNodeRow)
+}
+
+// Kernel/user times are in 100 ns units.
+function toNodeRow(p) {
+  return { pid: p.ProcessId, cmd: p.CommandLine || '', cwd: p.Cwd || '', cpuSeconds: (Number(p.KernelModeTime) + Number(p.UserModeTime)) / 1e7, created: Number(p.Created) || null }
+}
+
+// The sweep's listings run async. Each PowerShell start takes seconds on a loaded PC (LIST_NODE_CWD
+// also compiles C# every time), and spawnSync held the board's event loop for all of it: every
+// board stall on 2026-10-15 (21:14, 21:33, 23:20, 23:44 NZ) came after a sweep tick. Resolves ''
+// on failure, as the sync listings return no rows.
+function psAsync(script) {
+  return new Promise(done => execFile('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, out) => done(String(out || ''))))
+}
+
+async function nodeProcessesAsync({ cwd = false } = {}) {
+  if (process.platform !== 'win32') return []
+  let rows = []
+  try { rows = [JSON.parse(await psAsync(cwd ? LIST_NODE_CWD : LIST_NODE) || '[]')].flat() } catch {}
+  return rows.map(toNodeRow)
+}
+
+function killTreeAsync(pid) {
+  return new Promise(done => execFile('taskkill', ['/T', '/F', '/PID', String(pid)], { timeout: 20000, windowsHide: true }, () => done()))
 }
 
 // A Playwright WebKit check leaves WebKitNetworkProcess.exe behind when its browser is killed
@@ -82,28 +105,27 @@ function nodeProcesses({ cwd = false } = {}) {
 // parent's pid now belongs to a younger process, has no browser left to serve. minAgeMs leaves a
 // browser that is still starting or closing alone.
 // Returns only the pids that are gone afterwards, so the log never claims a stop that did not happen.
-export function stopOrphanWebKit({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcesses, kill = cimTerminate } = {}) {
-  const all = list(), byPid = new Map(all.map(p => [p.pid, p]))
+export async function stopOrphanWebKit({ minAgeMs = 10 * 60000, now = Date.now(), list = allProcessesAsync, kill = cimTerminateAsync } = {}) {
+  const all = await list(), byPid = new Map(all.map(p => [p.pid, p]))
   const orphan = p => { const parent = byPid.get(p.ppid); return !parent || parent.created > p.created }
   const hits = all.filter(p => /^WebKit\w*\.exe$/i.test(p.name) && p.created && now - p.created > minAgeMs && orphan(p)).map(p => p.pid)
   if (!hits.length) return []
-  try { kill(hits) } catch {}
-  const left = new Set(list().map(p => p.pid))
+  try { await kill(hits) } catch {}
+  const left = new Set((await list()).map(p => p.pid))
   return hits.filter(pid => !left.has(pid))
 }
 
 // taskkill and Stop-Process both answered "no running instance" for these orphans while they still
 // held their commit; the CIM Terminate call ended them (2026-10-10).
-function cimTerminate(pids) {
-  spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "${pids.map(pid => `ProcessId=${Number(pid)}`).join(' or ')}" | Invoke-CimMethod -MethodName Terminate | Out-Null`], { stdio: 'ignore', timeout: 20000, windowsHide: true })
+function cimTerminateAsync(pids) {
+  return new Promise(done => execFile('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "${pids.map(pid => `ProcessId=${Number(pid)}`).join(' or ')}" | Invoke-CimMethod -MethodName Terminate | Out-Null`], { timeout: 20000, windowsHide: true }, () => done()))
 }
 
 const LIST_ALL = `Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; Created = if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 } } } | ConvertTo-Json -Compress`
 
-function allProcesses() {
+async function allProcessesAsync() {
   if (process.platform !== 'win32') return []
-  const r = spawnSync('powershell', ['-NoProfile', '-Command', LIST_ALL], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, windowsHide: true })
-  try { return [JSON.parse(r.stdout || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', created: Number(p.Created) || 0 })) } catch { return [] }
+  try { return [JSON.parse(await psAsync(LIST_ALL) || '[]')].flat().map(p => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name || '', created: Number(p.Created) || 0 })) } catch { return [] }
 }
 
 // Free commit (RAM + pagefile), the limit Windows kills at; os.freemem() is RAM only.

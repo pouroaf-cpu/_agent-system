@@ -2,14 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { stopServersIn, stopRunawayTsservers, stopOrphanWebKit } from './lib/orphan-servers.mjs'
 
-test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', () => {
+test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', async () => {
   const list = () => [
     { pid: 1, cpuSeconds: 36222, cmd: 'node c:\\Users\\me\\KanbanProjects\\Injectbuddy\\node_modules\\typescript\\lib\\tsserver.js --useNodeIpc' },
     { pid: 2, cpuSeconds: 60, cmd: 'node c:\\Users\\me\\KanbanProjects\\Tradeflow\\node_modules\\typescript\\lib\\tsserver.js' },
     { pid: 3, cpuSeconds: 36222, cmd: 'node c:\\Users\\me\\Projects\\Injectbuddy\\node_modules\\typescript\\lib\\tsserver.js' },
     { pid: 4, cpuSeconds: 36222, cmd: 'node C:\\Users\\me\\KanbanProjects\\Injectbuddy\\node_modules\\next\\dist\\bin\\next dev' },
   ]
-  assert.deepEqual(stopRunawayTsservers('C:\\Users\\me\\KanbanProjects', { list, kill: () => {} }), [1])
+  assert.deepEqual(await stopRunawayTsservers('C:\\Users\\me\\KanbanProjects', { list, kill: () => {} }), [1])
 })
 
 test('servers left running in a card worktree are stopped; others are not (Tradeflow TF66 port 3100)', () => {
@@ -35,7 +35,7 @@ test('a relative-path next server is found by its working directory; other workt
   assert.deepEqual(killed, [27744])
 })
 
-test('a WebKit process whose browser is gone is stopped; a live run, a fresh one and other programs are not (board down 2026-10-10)', () => {
+test('a WebKit process whose browser is gone is stopped; a live run, a fresh one and other programs are not (board down 2026-10-10)', async () => {
   const now = 1e12, old = now - 3600e3
   let procs = [
     { pid: 1, ppid: 900, name: 'WebKitNetworkProcess.exe', created: old },
@@ -48,6 +48,6 @@ test('a WebKit process whose browser is gone is stopped; a live run, a fresh one
   ]
   const list = () => procs, killed = []
   // pid 3 survives the kill, so it is not reported as stopped.
-  assert.deepEqual(stopOrphanWebKit({ now, list, kill: pids => { killed.push(...pids); procs = procs.filter(p => p.pid !== 1) } }), [1])
+  assert.deepEqual(await stopOrphanWebKit({ now, list, kill: pids => { killed.push(...pids); procs = procs.filter(p => p.pid !== 1) } }), [1])
   assert.deepEqual(killed, [1, 3])
 })
