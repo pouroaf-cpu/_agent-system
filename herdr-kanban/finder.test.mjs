@@ -267,3 +267,35 @@ test('AC5: the Planner prompt and PLANNER.md say to read the Finder list first',
   assert.match(finder, /read-only/)
   assert.match(finder, /lines START-END/)
 })
+
+// F10: a Finder that hits its engine's usage limit is not a bad brief. Claude is blocked until the
+// reset, no ASK is sent, no Finder starts while blocked, and the Finder runs again after the reset.
+test('F10: a Finder that hits a usage limit waits for the reset, sends no ASK, and runs again after it', async () => {
+  const b = projectBoard()
+  try {
+    const card = createCard(b.dir, { title: 'Card', brief: 'x' })
+    const reset = T0 + 3600000
+    const h = harness(b.dir, { outputs: { p1: `Claude AI usage limit reached|${Math.floor(reset / 1000)}` } })
+    await finderExits(h)
+    assert.equal(h.names.filter(n => n.startsWith('f-')).length, 1)
+    assert.deepEqual(h.names.filter(n => n.startsWith('p-')), [], 'no Planner')
+    assert.deepEqual(b.asks(), [], 'no ASK')
+    assert.equal(readWorkflow(b.dir)[card.id].waitFor, undefined)
+    assert.equal(readWorkflow(b.dir)[card.id].finder?.done, undefined, 'the Finder is not done')
+    const quota = JSON.parse(readFileSync(join(b.root, '.engine-quota.json'), 'utf8'))
+    assert.equal(quota.claude.until, reset)
+
+    await h.run(T0 + 600000) // still blocked: no second Finder
+    assert.equal(h.names.filter(n => n.startsWith('f-')).length, 1)
+
+    await h.run(reset + 1000) // after the reset the Finder starts again
+    assert.equal(h.names.filter(n => n.startsWith('f-')).length, 2)
+    assert.equal(h.names[1], agentName('finder', card.id))
+    h.outputs.p2 = [...LIST, 'Size: 10 files, 2 areas'].join('\n')
+    h.agents.find(a => a.pane_id === 'p2').agent_status = 'done' // setStatus finds the first agent of the name
+    await h.run(reset + 21000)
+    assert.ok(h.names.includes(agentName('planner', card.id)), 'the Planner starts once the Finder lists')
+    assert.equal(readWorkflow(b.dir)[card.id].finder.status, 'listed')
+    assert.deepEqual(b.asks(), [])
+  } finally { b.done() }
+})

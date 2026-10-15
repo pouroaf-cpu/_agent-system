@@ -21,7 +21,7 @@ import { checkWorkflowLimits } from './workflow-limits.mjs'
 import { operationalHold, recordOperationalFailure, updateWorkflow, readWorkflow } from './workflow-state.mjs'
 import { appendHistory, writeCurrentFeedback, laneBeforeOwner, lastTransition, logAgentOutput, askManager, sectionBody } from './card-history.mjs'
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
-import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
+import { usageLimit, blockEngine, quotaHold, selectQuotaAssignment, engineKind, quotaKey } from './quota.mjs'
 import { activityLog } from './activity.mjs'
 import { engineForAssignment } from './agent-settings.mjs'
 const busy = new Set()
@@ -422,6 +422,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
         try {
           if (!finderState?.running) {
             if (busyPlanners(agents) + launched >= maxPlanners) continue
+            const picked = assignmentForCard?.(card, 'finder')
+            const finderModel = picked?.model ?? 'claude-haiku-5-5'
+            const finderEngine = picked ? engineForAssignment(picked) : { kind: 'claude' }
+            // A usage limit on the Finder's engine waits for its reset: no Finder, and no ASK.
+            if (quotaHold(boardRoot, quotaKey(engineKind(finderEngine), finderModel), now)) continue
             if (io === defaultIO) assertPromptAllowed(project)
             const backend = backendFor('planner')
             const workspace = backend === 'headless' ? null : await agentWorkspaceOr(projectPath, session)
@@ -429,13 +434,11 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
             paneId = created?.root_pane?.pane_id
             if (!paneId) throw new Error('Finder launch returned no pane')
             if (!isHeadless(paneId)) await waitForPrompt(paneId, { session })
-            const picked = assignmentForCard?.(card, 'finder')
-            const finderModel = picked?.model ?? 'claude-haiku-5-5'
-            const started = await agentStart({ name: agentName('finder', card.id), paneId, browser: false, model: finderModel, engine: picked ? engineForAssignment(picked) : { kind: 'claude' }, timeoutMs: START_TIMEOUT_MS, session })
+            const started = await agentStart({ name: agentName('finder', card.id), paneId, browser: false, model: finderModel, engine: finderEngine, timeoutMs: START_TIMEOUT_MS, session })
             const agent = (await agentList(session, { ensureSession: false })).find(a => a.pane_id === paneId)
             await deliver(paneId, finderPrompt({ card, projectPath }), session, null, { engine: 'claude', force: isHeadless(paneId) })
             recordUsageStart({ tasksDir, project, requestId: card.id, cardIds: [card.id], role: 'finder', paneId, name: started?.name ?? agentName('finder', card.id), model: finderModel, agentSession: agent?.agent_session })
-            updateWorkflow(tasksDir, card.id, { finder: { running: true, paneId, startedAt: new Date(now).toISOString() } })
+            updateWorkflow(tasksDir, card.id, { finder: { running: true, paneId, startedAt: new Date(now).toISOString(), engine: engineKind(finderEngine), model: finderModel } })
             appendHistory(tasksDir, card.id, { event: 'finder-started', stage: 'planning', paneId, model: finderModel })
             launched++
             continue
@@ -449,6 +452,16 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           await recordUsageFinish({ tasksDir, paneId, agent, status: 'complete' })
           await paneClose(paneId, session).catch(() => {})
           if (agent) agents.splice(agents.indexOf(agent), 1) // its slot is free for the Planner below
+          // A usage limit is not a bad brief: block the engine until its reset and run the Finder
+          // again then, instead of holding the card with an ASK.
+          const limit = usageLimit(raw, now)
+          if (limit) {
+            const kind = quotaKey(finderState.engine ?? 'claude', limit.modelCap && (finderState.model ?? 'claude-haiku-5-5'))
+            blockEngine(boardRoot, kind, limit.until, now, limit.why)
+            appendHistory(tasksDir, card.id, { event: 'engine-usage-limit', stage: 'planning', role: 'finder', engine: kind, until: new Date(limit.until).toISOString(), evidence: String(raw).slice(-4000) })
+            updateWorkflow(tasksDir, card.id, { finder: {} }) // not done: the next poll after the reset starts it again
+            continue
+          }
           const text = finderText(raw)
           const lines = parseFinderList(text)
           const size = timedOut ? null : parseFinderSize(text)
