@@ -308,7 +308,7 @@ export const lastBlockerLanded = (tasksDir, card, board, registry) => Math.max(0
   return Date.parse(registry[id]?.integratedAt ?? '') || (archived ? laneEnteredAt(tasksDir, id, 'archive') ?? archived.mtime : 0)
 }))
 
-export function writeCurrentFeedback(tasksDir, card, heading, note) {
+export function writeCurrentFeedback(tasksDir, card, heading, note, { ask = true } = {}) {
   const text = readFileSync(card.path, 'utf8')
   const event = appendHistory(tasksDir, card.id, { event: 'feedback', heading, note, text })
   const section = `## Current feedback\n${heading}: ${formatNZText(note)}\nHistory entry: ${event.id}\n`
@@ -317,7 +317,9 @@ export function writeCurrentFeedback(tasksDir, card, heading, note) {
   const pattern = /^## Current feedback\r?\n[\s\S]*?(?=^## |^\*\*Recovery:\*\*|^---\s*$|^\*\*(?:Build attempt|Failed return \d+)\*\*|$(?![\s\S]))/m
   const next = pattern.test(text) ? text.replace(pattern, section + '\n') : text + '\n\n' + section
   writeFileSync(card.path, next)
-  if (heading === 'Needs you') askManager(tasksDir, card, note)
+  // ask: false when the caller has already flagged the right inbox (a [board] issue writes
+  // its BOARD line to the Kanban Manager; a second ASK line doubled it, audit 2026-10-15 F9).
+  if (heading === 'Needs you' && ask) askManager(tasksDir, card, note)
 }
 
 // A "Needs you" question goes to the project's registered manager chat first; the

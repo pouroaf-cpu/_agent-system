@@ -23,7 +23,11 @@ try {
   }
   assert.equal(findCard(dir, card.id).autoReview, true)
   assert.match(readFileSync(findCard(dir, card.id).path, 'utf8'), /"returns":4/)
-  assert.equal(handoff('owner', card.id, 'Browser check could not log in').column, 'planning')
+  // Audit 2026-10-15 F9: the output says the card stayed and why, instead of a bare "-> planning".
+  const declined = spawnSync(process.execPath, [resolve('hkb.mjs'), '--tasks', dir, 'owner', card.id, 'Browser check could not log in'], { encoding: 'utf8', windowsHide: true })
+  assert.equal(declined.status, 0, declined.stderr)
+  assert.match(declined.stdout, new RegExp(`^${card.id} -> planning \\(stays in planning: "Browser check could not log in" is not an operator-only need, so the card was not sent to Owner; recorded as an operational failure marker`))
+  assert.equal(findCard(dir, card.id).column, 'planning')
   assert.equal(handoff('park', card.id, 'Third technical check failed').column, 'planning')
   assert.equal(handoff('owner', card.id, 'Only the operator can grant permission. Verified access unavailable; approved methods exhausted. Evidence: access check returned permission denied.').column, 'owner')
   const audit = createCard(dir, { title: 'Audit', brief: 'Report only', audit: 'design', tools: 'browser' })

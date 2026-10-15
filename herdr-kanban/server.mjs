@@ -234,7 +234,10 @@ function archiveNoReview(project, tasksDir) {
     lastActivityHold.delete(`${project}:${id}:no-review-archive`)
     activity(project, id, 'move', 'archived after integration')
   }
-  for (const { id, reason } of result.skipped) {
+  for (const { id, reason, expected } of result.skipped) {
+    // Waiting for integration is not an event (audit 2026-10-15 F9): 40 of 40 completed cards
+    // logged "worktree state is building" on the throwaway board, 167 lines live in two days.
+    if (expected) continue
     const key = `${project}:${id}:no-review-archive`
     if (lastActivityHold.get(key) === reason) continue
     lastActivityHold.set(key, reason)

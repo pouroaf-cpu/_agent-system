@@ -218,7 +218,18 @@ function planWorkspaceFor(card) {
 // checkout (where ## Files paths must already exist) and the project's sharedFiles.
 function planCheck(card) {
   // I863: an already-covered card must close before the unchanged-base gate.
-  if (!cardFiles(card.path).length) fail(`no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`)
+  if (!cardFiles(card.path).length) {
+    const files = `no exact files listed: list the files to change, or if another card already fixed this use hkb covered ${card.id} <card> "<check> -> <result>"`
+    // HK69 (list everything): the plan check's other problems come with the missing Files, so
+    // the Planner fixes them in one pass (audit 2026-10-15 F9: the move named one problem
+    // where hkb issue on the same card named three).
+    let others = []
+    try { validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: !!plannerAssignment }) } catch (err) {
+      others = (/^Plan check found \d+ problems/.test(err.message) ? err.message.split('\n').slice(1).map(l => l.replace(/^\d+\. /, '')) : [err.message]).filter(p => !/fill ## Files\b/.test(p))
+    }
+    if (!others.length) fail(files)
+    fail(`Plan check found ${others.length + 1} problems; fix every one, then hand off again:\n${[files, ...others].map((p, i) => `${i + 1}. ${p}`).join('\n')}`)
+  }
   const { gitSettings, integration, repoRoot, planWorkspace } = planWorkspaceFor(card)
   // IA98 (2026-10-09): the Planner drafted its check in the integration checkout; the board then held the card there for hours.
   const dirty = integration && integrationStartHoldReason({ repoRoot, workspace: planWorkspace, card })?.match(/substantive changes: (.+); preserved/)?.[1]
@@ -247,6 +258,13 @@ function projectCardPrefix(project) {
 function fail(msg) {
   console.error(`hkb: ${msg}`)
   process.exit(1)
+}
+
+// Whether the card text passes the plan check a move into Queue applies (a plan held only by a
+// missing operator approval counts as passing here: it has a plan).
+function planPasses(text) {
+  try { validatePlan(text) } catch (err) { return !!err.operatorApproval }
+  return true
 }
 
 // One line in the project's registered manager inbox, else the Kanban Manager's. Returns who got it.
@@ -469,6 +487,8 @@ let previousColumn
 let approvalWait = false
 let prerequisiteWait = false
 let decisionWait = false
+let boardWait = false
+let ownerDeclined = false
 let plannerIssues = 0
 let escalated = false
 let auditNotReady = ''
@@ -533,6 +553,7 @@ try {
     const auditReport = current.audit && /audit report ready/i.test(note)
     if (!auditReport) {
       target = current.column
+      ownerDeclined = true
       recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     }
   }
@@ -561,6 +582,7 @@ try {
   // not the operator's, so it is flagged there instead of paging the operator (2026-10-10).
   const decisionCategory = verb === 'issue' && !approvalWait && current.column === 'planning' ? failureCategory(note) : null
   decisionWait = decisionCategory === 'decision' || decisionCategory === 'board'
+  boardWait = decisionCategory === 'board'
   if (decisionWait) {
     target = 'planning'
     updateWorkflow(tasksDir, current.id, { waitFor: { cards: [], files: [], decision: true, ...(decisionCategory === 'board' ? { board: true } : {}), why: note, since: new Date().toISOString() } })
@@ -585,8 +607,14 @@ try {
     const prior = readWorkflow(tasksDir)[current.id]?.correction
     const repeat = current.column === 'working' && category === 'implementation' && prior?.category === 'implementation' && prior.plan === plan
     if (repeat) target = 'planning'
+    // Audit 2026-10-15 F9: a card-owned card in Working with no plan that passes the plan
+    // check (an operator drag put it there) cannot go back to Queue, which refuses planless
+    // cards, so the Builder's [implementation] issue was refused outright. It needs a Planner.
+    const planless = !repeat && target === 'queue' && current.column === 'working' && current.cardOwned && !planPasses(readFileSync(current.path, 'utf8'))
+    if (planless) target = 'planning'
+    const routed = repeat ? 'planning: second Builder implementation failure on the same plan' : planless ? 'planning: the card has no plan that passes the plan check, so a Builder cannot take it again' : null
     if (current.column === 'working') recordBuilderReturn(tasksDir, current, note)
-    appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note, ...(repeat ? { routed: 'planning: second Builder implementation failure on the same plan' } : {}) })
+    appendHistory(tasksDir, current.id, { event: 'failure', category, stage: current.column, note, ...(routed ? { routed } : {}) })
     if (['operational', 'evidence'].includes(category)) recordOperationalFailure(tasksDir, current, note, dirname(tasksDir))
     updateWorkflow(tasksDir, current.id, { correction: { category, note, plan } })
     // Planners that keep reporting a blocker loop through fresh sessions: I152/I168/I184
@@ -651,10 +679,12 @@ try {
 card = findCard(tasksDir, card.id)
 
 if (approvalWait) writeCurrentFeedback(tasksDir, card, 'Needs you', approvalQuestion(card.id))
+// A [board] issue already wrote its BOARD line to the Kanban Manager: no second ASK line
+// (audit 2026-10-15 F9). The note still waits on the card as Needs you.
 else if (decisionWait) writeCurrentFeedback(tasksDir, card, 'Needs you', `${note}
 
 Record the answer on the card, then move it to Planning (or Planned).
-`)
+`, { ask: !boardWait })
 else if (plannerIssues >= 3 && target === 'owner') writeCurrentFeedback(tasksDir, card, 'Needs you', `Three Planners in a row could not make ${card.id} build-ready${escalated ? ` (after one Codex Planner, the ${ESCALATION_MODEL} escalation Planners also failed)` : ''}. The latest blocker:\n\n${note}\n\nWhat should change (scope, approach, or an approval)? Record it on the card, then drag it back to Planning.\n`)
 else if (auditNotReady) writeCurrentFeedback(tasksDir, card, 'Kicked back', `${auditNotReady}\n`)
 else if (HEADING[verb]) {
@@ -698,5 +728,8 @@ activityLog({
   message: `${previousColumn} -> ${target} (${verb})`,
 })
 
+// An owner or park without an operator-only reason leaves the card where it is with an
+// operational-failure marker; the output says so instead of reading as a no-op (audit 2026-10-15 F9).
 console.log(`${card.id} -> ${target}${capped ? ' (review cap reached)' : ''}` +
+  `${ownerDeclined ? ` (stays in ${target}: "${note.replace(/\s+/g, ' ').slice(0, 80)}" is not an operator-only need, so the card was not sent to Owner; recorded as an operational failure marker on the card and the run stopped. Owner needs: Only the operator can grant <permission/access>; verified <failure>; approved methods exhausted; Evidence: <check -> result>)` : ''}` +
   `${binding?.pane_id ? ` (freed ${binding.pane_id})` : ''}`)

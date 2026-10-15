@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createCard, findCard, moveCard } from './lib/cards.mjs'
+import { createCard, findCard, moveCard, validatePlan } from './lib/cards.mjs'
 import { readCardPlanners, saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { appendHistory, historyPath } from './lib/card-history.mjs'
@@ -103,5 +103,20 @@ test('Planner handoff refuses a card file left dirty in the integration checkout
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('./hkb.mjs', import.meta.url)), '--tasks', dir, '--planner-assignment', 'a1', 'move', card.id, 'planned'], { encoding: 'utf8', windowsHide: true })
   assert.equal(result.status, 1)
   assert.match(result.stderr, new RegExp(`scripts/check-x.mjs is changed or untracked in the integration checkout.*TASKS/.evidence/${card.id}/`))
+  assert.equal(findCard(dir, card.id).column, 'planning')
+})
+
+// Audit 2026-10-15 F9: the planless refusal named one problem where hkb issue on the same card
+// named three (HK69: one refusal lists everything).
+test('a planless Planner handoff lists every plan-check problem with the missing Files', t => {
+  const { dir, card, run } = fixture(t)
+  const result = run('move', card.id, 'planned')
+  assert.equal(result.status, 1)
+  let expected = []
+  try { validatePlan(readFileSync(card.path, 'utf8'), { requireReadiness: true }) } catch (err) { expected = err.message.split('\n').slice(1).map(l => l.replace(/^\d+\. /, '')) }
+  assert.ok(expected.length >= 2, 'the fixture card has several plan problems')
+  assert.match(result.stderr, /Plan check found \d+ problems; fix every one/)
+  assert.ok(result.stderr.includes('1. no exact files listed'), result.stderr)
+  for (const problem of expected.filter(p => !/fill ## Files\b/.test(p))) assert.ok(result.stderr.includes(problem), `${problem}\n${result.stderr}`)
   assert.equal(findCard(dir, card.id).column, 'planning')
 })

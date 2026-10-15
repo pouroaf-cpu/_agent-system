@@ -677,6 +677,11 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
   return promoted
 }
 
+// Audit 2026-10-15 F9: a Completed card whose worktree is still building, ready, rebased or
+// integrating is simply waiting for integration (every card passes through it), so that skip
+// is marked expected and the scheduler logs only the others.
+const EXPECTED_BEFORE_INTEGRATION = /^worktree state is (?:building|ready|rebased|integrating), not integrated$/
+
 export function archiveNoReviewCards(tasksDir) {
   const board = readBoard(tasksDir)
   const archived = [], skipped = []
@@ -687,7 +692,7 @@ export function archiveNoReviewCards(tasksDir) {
     if (!card.cardOwned || card.audit || (card.autoReview && !(card.column === 'completed' && card.reviewPassed))) continue
     const worktree = worktrees[card.id]
     const reason = !hasBuilderPass(card) ? 'missing Builder PASS' : worktree?.state !== 'integrated' ? `worktree state is ${worktree?.state ?? 'missing'}, not integrated` : null
-    if (reason) { skipped.push({ id: card.id, reason }); continue }
+    if (reason) { skipped.push({ id: card.id, reason, ...(EXPECTED_BEFORE_INTEGRATION.test(reason) ? { expected: true } : {}) }); continue }
     if (!canArchive(card)) { skipped.push({ id: card.id, reason: 'archive gate rejected the card' }); continue }
     moveCard(tasksDir, card.id, 'archive')
     appendHistory(tasksDir, card.id, { event: 'note', note: card.autoReview ? 'Archived after Reviewer PASS on integrated code' : 'Archived without independent review (Auto-review: no)' })

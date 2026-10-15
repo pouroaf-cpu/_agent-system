@@ -156,7 +156,7 @@ test('migration archives both lanes once and reports cards missing PASS or integ
   assert.deepEqual(first.archived, ['T-1', 'T-2'])
   assert.deepEqual(first.skipped, [
     { id: 'T-3', reason: 'missing Builder PASS' },
-    { id: 'T-4', reason: 'worktree state is building, not integrated' },
+    { id: 'T-4', reason: 'worktree state is building, not integrated', expected: true },
   ])
   assert.deepEqual(archiveNoReviewCards(tasksDir).archived, [])
   const notes = readFileSync(join(tasksDir, '.history/T-1.jsonl'), 'utf8').match(/Archived without independent review \(Auto-review: no\)/g)
@@ -741,4 +741,21 @@ test('a rebase that fails without a conflicting file is re-run with backoff twic
   const [first] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-2'], io: { ...io, reconcile: ({ onlyIds }) => [{ id: onlyIds[0], ...conflict }] }, now })
   assert.deepEqual([first.status, first.to], ['returned', 'queue'])
   assert.match(first.reason, /\(files: app\.js\)/)
+})
+
+// Audit 2026-10-15 F9: waiting for integration is the normal state of a Completed card, so that
+// skip is marked expected (the scheduler does not log it); other states and a missing worktree are not.
+test('an archive skip for a worktree still before integration is expected; a conflict or a missing worktree is not (audit 2026-10-15 F9)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'archive-expected-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  for (const id of ['T-1', 'T-2', 'T-3', 'T-4']) putCard(tasksDir, 'completed', id)
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { state: 'building' }, 'T-2': { state: 'integrating' }, 'T-3': { state: 'conflict' } }))
+  const { archived, skipped } = archiveNoReviewCards(tasksDir)
+  assert.deepEqual(archived, [])
+  assert.deepEqual(skipped.sort((a, b) => a.id.localeCompare(b.id)), [
+    { id: 'T-1', reason: 'worktree state is building, not integrated', expected: true },
+    { id: 'T-2', reason: 'worktree state is integrating, not integrated', expected: true },
+    { id: 'T-3', reason: 'worktree state is conflict, not integrated' },
+    { id: 'T-4', reason: 'worktree state is missing, not integrated' },
+  ])
 })

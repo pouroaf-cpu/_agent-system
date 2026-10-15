@@ -139,8 +139,10 @@ test('hkb issue [board] from Planning holds the card and flags the Kanban Manage
     // The board conflict goes to the Kanban Manager's own inbox, never the project's.
     assert.match(readFileSync(kmInbox, 'utf8'), new RegExp(`^- BQ \\d{5,} .*BOARD Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`, 'm'))
     assert.equal(existsSync(projectInbox) && readFileSync(projectInbox, 'utf8').includes('BOARD'), false)
-    // The Needs-you ask still reaches the project manager chat, as any decision wait does.
-    assert.match(readFileSync(projectInbox, 'utf8'), new RegExp(`ASK Proj ${card.id} \\(planning\\): \\[board\\] plan check demands`))
+    // One inbox line per [board] issue (audit 2026-10-15 F9): the BOARD line is the flag, and no
+    // ASK line goes to the project manager, whose chat cannot fix the board's tooling.
+    assert.equal(readFileSync(kmInbox, 'utf8').trim().split('\n').length, 1, readFileSync(kmInbox, 'utf8'))
+    assert.ok(!existsSync(projectInbox) || !/ ASK /.test(readFileSync(projectInbox, 'utf8')), 'no ASK line for a board issue')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
