@@ -71,12 +71,40 @@ try {
             if (-not $lanUp -and $lanBound) {
                 "$(Get-Date -Format o) LAN - no HTTP answer on ${lan}:$port; board still owns listener; keeping server" | Out-File -Append -Encoding utf8 $log
             }
-            Update-BoardOutage -Healthy ($lanUp -or $lanBound) -StatePath (Join-Path $root '.watchdog-lan-outage') -Send {
-                "$(Get-Date -Format o) LAN - no answer on ${lan}:$port; relaunching with -Lan" | Out-File -Append -Encoding utf8 $log
-                & (Join-Path $root 'restart-kanban.ps1') -Lan
-                Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
-                Invoke-WebRequest "http://${lan}:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
-                Update-BoardOutage -Healthy $true -StatePath (Join-Path $root '.watchdog-lan-outage') -Send { }
+            $lanOutage = Join-Path $root '.watchdog-lan-outage'
+            $lanWait = Join-Path $root '.watchdog-lan-wait'
+            if ($lanUp -or $lanBound) {
+                Update-BoardOutage -Healthy $true -StatePath $lanWait -Send { }
+                Update-BoardOutage -Healthy $true -StatePath $lanOutage -Send { }
+            } else {
+                # Only a relaunch re-binds the phone listener, and it kills any card run in flight
+                # (builds, integration). Wait until no card is Working or integrating; one alert per wait.
+                $inFlight = $null
+                try {
+                    $inFlight = [int](Get-InFlightCardCount -Port $port -ProjectsRoot $config.projectsRoot -Projects @($config.projects))
+                } catch {
+                    "$(Get-Date -Format o) LAN - cannot read card state ($($_.Exception.Message))" | Out-File -Append -Encoding utf8 $log
+                }
+                if ($inFlight -eq 0) {
+                    Update-BoardOutage -Healthy $true -StatePath $lanWait -Send { }
+                    Update-BoardOutage -Healthy $false -StatePath $lanOutage -Send {
+                        "$(Get-Date -Format o) LAN - no answer on ${lan}:$port; no card in flight; relaunching with -Lan" | Out-File -Append -Encoding utf8 $log
+                        & (Join-Path $root 'restart-kanban.ps1') -Lan
+                        Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+                        Invoke-WebRequest "http://${lan}:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
+                        Update-BoardOutage -Healthy $true -StatePath $lanOutage -Send { }
+                    }
+                } else {
+                    $why = if ($null -eq $inFlight) { 'card state unreadable' } else { "$inFlight card(s) in flight" }
+                    "$(Get-Date -Format o) LAN - no answer on ${lan}:$port; $why; waiting before relaunch" | Out-File -Append -Encoding utf8 $log
+                    Update-BoardOutage -Healthy $false -StatePath $lanWait -Send {
+                        try {
+                            Send-Push 'Kanban phone board unreachable' "The phone address moved to $lan`:$port and the board has not re-bound it. It relaunches by itself once no card is Working or integrating ($why now)." 'BE'
+                        } catch {
+                            "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
+                        }
+                    }
+                }
             }
         }
     }

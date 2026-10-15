@@ -35,6 +35,7 @@ async function fixture(t, extraAlertFunctions = '') {
 function Send-Push { param([string]$Title, [string]$Message, [string]$Kind) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
 function Get-LanAddress { $env:TEST_LAN_ADDRESS }
 function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) if ($env:TEST_NO_LISTENER) { return }; [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
+function Get-InFlightCardCount { $f = Join-Path $PSScriptRoot 'inflight.txt'; if (Test-Path -LiteralPath $f) { [int](Get-Content -LiteralPath $f -Raw).Trim() } else { 0 } }
 ${extraAlertFunctions}`)
   writeFileSync(join(root, 'board.config.json'), JSON.stringify({ port: server.address().port }))
   // The board's pid as kanban.ps1 records it: this test process is a live node process.
@@ -80,6 +81,48 @@ test('phone listener: with .lan-on, a board not answering on the current LAN add
   await run('127.0.0.1')
   assert.equal(existsSync(join(root, '.watchdog-lan-outage')), false, 'answering on the LAN address ends the outage')
   assert.deepEqual(lines('restarts.txt'), ['restart Lan=True'])
+})
+
+test('phone listener: a moved address waits while cards are in flight, alerts once, then relaunches once idle', async t => {
+  const { root, run, read, lines } = await fixture(t)
+  writeFileSync(join(root, '.lan-on'), '')
+  writeFileSync(join(root, 'inflight.txt'), '2')
+  await run('127.0.0.2'); await run('127.0.0.2')
+  assert.deepEqual(lines('restarts.txt'), [], 'a relaunch would kill the cards in flight')
+  assert.deepEqual(lines('pushes.txt'), ['Kanban phone board unreachable'], 'one alert while it waits')
+  assert.match(read('watchdog.log'), /2 card\(s\) in flight; waiting before relaunch/)
+  writeFileSync(join(root, 'inflight.txt'), '0')
+  await run('127.0.0.2')
+  assert.deepEqual(lines('restarts.txt'), ['restart Lan=True'], read('watchdog.log'))
+  assert.deepEqual(lines('pushes.txt'), ['Kanban phone board unreachable'], 'the relaunch sends no second alert')
+  assert.equal(existsSync(join(root, '.watchdog-lan-wait')), false, 'the wait ends with the relaunch')
+})
+
+test('phone listener: an unreadable card state waits rather than relaunches', async t => {
+  const { root, run, read, lines } = await fixture(t, `function Get-InFlightCardCount { throw 'fixture board unreadable' }`)
+  writeFileSync(join(root, '.lan-on'), '')
+  await run('127.0.0.2')
+  assert.deepEqual(lines('restarts.txt'), [], read('watchdog.log'))
+  assert.match(read('watchdog.log'), /cannot read card state/)
+  assert.deepEqual(lines('pushes.txt'), ['Kanban phone board unreachable'])
+})
+
+test('in-flight count is the Working cards each project reports plus its integrating worktrees', async t => {
+  const projectsRoot = mkdtempSync(join(tmpdir(), 'watchdog-projects-'))
+  const base = mkdtempSync(join(tmpdir(), 'watchdog-inflight-'))
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ board: { working: req.url.includes('project=Alpha') ? [{ id: 'A-3' }] : [] } }))
+  })
+  await new Promise(done => server.listen(0, '127.0.0.1', done))
+  t.after(() => { server.close(); rmSync(projectsRoot, { recursive: true, force: true }); rmSync(base, { recursive: true, force: true }) })
+  mkdirSync(join(projectsRoot, 'Alpha', 'TASKS'), { recursive: true })
+  writeFileSync(join(projectsRoot, 'Alpha', 'TASKS', '.board-worktrees.json'), JSON.stringify({ 'A-1': { state: 'integrating' }, 'A-2': { state: 'integrated' } }))
+  copyFileSync(join(HERE, 'watchdog-alert.ps1'), join(base, 'watchdog-alert.ps1'))
+  writeFileSync(join(base, 'run.ps1'), `. (Join-Path $PSScriptRoot 'watchdog-alert.ps1')\n'count=' + (Get-InFlightCardCount -Port ${server.address().port} -ProjectsRoot '${projectsRoot.replace(/\\/g, '/')}' -Projects @('Alpha', 'Beta'))`)
+  const out = await new Promise((done, fail) => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(base, 'run.ps1')],
+    { timeout: 45000, windowsHide: true }, (err, stdout, stderr) => err ? fail(new Error(stdout + stderr)) : done(stdout)))
+  assert.match(out, /count=2/, 'one Working card (A-3) plus one integrating worktree (A-1); Beta has neither')
 })
 
 test('the real Send-Push writes "- <KIND> <n> <time> <title>: <message>" to the inbox .md and .log (HK57 AC7)', t => {

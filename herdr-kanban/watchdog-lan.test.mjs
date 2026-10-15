@@ -9,9 +9,12 @@ import { tmpdir } from 'node:os'
 test('LAN timeouts keep the board; a missing listener waits for recovery before UP', async t => {
   const root = mkdtempSync(join(tmpdir(), 'watchdog-lan-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  for (const name of ['watch-kanban.ps1', 'restart-kanban.ps1', 'watchdog-alert.ps1']) {
+  for (const name of ['watch-kanban.ps1', 'restart-kanban.ps1']) {
     copyFileSync(join(import.meta.dirname, name), join(root, name))
   }
+  // An idle board: no card in flight, so the moved address is relaunched at once. Appended after the real
+  // function, because watch-kanban.ps1 dot-sources watchdog-alert.ps1 and would overwrite an earlier stub.
+  writeFileSync(join(root, 'watchdog-alert.ps1'), readFileSync(join(import.meta.dirname, 'watchdog-alert.ps1'), 'utf8') + '\nfunction Get-InFlightCardCount { 0 }\n')
   writeFileSync(join(root, 'board.config.json'), '{"port":12345}')
   writeFileSync(join(root, '.lan-on'), '')
   writeFileSync(join(root, 'kanban.ps1'), `param([switch]$Silent, [switch]$Lan)

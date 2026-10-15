@@ -48,6 +48,23 @@ function Get-NzAlertTime {
 function Send-BoardDownPush {
     Send-Push 'Kanban board down' "The Kanban board did not respond at $(Get-NzAlertTime). The watchdog is checking recovery." 'BE'
 }
+# Cards the board is running now: its Working cards, plus worktrees in the integrating state
+# (the board's integration pass). Throws when the board or a registry cannot be read; the caller treats that as busy.
+function Get-InFlightCardCount {
+    param([int]$Port, [string]$ProjectsRoot, [string[]]$Projects)
+    $total = 0
+    foreach ($project in $Projects) {
+        $board = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/board?project=$project" -TimeoutSec 10
+        $working = $board.board.working
+        if ($working) { $total += @($working).Count }
+        $registry = Join-Path $ProjectsRoot "$project\TASKS\.board-worktrees.json"
+        if (Test-Path -LiteralPath $registry) {
+            $entries = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+            $total += @($entries.PSObject.Properties | Where-Object { $_.Value.state -eq 'integrating' }).Count
+        }
+    }
+    return $total
+}
 # This PC's phone (LAN) address: same rule as kanban.ps1 (DHCP, so it moves).
 function Get-LanAddress {
     (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
