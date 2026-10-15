@@ -698,6 +698,49 @@ test('integrationCheck: rebased card passes and integrates, a failure returns to
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+// Audit 2026-10-16 F1 AC1 (Injectbuddy I1322): Files list `public/app.js` at Workspace `.` must match the commit path.
+test('the allowed-files check keeps a public/ prefix for a card at Workspace . and integrates its commit', () => {
+  const f = fixture()
+  try {
+    mkdirSync(join(f.integration, 'public'))
+    writeFileSync(join(f.integration, 'public', 'app.js'), 'public base\n')
+    git(f.integration, 'add', 'public/app.js')
+    git(f.integration, 'commit', '-m', 'public folder')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1', 'public/app.js'), gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'public', 'app.js'), 'card one\n')
+    git(prepared.workspacePath, 'add', 'public/app.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    f.complete('T-1')
+    assert.equal(handoffCommitError(f.tasks, parseCard(findCard(f.tasks, 'T-1').path, 'completed')), null)
+    assert.deepEqual(reconcileCompletedWorktrees({ tasksDir: f.tasks }).map(({ id, status }) => ({ id, status })), [{ id: 'T-1', status: 'integrated' }])
+    assert.equal(readFileSync(join(f.integration, 'public', 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'card one\n')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// Audit 2026-10-16 F1 AC2/AC3: the same rule failing twice goes to Owner with its text, once logged.
+test('a card commit outside its Files list fails once, then the second identical failure goes to Owner without more polls', async () => {
+  const f = fixture()
+  try {
+    const t1 = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1', 'app.js'), gitSettings: f.settings })
+    writeFileSync(join(t1.workspacePath, 'other.js'), 'card\n')
+    git(t1.workspacePath, 'add', 'other.js')
+    git(t1.workspacePath, 'commit', '-m', 'card')
+    f.complete('T-1')
+    const run = () => reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test' })
+    const [first] = (await run()).filter(r => r.id === 'T-1')
+    assert.equal(first.status, 'issue')
+    assert.match(first.reason, /commit must change only card-listed files/)
+    assert.equal(findCard(f.tasks, 'T-1').column, 'completed')
+    const [second] = (await run()).filter(r => r.id === 'T-1')
+    assert.deepEqual([second.status, second.to], ['returned', 'owner'])
+    assert.equal(findCard(f.tasks, 'T-1').column, 'owner')
+    assert.match(readFileSync(findCard(f.tasks, 'T-1').path, 'utf8'), /commit must change only card-listed files[\s\S]*other\.js/)
+    const history = readdirSync(join(f.tasks, '.history')).map(name => readFileSync(join(f.tasks, '.history', name), 'utf8')).join()
+    assert.match(history, /"event":"integration-repeated-failure"[^\n]*commit must change only card-listed files/)
+    assert.deepEqual((await run()).filter(r => r.id === 'T-1'), [], 'Owner cards are not retried by the board')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 // HK22: a conflict-state card (the board already tried and moved it out) dragged back to Completed.
 async function conflictCardMovedBack({ masterFile, mutate, failures = 1 }) {
   const f = fixture()

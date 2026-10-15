@@ -210,6 +210,19 @@ function rebaseRetry(tasksDir, cardId, result, now) {
   return { id: cardId, status: 'held', reason }
 }
 
+// Audit 2026-10-16 F1: a card-commit rule that fails the same way twice (a commit outside its Files list)
+// cannot pass by retrying. The first failure stays in Completed with its reason; the second identical
+// one goes to Owner with the text, instead of re-running the same check on every poll (Injectbuddy I1322:
+// 49 polls over 7.7 h, while its held files blocked other cards).
+function repeatedIssue(tasksDir, cardId, result) {
+  const previous = readWorktrees(tasksDir)[cardId]?.issueFailure
+  const count = previous?.reason === result.reason ? previous.count + 1 : 1
+  updateWorktree(tasksDir, cardId, { issueFailure: { reason: result.reason, count } })
+  if (count < 2) return result
+  appendHistory(tasksDir, cardId, { event: 'integration-repeated-failure', reason: result.reason, count })
+  return returnIntegrationConflict(tasksDir, cardId, { reason: result.reason, blocked: true })
+}
+
 // Recorded Check re-runs in flight under `background`, by tasksDir + card id: { commit, result }.
 const recordedChecks = new Map()
 const RECORDED_RUNNING = 'recorded check is running in the background'
@@ -286,6 +299,7 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     if (gated) { results.push(gated); continue }
     const batch = readWorktrees(tasksDir)[card.id]?.state === 'rebased' ? [{ id: card.id, status: 'rebased' }] : io.reconcile({ tasksDir, onlyIds: [card.id] })
     for (const result of batch) {
+      if (result.status === 'issue') { results.push(repeatedIssue(tasksDir, card.id, result)); continue }
       if (result.status === 'conflict') {
         const retry = rebaseRetry(tasksDir, card.id, result, now)
         results.push(retry || returnIntegrationConflict(tasksDir, card.id, result)); continue
