@@ -62,6 +62,10 @@ const { auditFindings, cardsFromAudit } = await import('./lib/audit-cards.mjs')
 const { readReviewClaims, MAX_REVIEWERS } = await import('./lib/review-claims.mjs')
 const { cleanClosedReviewSnapshots } = await import('./lib/review-snapshots.mjs')
 const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-watchdog.mjs')
+// Resume watch (lib/resume-watch.mjs): work must start again after a usage-limit reset, a low disk or memory
+// recovery, or a board restart; one inbox line per project if it does not.
+const { beginStoppage, clearStoppage, dropStoppages, noteStart, readyCard, checkResume, resumeAlert } = await import('./lib/resume-watch.mjs')
+const resumeStart = project => { try { noteStart(HERE, { project }) } catch (err) { console.error(`resume watch failed: ${err.message}`) } }
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
 const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { dispatchTestResults } = await import('./lib/test-handoff.mjs')
@@ -192,8 +196,10 @@ function checkDisk(now = Date.now()) {
     const message = `Kanban: drive ${drive} low on space (${gb.toFixed(1)} GB free); new agents paused`
     for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than ${DISK_RESUME_GB} GB is free`, 'error')
     notifyManagerException({ boardRoot: HERE, key: 'low-disk', title: `Drive ${drive} low on space`, detail: message, code: 'LD' }).catch(err => console.error(`low-disk inbox alert failed: ${err.message}`))
+    beginStoppage(HERE, { id: `disk-low:${now}`, projects: config.projects, kind: 'disk', now })
   } else if (next.event === 'resume') {
     for (const project of config.projects) activity(project, '-', 'resume', `Drive ${drive} has ${gb.toFixed(1)} GB free; new agents resumed`)
+    clearStoppage(HERE, { kind: 'disk', projects: config.projects, now })
   }
   if (disk.low) {
     for (const project of config.projects) {
@@ -258,8 +264,10 @@ async function checkMemory() {
       const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
       for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
       notifyManagerException({ boardRoot: HERE, key: 'low-memory', title: 'PC low on memory', detail: message, code: 'LM' }).catch(err => console.error(`low-memory inbox alert failed: ${err.message}`))
+      beginStoppage(HERE, { id: `memory-low:${Date.now()}`, projects: config.projects, kind: 'memory' })
     } else if (next.event === 'resume') {
       for (const project of config.projects) activity(project, '-', 'resume', `PC has ${gb.toFixed(1)} GB of commit free; new agents resumed`)
+      clearStoppage(HERE, { kind: 'memory', projects: config.projects, now: Date.now() })
     }
     if (memory.low) {
       const entries = [...liveAgents].map(([project, agents]) => ({ project, tasksDir: tasksDirOf(project), session: sessionOf(project), agents }))
@@ -694,6 +702,7 @@ async function tick(project, agents) {
     assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
   })
   if (started.length) {
+    resumeStart(project)
     console.log(`spawned: ${started.join(', ')}`)
     for (const id of started) {
       recordSpawn({ project, cap: max })
@@ -794,6 +803,23 @@ async function pollProject(project) {
         if (lastActivityHold.get(`${project}:stall-watchdog`) !== err.message) activity(project, '-', 'stall-watchdog', `stall check failed: ${err.message}`, 'error')
         lastActivityHold.set(`${project}:stall-watchdog`, err.message)
       }
+    }
+    // Resume watch: after a stoppage, a queued card with a free slot must start. One inbox line if none does.
+    try {
+      const board = readBoard(tasksDir)
+      const holds = { ...integrationHolds.get(project), ...holdsFor(project), ...quotaHoldsOf(project, board) }
+      const paused = lowDisk || controlState(project, CONFIG_PATH).paused || !holdsReady.has(project) || config.maxConcurrentAgents <= 0
+        || breakerState(project).breakerTripped || !missionAllowsProject(project)
+      const ready = readyCard({ queue: board.queue, holds, slotsFree: slotsFree({ tasksDir, agents, max: config.maxConcurrentAgents }), paused })
+      const stuck = checkResume(HERE, { project, ready: !!ready })
+      if (stuck) {
+        const { key, title, detail } = resumeAlert(stuck, { cardId: ready.id })
+        notifyManagerException({ boardRoot: HERE, key, cooldownMs: Infinity, title, detail, code: 'RW' })
+          .catch(err => console.error(`resume alert failed: ${err.message}`))
+      }
+    } catch (err) {
+      if (lastActivityHold.get(`${project}:resume-watch`) !== err.message) activity(project, '-', 'resume-watch', `resume check failed: ${err.message}`, 'error')
+      lastActivityHold.set(`${project}:resume-watch`, err.message)
     }
     await resumeDeliveries(sessionOf(project))
 
@@ -940,6 +966,7 @@ async function pollProject(project) {
       if (planner) {
         if (planner.spawnedNewAgent) recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
+        resumeStart(project)
         for (const id of planner.cards) activity(project, id, 'planner-start', 'Lead Planner started')
         boardLog(`Lead Planner started for ${planner.cards.length} card(s): ${planner.cards.join(', ')}`)
         broadcastBoard(project)
@@ -962,6 +989,7 @@ async function pollProject(project) {
       if (reviewer) {
         recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
+        resumeStart(project)
         for (const id of reviewer.cards) activity(project, id, 'reviewer-start', 'Reviewer started')
         boardLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
         broadcastBoard(project)
@@ -986,6 +1014,7 @@ async function pollProject(project) {
     }
     // One alert per engine block (its reset time is in the key), shared by every project's poll.
     for (const [kind, block] of Object.entries(activeQuota(HERE))) {
+      beginStoppage(HERE, { id: `quota:${kind}:${block.until}`, projects: config.projects, kind: 'quota', clearedAt: block.until })
       await notifyManagerException({ boardRoot: HERE, key: `quota:${kind}:${block.until}`, cooldownMs: Infinity, title: `${kind} ${block.why || 'usage limit'}`,
         detail: block.why === SIGN_IN
           ? `The ${kind} CLI on the board PC is signed out, so no ${kind} agent can start on any project. The operator must sign it in again (run it, then /login). The board tries one start again at ${formatNZTime(block.until)}; waiting cards keep their lanes.`
@@ -1623,6 +1652,7 @@ const handleRequest = async (req, res) => {
       })
       if (!startedId) throw new Error(holdsFor(p)[card.id] || `${card.id} did not start`)
       activity(p, startedId, 'builder-start', 'Builder started by hand')
+      resumeStart(p)
       boardLog(`${startedId} spawned by hand`)
       json(res, 200, { ok: true, started: startedId })
     } catch (err) {
@@ -1865,6 +1895,7 @@ const handleRequest = async (req, res) => {
       })
       recordSpawn({ project: p, cap: config.maxConcurrentAgents })
       tripBreakerIfNeeded(p)
+      resumeStart(p)
       boardLog(`review started for ${result.cards.length} card(s): ${result.cards.join(', ')}`)
       for (const id of result.cards) activity(p, id, 'reviewer-start', 'Reviewer started')
       json(res, 200, { ok: true, reviewer: result })
@@ -1963,6 +1994,10 @@ async function startPollers() {
   console.log(`herdr: ${(await isRunning()) ? 'up' : 'down'}`)
   cleanClosedReviewSnapshots(REVIEW_ROOT) // background; failures go to the activity log
   setInterval(() => cleanClosedReviewSnapshots(REVIEW_ROOT), 60000)
+  // A relaunch or code update (restart-kanban.ps1, the watchdog) is a stoppage: work must start again. The
+  // pause state is sampled again below, so open disk and memory stoppages from before are dropped here.
+  dropStoppages(HERE, ['disk', 'memory'])
+  beginStoppage(HERE, { id: `boot:${Date.now()}`, projects: config.projects, kind: 'restart', clearedAt: Date.now() })
   memoryLoop()
   diskLoop()
 

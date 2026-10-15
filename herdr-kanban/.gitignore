@@ -18,6 +18,7 @@ review-evidence/
 # Runtime state and evidence (not source)
 .server.pid
 .manager-alerts.json
+.resume-watch.json
 .engine-quota.json
 .watchdog-outage
 .watchdog-*-outage
