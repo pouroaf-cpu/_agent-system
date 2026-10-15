@@ -325,6 +325,8 @@ select {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
 }
 .auto-review input { width: 16px; height: 16px; margin: 0; accent-color: var(--active); }
+.settings-legacy { display: flex; flex-direction: column; gap: 4px; }
+.settings-legacy .auto-review { min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
 
 /* ---- segmented control: priority, board mode, agent limit ---- */
 .pri-set {
@@ -406,7 +408,6 @@ select {
 }
 .card-run-control { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .card-run-control p { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.more-menu .auto-review { padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; }
 
 .drawer-body {
   flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto;

@@ -1513,7 +1513,35 @@ function renderSettingsScreen() {
 
 
 
-  wrap.append(mh, mp, mrow, h, p, row, now);
+  // Audit 2026-10-16 F7: the legacy auto-review marker is set per card (a line in the card
+  // file), so Settings lists the cards it applies to with their current value.
+  const legacy = Object.entries(state.board || {}).filter(([key]) => key !== 'archive').flatMap(([, cards]) => cards)
+    .filter(card => card.column === 'completed' || card.autoReview);
+  const lh = document.createElement('h2');
+  lh.textContent = 'Move legacy Completed cards to Review';
+  const lp = document.createElement('p');
+  lp.className = 'settings-help';
+  lp.textContent = 'When on for a card, that card moves from Completed to Review on its own. ' +
+    'It is set card by card, and this list shows every card in Completed or with it on.';
+  const ln = document.createElement('p');
+  ln.className = 'settings-now';
+  const on = legacy.filter(card => card.autoReview).length;
+  ln.textContent = on ? 'On for ' + on + ' of ' + legacy.length + ' card' + (legacy.length === 1 ? '' : 's') + '.' : 'Off for every card.';
+  const list = document.createElement('div');
+  list.className = 'settings-legacy';
+  for (const card of legacy) {
+    const label = document.createElement('label');
+    label.className = 'auto-review';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!card.autoReview;
+    box.addEventListener('change', () => setAutoReview(card.id, box.checked));
+    label.append(box, document.createTextNode(' ' + card.id + ' ' + (card.title || '') + ' (' + (LANE_LABEL[card.column] || card.column) + ')'));
+    list.append(label);
+  }
+  if (!legacy.length) list.append(note('No cards are in Completed right now.'));
+
+  wrap.append(mh, mp, mrow, h, p, row, now, lh, lp, ln, list);
 
   el.screenBody.append(wrap);
 
@@ -2775,7 +2803,7 @@ function renderDrawer() {
 
   el.drawerBody.innerHTML = '';
 
-  // ---- More menu: run this card, and the legacy auto-review marker.
+  // ---- More menu: run this card. The legacy auto-review marker lives in Settings (audit 2026-10-16 F7).
   const cardRun = (state.cardRuns || []).filter(r => r.cardId === card.id).at(-1);
   const runBox = document.createElement('div');
   runBox.className = 'card-run-control';
@@ -2801,16 +2829,7 @@ function renderDrawer() {
     } catch (err) { runStatus.textContent = err.message; runButton.disabled = false; }
   });
   runBox.append(runButton, runStatus);
-  // Auto-review is a marker inside the card file, so this toggle rewrites the
-  // card — it is not board-only state.
-  const ar = document.createElement('label');
-  ar.className = 'auto-review';
-  const arBox = document.createElement('input');
-  arBox.type = 'checkbox';
-  arBox.checked = !!card.autoReview;
-  arBox.addEventListener('change', () => setAutoReview(card.id, arBox.checked));
-  ar.append(arBox, document.createTextNode(' Move legacy Completed cards to Review automatically'));
-  el.drawerMoreMenu.replaceChildren(runBox, ar);
+  el.drawerMoreMenu.replaceChildren(runBox);
 
   // ---- The agent's own words on what it needs: the one thing you have to read.
   // Handover notes only mean something where the card still waits on someone.
