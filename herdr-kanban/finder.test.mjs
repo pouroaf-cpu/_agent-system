@@ -9,7 +9,7 @@ import { createCard, findCard, readBoard } from './lib/cards.mjs'
 import { runCardPlanner, readCardPlanners, busyPlanners, parseFinderList, finderText, writeFinderList, parseFinderSize, operatorRetry, FINDER_TIMEOUT_MS } from './lib/card-planner.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 import { stageIndicators } from './lib/stage-indicators.mjs'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 import { plannerPrompt, finderPrompt } from './lib/prompt.mjs'
 import { agentName, agentRole } from './lib/ids.mjs'
 

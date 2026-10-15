@@ -6,7 +6,7 @@ import { formatNZTime, formatNZText } from './nz-time.mjs'
 // never repeats a push.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { herdrLog } from './herdr.mjs'
+import { boardLog } from './board-log.mjs'
 import { readBoard, isOperatorHold } from './cards.mjs'
 import { laneEnteredAt } from './card-history.mjs'
 import { postInbox } from './inbox.mjs'
@@ -42,7 +42,7 @@ export async function notifyManagerException({
   cooldownMs = COOLDOWN_MS,
   send = async () => {}, // inbox only: no board Pushovers to the operator (2026-10-09)
   inbox = join(boardRoot, '..', '_roles', 'KANBAN_MANAGER-INBOX.md'),
-  log = herdrLog,
+  log = boardLog,
 }) {
   const file = alertStatePath(boardRoot)
   const state = readState(file)

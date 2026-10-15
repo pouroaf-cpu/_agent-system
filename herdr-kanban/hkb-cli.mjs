@@ -38,7 +38,7 @@ import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWor
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
-import { approvedManagedModel } from './lib/herdr.mjs'
+import { approvedManagedModel } from './lib/agent-launch.mjs'
 import { assertReviewHandoff, assertReviewInputs, reviewClaimFor } from './lib/review-claims.mjs'
 import { fileURLToPath } from 'node:url'
 import { postInbox } from './lib/inbox.mjs'

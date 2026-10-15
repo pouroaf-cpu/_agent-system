@@ -9,7 +9,7 @@ import { createCard, findCard } from './lib/cards.mjs'
 import { readCardPlanners, runCardPlanner, operatorRetry } from './lib/card-planner.mjs'
 import { saveCardPlanners } from './lib/planner-state.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 
 const HKB = fileURLToPath(new URL('./hkb.mjs', import.meta.url))
 // Hand off as the card's Planner, recorded on the given engine.

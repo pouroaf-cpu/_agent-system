@@ -6,9 +6,11 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 
 const starts = [], claims = []
+mock.module('./lib/project-key.mjs', { namedExports: { sessionOf: p => p.toLowerCase() } })
+mock.module('./lib/board-log.mjs', { namedExports: { boardLog: () => {} } })
 mock.module('./lib/herdr.mjs', { namedExports: {
   approvedManagedModel: () => ['gpt-6.1-sol', 'gpt-6-luna', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5'],
-  sessionOf: p => p.toLowerCase(), herdrLog: () => {}, agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
+  agentWorkspaceOr: async () => 'w', waitForPrompt: async () => {},
   tabCreate: async () => ({ root_pane: { pane_id: 'r1' } }), agentStart: async args => { starts.push(args) },
   agentList: async () => [{ pane_id: 'r1', agent_status: 'working' }], agentsForProject: async () => [],
   agentPrompt: async () => {}, paneRead: async () => '', paneSendKeys: async () => {}, paneClose: async () => {},

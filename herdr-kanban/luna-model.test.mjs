@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 import { assignmentFor, catalog, engineForAssignment, globalSettings, validateSettingsPatch } from './lib/agent-settings.mjs'
 
 test('requested role defaults resolve to the right launch arguments', () => {

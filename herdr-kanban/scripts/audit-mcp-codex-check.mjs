@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { auditMcpEngine } from '../lib/audit-mcp.mjs'
-import { agentStartArgs } from '../lib/herdr.mjs'
+import { agentStartArgs } from '../lib/agent-launch.mjs'
 
 const output = resolve('artifacts/audit-mcp-smoke')
 const fixture = resolve(output, 'runtime-card.md')

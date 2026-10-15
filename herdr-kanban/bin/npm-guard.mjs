@@ -1,4 +1,4 @@
-// Board agents get this folder first on PATH (lib/herdr.mjs), so `npm` lands here.
+// Board agents get this folder first on PATH (lib/agent-launch.mjs), so `npm` lands here.
 // A card checkout's node_modules is a junction to the shared integration install;
 // `npm ci` through it emptied that install for every card (Tradeflow TF103/TF105,
 // 2026-09-27). Installs under such a link are refused; everything else runs real npm.

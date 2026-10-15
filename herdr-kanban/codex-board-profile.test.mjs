@@ -13,12 +13,12 @@ test('Codex workers get the board profile listing the curated plugin skills', as
     mkdirSync(skill, { recursive: true })
     writeFileSync(join(skill, 'SKILL.md'), '# nextjs')
     process.env.CODEX_HOME = home
-    const { writeCodexBoardProfile, agentStartArgs, CODEX_BOARD_PROFILE } = await import('./lib/herdr.mjs')
+    const { writeCodexBoardProfile, agentStartArgs, CODEX_BOARD_PROFILE } = await import('./lib/agent-launch.mjs')
     writeCodexBoardProfile()
     const toml = readFileSync(CODEX_BOARD_PROFILE, 'utf8')
     assert.match(toml, /\[\[skills\.config\]\]\npath = '.+nextjs[\\/]SKILL\.md'\nenabled = false/)
     // The npm guard (bin/) goes first on the shell PATH, keeping the rest of PATH.
-    const { NPM_SHIM_DIR, boardAgentPath } = await import('./lib/herdr.mjs')
+    const { NPM_SHIM_DIR, boardAgentPath } = await import('./lib/agent-launch.mjs')
     assert.equal(toml.match(/\[shell_environment_policy\.set\]\nPATH = (".*")\n/)?.[1], JSON.stringify(boardAgentPath()))
     assert.deepEqual(boardAgentPath(`C:\\a;${NPM_SHIM_DIR};C:\\b`).split(';'), [NPM_SHIM_DIR, 'C:\\a', 'C:\\b'])
     const args = agentStartArgs({ name: 'b-t-1', paneId: 'w:p1', model: 'gpt-6-luna', engine: { kind: 'codex' }, workspacePath: 'C:/x', browser: false })
@@ -41,7 +41,7 @@ test('Codex workers get the board profile listing the curated plugin skills', as
 test('writeCodexWorkspaceHooks registers the board Stop hook in the workspace, keeping any hooks already there', async () => {
   const root = mkdtempSync(join(tmpdir(), 'codex-workspace-'))
   try {
-    const { writeCodexWorkspaceHooks } = await import('./lib/herdr.mjs')
+    const { writeCodexWorkspaceHooks } = await import('./lib/agent-launch.mjs')
     const hooksFile = join(root, '.codex', 'hooks.json')
     mkdirSync(join(root, '.codex'), { recursive: true })
     writeFileSync(hooksFile, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] } }))

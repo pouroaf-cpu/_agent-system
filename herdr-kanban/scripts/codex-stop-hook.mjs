@@ -1,6 +1,6 @@
 // Stop hook for board-launched Codex agents. Registered per card, not globally: each
 // card runs in its own disposable git worktree (lib/worktrees.mjs), and
-// writeCodexWorkspaceHooks (lib/herdr.mjs) drops this hook into that worktree's own
+// writeCodexWorkspaceHooks (lib/agent-launch.mjs) drops this hook into that worktree's own
 // .codex/hooks.json before the agent starts. The operator's own Codex chats never cd
 // into a card worktree, so this never runs for them; ~/.codex/hooks.json and
 // ~/.codex/config.toml are untouched (confirmed empirically: a board.config.toml

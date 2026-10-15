@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 const key = String.raw`'C:\Users\PFrew\.codex\hooks.json:user_prompt_submit:0:0'={enabled=false}`
 const hooks = args => args.find(arg => arg.startsWith('hooks.state=')) ?? ''
 for (const name of ['kb-planner-t-93', 'kb-builder-t-93', 'kb-review-t-93', 'kanban-observer']) {

@@ -1,7 +1,8 @@
 // Spawn a herdr agent for one card: new tab -> agent start -> prompt.
 // A half-spawned tab is worse than no tab, so any failure closes the pane it made.
 
-import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, sessionOf, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
+import { tabCreate, agentStart, agentPrompt, paneClose, agentWorkspaceOr, waitForPrompt, paneRead, paneSendKeys, agentList, beginSpawn, endSpawn } from './herdr.mjs'
+import { sessionOf } from './project-key.mjs'
 import { isHeadless } from './headless.mjs'
 import { backendFor } from './agent-backend.mjs'
 import { workerPrompt, paneLabel, agentName, isCodex, TEST_DATA_RULE } from './prompt.mjs'

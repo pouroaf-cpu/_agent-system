@@ -149,7 +149,7 @@ export async function resumeStagedCardRunEnter(project, runId, role, { requestId
   if (role !== 'reviewer' || source?.status !== 'stopped' || !recoverableStop || !['reserved', 'delivered'].includes(stage?.status) || !stage.prompted || stage.entered || !stage.paneId || !source.autoReview) throw denied('No timed-out, unsubmitted Reviewer assignment to recover')
   if (!pausedRunEnvironment() || activeCardRun()) throw denied('Pause all projects; another authorization cannot be active')
   const transport = io || await import('./herdr.mjs')
-  const { sessionOf } = await import('./herdr.mjs')
+  const { sessionOf } = await import('./project-key.mjs')
   const { readDelivery, saveDelivery } = await import('./delivery-state.mjs')
   const { reviewClaimFor, assertReviewInputs, updateReviewClaim } = await import('./review-claims.mjs')
   const { readWorkflow } = await import('./workflow-state.mjs')

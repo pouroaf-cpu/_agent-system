@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { isCardId, cardNumber, nextCardId, agentName, agentRole, isBoardAgent, isReviewerAgent, isSweeperAgent } from './lib/ids.mjs'
 import { createCard, parseCard, findCard } from './lib/cards.mjs'
-import { herdrArgv, projectAgents, splitRef, approvedManagedModel, SHARED_SESSION } from './lib/herdr.mjs'
+import { herdrArgv, projectAgents, splitRef, SHARED_SESSION } from './lib/herdr.mjs'
+import { approvedManagedModel } from './lib/agent-launch.mjs'
 
 const tasks = () => {
   const dir = mkdtempSync(join(tmpdir(), 'hkb-ids-'))

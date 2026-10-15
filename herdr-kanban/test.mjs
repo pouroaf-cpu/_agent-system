@@ -16,7 +16,8 @@ import { bind, readBindings, unbind, liveBindings, reap } from './lib/bindings.m
 import { promoteAutoReview, promotePlanned, routeReviewVerdicts, slotsFree, reviewerRunning, spawnReviewer, autoSpawn, autoReview, closeFinished, unmetBlockers, preflightBlocks, startHoldReason, holdsFor } from './lib/autospawn.mjs'
 import { workerPrompt, reviewerPrompt, plannerPrompt, agentName, isBoardAgent, paneLabel } from './lib/prompt.mjs'
 import { recordFailure, coolingDown, attemptsFor, clearRetries } from './lib/retries.mjs'
-import { findWorkspace, agentWorkspace, parseAgentList, agentStartArgs, assertManagedModel, sessionServerArgs } from './lib/herdr.mjs'
+import { findWorkspace, agentWorkspace, parseAgentList, sessionServerArgs } from './lib/herdr.mjs'
+import { agentStartArgs, assertManagedModel } from './lib/agent-launch.mjs'
 import { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } from './lib/breaker.mjs'
 import { computeReviewPlan, cardFiles, cardEstimates, REVIEW_BATCH_CAP_MINUTES } from './lib/review-plan.mjs'
 import { deliverWith } from './lib/spawn.mjs'
@@ -2138,7 +2139,7 @@ test('spawnForCard preserves a pane when delivery reports manual Pasted Content 
 // Each project has its own herdr session; a call with no --session hits the default
 // one, which is how a Tradeflow builder could open inside the Injectbuddy window.
 test('every project-scoped herdr call is session-scoped, and the session is the lowercased project', async () => {
-  const { sessionOf } = await import('./lib/herdr.mjs')
+  const { sessionOf } = await import('./lib/project-key.mjs')
   assert.equal(sessionOf('Tradeflow'), 'tradeflow')
   assert.equal(sessionOf('Last Tahi Standing'), 'last-tahi-standing')
   assert.equal(sessionOf(undefined), null, 'no project means no --session, i.e. the default session')

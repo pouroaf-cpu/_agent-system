@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,rmSync,readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {recordUsageStart,recordUsageFinish,reconcileUsage,readUsage,usageSummary,mergeUsageSummaries,runSteps,tokenSnapshots} from './lib/request-usage.mjs'
-import {agentStartArgs} from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 import {parseManagerTasks} from './lib/manager-tasks.mjs'
 test('late HERDR identity recovers initial zero, final totals and deduplicates double starts',()=>{
  const dir=mkdtempSync(join(tmpdir(),'usage-identity-'))

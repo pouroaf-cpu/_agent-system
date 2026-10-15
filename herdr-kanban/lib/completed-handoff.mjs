@@ -10,7 +10,8 @@ import { readUsage, recordUsageFinish, agentSessionId } from './request-usage.mj
 import { readDelivery } from './delivery-state.mjs'
 import { isHeadless } from './headless.mjs'
 import { appendHistory, writeCurrentFeedback, builderHandedOff, logAgentOutput } from './card-history.mjs'
-import { agentList, paneRead, paneClose, sessionOf } from './herdr.mjs'
+import { agentList, paneRead, paneClose } from './herdr.mjs'
+import { sessionOf } from './project-key.mjs'
 import { readWorktrees, reconcileCompletedWorktrees, updateWorktree, rebaseCompletedOntoIntegration, prepareWorktreeEnvironment, startDependencyInstall, installRunning } from './worktrees.mjs'
 import { isTransient, nextRetry, retryHold, killTree } from './transient.mjs'
 

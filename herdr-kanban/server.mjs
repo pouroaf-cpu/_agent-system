@@ -47,7 +47,9 @@ const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
 const { COLUMNS, ARCHIVE, createCard, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
-const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace, herdrLog, sessionOf } = await import('./lib/herdr.mjs')
+const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace } = await import('./lib/herdr.mjs')
+const { boardLog } = await import('./lib/board-log.mjs')
+const { sessionOf } = await import('./lib/project-key.mjs')
 const { readBindings, unbind, onBindingsAlert } = await import('./lib/bindings.mjs')
 const { applyReading, sampleDelayMs, stopNewestBuilder } = await import('./lib/memory-gate.mjs')
 const { stageIndicators } = await import('./lib/stage-indicators.mjs')
@@ -205,7 +207,7 @@ async function checkMemory() {
     const next = applyReading(memory, gb)
     memory.low = next.low
     memory.minGb = next.minGb
-    if (live && gb < before && gb < 8) herdrLog(`free commit low-water mark ${gb.toFixed(1)} GB with ${live} live agents`)
+    if (live && gb < before && gb < 8) boardLog(`free commit low-water mark ${gb.toFixed(1)} GB with ${live} live agents`)
     if (next.event === 'low') {
       const message = `Kanban: PC low on memory (${gb.toFixed(1)} GB of commit free); new agents paused`
       for (const project of config.projects) activity(project, '-', 'hold', `${message} until more than 6 GB is free`, 'error')
@@ -305,7 +307,7 @@ function tripBreakerIfNeeded(project) {
     announcedBreakers.add(project)
     console.log(`circuit breaker tripped: ${state.reason} — auto-spawn halted, reset from Settings`)
     activity(project, '-', 'breaker-trip', state.reason, 'error')
-    herdrLog(`${project}: circuit breaker tripped: ${state.reason}`, 'error')
+    boardLog(`${project}: circuit breaker tripped: ${state.reason}`, 'error')
   }
 }
 
@@ -886,7 +888,7 @@ async function pollProject(project) {
         if (planner.spawnedNewAgent) recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
         for (const id of planner.cards) activity(project, id, 'planner-start', 'Lead Planner started')
-        herdrLog(`Lead Planner started for ${planner.cards.length} card(s): ${planner.cards.join(', ')}`)
+        boardLog(`Lead Planner started for ${planner.cards.length} card(s): ${planner.cards.join(', ')}`)
         broadcastBoard(project)
       }
       }
@@ -908,7 +910,7 @@ async function pollProject(project) {
         recordSpawn({ project, cap: config.maxConcurrentAgents })
         tripBreakerIfNeeded(project)
         for (const id of reviewer.cards) activity(project, id, 'reviewer-start', 'Reviewer started')
-        herdrLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
+        boardLog(`review started for ${reviewer.cards.length} card(s): ${reviewer.cards.join(', ')}`)
         broadcastBoard(project)
       }
     }
@@ -1469,7 +1471,7 @@ const handleRequest = async (req, res) => {
       if (['pou', 'owner'].includes(before.column) && to !== 'archive') forgetInstallFailures(tasksDirOf(p), card.id)
       if (to === 'archive') operatorArchiveRelease(p, id)
       activity(p, card.id, 'move', `${before.column} -> ${to} (board)`)
-      herdrLog(`${card.id} → ${to} (board)`)
+      boardLog(`${card.id} → ${to} (board)`)
       json(res, 200, { ok: true, card })
       broadcastBoard(p)
     } catch (err) {
@@ -1484,7 +1486,7 @@ const handleRequest = async (req, res) => {
       if (!config.projects.includes(p)) throw new Error('Unknown project')
       const { card, investigation } = operatorApprove(tasksDirOf(p), id)
       activity(p, card.id, 'move', `owner -> ${card.column} (approved by operator${investigation ? '; investigation approved' : ''})`)
-      herdrLog(`${card.id} approved → ${card.column} (board)`)
+      boardLog(`${card.id} approved → ${card.column} (board)`)
       json(res, 200, { ok: true, card, investigation })
       broadcastBoard(p)
     } catch (err) {
@@ -1519,7 +1521,7 @@ const handleRequest = async (req, res) => {
       }
       operatorArchiveRelease(p, card.id)
       activity(p, card.id, 'move', `${before} -> archive (finished by operator)`)
-      herdrLog(`${card.id} finished → archive (board)`)
+      boardLog(`${card.id} finished → archive (board)`)
       json(res, 200, { ok: true, card })
     } catch (err) {
       json(res, 400, { ok: false, error: err.message })
@@ -1568,7 +1570,7 @@ const handleRequest = async (req, res) => {
       })
       if (!startedId) throw new Error(holdsFor(p)[card.id] || `${card.id} did not start`)
       activity(p, startedId, 'builder-start', 'Builder started by hand')
-      herdrLog(`${startedId} spawned by hand`)
+      boardLog(`${startedId} spawned by hand`)
       json(res, 200, { ok: true, started: startedId })
     } catch (err) {
       activity(p, id || '-', 'failure', err.message, 'error')
@@ -1801,7 +1803,7 @@ const handleRequest = async (req, res) => {
       })
       recordSpawn({ project: p, cap: config.maxConcurrentAgents })
       tripBreakerIfNeeded(p)
-      herdrLog(`review started for ${result.cards.length} card(s): ${result.cards.join(', ')}`)
+      boardLog(`review started for ${result.cards.length} card(s): ${result.cards.join(', ')}`)
       for (const id of result.cards) activity(p, id, 'reviewer-start', 'Reviewer started')
       json(res, 200, { ok: true, reviewer: result })
     } catch (err) {
@@ -1916,11 +1918,11 @@ async function startPollers() {
   })
   setInterval(() => {
     const pids = stopRunawayTsservers(config.projectsRoot)
-    if (pids.length) herdrLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
+    if (pids.length) boardLog(`stopped runaway tsserver(s) ${pids.join(', ')} under ${config.projectsRoot}`, 'warn')
     const stale = stopStaleE2eServers()
-    if (stale.length) herdrLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
+    if (stale.length) boardLog(`stopped abandoned e2e dev server(s) ${stale.join(', ')} (claude-e2e-*, over 4 h old)`, 'warn')
     const webkit = stopOrphanWebKit()
-    if (webkit.length) herdrLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
+    if (webkit.length) boardLog(`stopped orphaned WebKit process(es) ${webkit.join(', ')} (browser gone)`, 'warn')
     // A cleanup deferred at integration was only retried while the card sat in Completed or
     // Review, so an archived card's checkout stayed forever (11 on 2026-10-09, I947 with its server).
     for (const project of config.projects) {
@@ -1929,7 +1931,7 @@ async function startPollers() {
         const live = new Set([...board.completed, ...board.review].map(c => c.id))
         const onlyIds = Object.values(readWorktrees(tasksDir)).filter(e => e.state === 'integrated' && !e.cleaned && !live.has(e.cardId)).map(e => e.cardId)
         if (onlyIds.length) logIntegrationResults(project, reconcileCompletedWorktrees({ tasksDir, onlyIds }))
-      } catch (err) { herdrLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
+      } catch (err) { boardLog(`${project}: deferred worktree cleanup: ${err.message}`, 'warn') }
     }
   }, 10 * 60000)
 }

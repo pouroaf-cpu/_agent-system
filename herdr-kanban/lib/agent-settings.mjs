@@ -5,7 +5,7 @@ import { dirname } from 'node:path'
 import { builderDifficulty, DIFFICULTIES } from './difficulty.mjs'
 import { readWorkflow } from './workflow-state.mjs'
 import { findCard } from './cards.mjs'
-import { approvedManagedModel } from './herdr.mjs'
+import { approvedManagedModel } from './agent-launch.mjs'
 
 export const STAGES = ['finder', 'planning', 'plancheck', 'working', 'review', ...DIFFICULTIES.map(d => `builder-${d}`)]
 export const REASONING = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
@@ -63,7 +63,7 @@ export function globalSettings(config) {
   return Object.fromEntries(STAGES.map(stage => [stage, validateAssignment({ ...legacySetting(config, stage), ...saved[stage] }, `global ${stage}`)]))
 }
 
-// The launch guard (herdr.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
+// The launch guard (agent-launch.mjs BOARD_MODELS) refuses unapproved models per role. Refuse them
 // here too, or a saved setting only fails at agent start and sends cards to Owner (2026-09-26 I229).
 const ROLE = { finder: 'f', planning: 'p', plancheck: 'r', working: 'b', review: 'r', trivial: 'b' }
 function assertLaunchable(stage, setting) {

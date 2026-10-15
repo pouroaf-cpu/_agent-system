@@ -11,8 +11,10 @@ test('ordinary spawn delivers real current prompt without experimental hooks; ex
   writeFileSync(card.path, '# T-1\n## Files\n- app.js\n## Acceptance criteria\nExact result\n')
   const calls = [], deliveries = new Map(); let working = false, paused = false
   const agent = () => ({ pane_id: 'fixture-pane', tab_id: 'fixture-tab', agent_session: 'fixture-session', agent_status: working ? 'working' : 'idle' })
+  mock.module('./lib/project-key.mjs', { namedExports: { sessionOf: p => p } })
+  mock.module('./lib/board-log.mjs', { namedExports: { boardLog: () => {} } })
   mock.module('./lib/herdr.mjs', { namedExports: {
-    sessionOf: p => p, herdrLog: () => {}, tabCreate: async () => ({ root_pane: agent() }),
+    tabCreate: async () => ({ root_pane: agent() }),
     agentStart: async args => calls.push(['start', args]),
     agentPrompt: async (pane, text) => { calls.push(['prompt', text]); working = true },
     paneClose: async () => {}, agentWorkspaceOr: async p => p, waitForPrompt: async () => {},

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 import { failureCategory, failureDestination } from './lib/workflow-state.mjs'
 import { deliverWith } from './lib/spawn.mjs'
 

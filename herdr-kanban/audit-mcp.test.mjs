@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { auditMcpEngine, needsAuditMcp, auditPreflightBlocked, blockAuditPreflight } from './lib/audit-mcp.mjs'
-import { agentStartArgs } from './lib/herdr.mjs'
+import { agentStartArgs } from './lib/agent-launch.mjs'
 
 test('audit MCP opt-in is section-scoped, preserves model/engine and blocks unchanged prerequisites', () => {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-audit-mcp-'))

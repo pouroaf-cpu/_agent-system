@@ -14,8 +14,9 @@ test('implementation correction: missing prior Builder gets a fresh Builder with
   let agents = []
   const calls = [], logs = [], deliveries = new Map()
   const fresh = { pane_id: 'w1:p9@default', tab_id: 'w1:t9@default', agent_session: 'fresh' }
+  mock.module('./lib/project-key.mjs', { namedExports: { sessionOf: p => p.toLowerCase() } })
+  mock.module('./lib/board-log.mjs', { namedExports: { boardLog: () => {} } })
   mock.module('./lib/herdr.mjs', { namedExports: {
-    sessionOf: p => p.toLowerCase(), herdrLog: () => {},
     tabCreate: async args => { calls.push(['tab', args.cwd]); agents.push({ ...fresh, agent_status: 'idle' }); return { root_pane: fresh } },
     agentStart: async () => calls.push(['start']),
     agentPrompt: async (pane, text) => { calls.push(['prompt', pane, text]); for (const a of agents) if (a.pane_id === pane) a.agent_status = 'working' },

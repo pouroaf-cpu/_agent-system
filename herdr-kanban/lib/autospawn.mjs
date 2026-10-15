@@ -28,7 +28,9 @@ import { usageLimit, blockEngine, selectQuotaAssignment, engineKind, quotaKey } 
 import { readDelivery, saveDelivery } from './delivery-state.mjs'
 import { reviewerPrompt, planCheckerPrompt, agentName, isBoardAgent, reviewLabel, PLAN_FAIL_TAGS } from './prompt.mjs'
 import { CARD_ID, agentRole, isReviewerAgent } from './ids.mjs'
-import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn, herdrLog, sessionOf } from './herdr.mjs'
+import { tabCreate, agentStart, agentList, paneClose, paneRead, agentWorkspaceOr, waitForPrompt, isSpawning, beginSpawn, endSpawn } from './herdr.mjs'
+import { boardLog } from './board-log.mjs'
+import { sessionOf } from './project-key.mjs'
 import { backendFor } from './agent-backend.mjs'
 import { isHeadless } from './headless.mjs'
 import { coolingDown, clearRetries } from './retries.mjs'
@@ -479,7 +481,7 @@ export async function autoSpawn({ project, projectPath, tasksDir, boardRoot, mod
         updateWorkflow(tasksDir, moved.id, { builder: binding, operational: null, startFailure: null })
         if (choice.message) activityLog({ tasksDir, project, cardId: moved.id, event: 'builder-start', message: choice.message, now })
         clearRetries(tasksDir, moved.id)
-        herdrLog(`${moved.id} → working (auto-spawn)`)
+        boardLog(`${moved.id} → working (auto-spawn)`)
         started.push(moved.id)
         slots--
       } catch (err) {
@@ -625,7 +627,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
       } catch { continue } // Keep the pane until its output can be preserved.
     }
     await paneClose(a.pane_id, sessionOf(project)).catch(() => {})
-    herdrLog(`${a.name || a.pane_id} finished, pane closed`)
+    boardLog(`${a.name || a.pane_id} finished, pane closed`)
     // No Builder is left on these cards: stop any server it left running in their worktrees.
     for (const id of ids) {
       const worktree = readWorktrees(tasksDir)[id]?.worktreePath
@@ -633,7 +635,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
       try { column = findCard(tasksDir, id).column } catch {}
       if (!worktree || readBindings(tasksDir)[id] || column === 'working' || inUse.has(id)) continue
       const pids = stopServersIn(worktree)
-      if (pids.length) herdrLog(`${id}: stopped server(s) ${pids.join(', ')} left running in ${worktree}`)
+      if (pids.length) boardLog(`${id}: stopped server(s) ${pids.join(', ')} left running in ${worktree}`)
     }
   }
   return spent.map((a) => a.pane_id)
@@ -661,7 +663,7 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
     if (!card.cardOwned || card.audit || !entry || entry.state === 'integrated' || !hasBuilderPass(card)) continue
     if (currentReviewDecision(readFileSync(card.path, 'utf8'))) continue
     moveCard(tasksDir, card.id, 'completed')
-    herdrLog(`${card.id} → completed (integrate before review)`)
+    boardLog(`${card.id} → completed (integrate before review)`)
   }
   for (const card of board.completed) {
     if (!card.autoReview) continue
@@ -671,7 +673,7 @@ export function promoteAutoReview(tasksDir, { all = false } = {}) {
     if (entry && (entry.state !== 'integrated' || !entry.cleaned)) continue
     const target = 'review'
     moveCard(tasksDir, card.id, target)
-    herdrLog(`${card.id} → ${target} (${card.trivial ? 'trivial deterministic check' : 'auto-review'})`)
+    boardLog(`${card.id} → ${target} (${card.trivial ? 'trivial deterministic check' : 'auto-review'})`)
     promoted.push(card.id)
   }
   return promoted
@@ -720,7 +722,7 @@ export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCar
         if (reviewRoot) assertReviewInputs(reviewRoot, tasksDir, card.id)
         if (card.column !== 'review') continue
         moveCard(tasksDir, card.id, 'completed')
-        herdrLog(`${card.id} → completed (review verdict PASS)`)
+        boardLog(`${card.id} → completed (review verdict PASS)`)
         routed.push({ id: card.id, to: 'completed', verdict: 'PASS' })
       } else {
         const category = failureCategory(decision.evidence)
