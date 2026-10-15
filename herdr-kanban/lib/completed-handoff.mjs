@@ -161,16 +161,20 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   const entry = readWorktrees(tasksDir)[cardId]
   const failures = (entry.conflictFailures || 0) + (blocked ? 0 : 1)
   const target = head || entry.rebaseTarget || entry.baseCommit
-  updateWorktree(tasksDir, cardId, { state: 'conflict', conflictFailures: failures, reason, rebaseTarget: target })
+  // Move first, then record the conflict state: a refused move used to leave the worktree in
+  // 'conflict' while the card sat in Completed (2026-10-15 audit). A refused move is a held result,
+  // so the poll goes on and the card shows its reason every poll instead of stranding silently.
   let to = blocked || failures >= (output ? 2 : 3) ? 'owner' : 'queue', moved, planError
+  const refused = err => ({ id: cardId, status: 'held', reason: `integration conflict on ${cardId} could not move it to ${to} (${err.message}); its worktree is kept at ${entry.worktreePath}: ${reason.split('\n')[0]}` })
   try { moved = moveCard(tasksDir, cardId, to) } catch (err) {
     // The plan no longer passes the queue check (HK25): the card cannot go back to a Builder, so
     // it goes to Owner with the reason instead of staying silently in Completed.
-    if (to !== 'queue') throw err
+    if (to !== 'queue') return refused(err)
     planError = err.message
     to = 'owner'
-    moved = moveCard(tasksDir, cardId, to)
+    try { moved = moveCard(tasksDir, cardId, to) } catch (ownerErr) { return refused(ownerErr) }
   }
+  updateWorktree(tasksDir, cardId, { state: 'conflict', conflictFailures: failures, reason, rebaseTarget: target })
   const summary = reason.split('\n')[0]
   const detail = files.length ? `${summary} (files: ${files.join(', ')})` : summary
   const base12 = String(entry.baseCommit).slice(0, 12), target12 = String(target).slice(0, 12)

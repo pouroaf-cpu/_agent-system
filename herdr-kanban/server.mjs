@@ -521,9 +521,11 @@ function cardWaits(project, now = Date.now(), snapshot) {
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
-    return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
+    // The integration hold is why a Completed card is not integrated yet (the poll's own reason).
+    const integrationHold = integrationHolds.get(project)?.[card.id] || null
+    return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), ...(integrationHold && { integrationHold }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }
@@ -531,7 +533,14 @@ function cardWaits(project, now = Date.now(), snapshot) {
 // Stuck = waiting past the threshold with nobody working on it and no unfinished blocker.
 // A card an agent is on, or one queued behind another card, is moving (operator saw
 // "stuck 3" for cards waiting on I307 that were planned the minute it merged, 2026-09-26).
-const isStuck = (c, minutes) => c.minutes >= minutes && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait && !c.decisionWait
+// A card held at integration (its check failed on master, cannot run, or waits on a config) is stuck after
+// INTEGRATION_STUCK_MINUTES, so the board wakes the Kanban Manager once (STUCK) instead of holding silently
+// for an hour. A check still running in the background is working, so it keeps the normal threshold.
+const INTEGRATION_STUCK_MINUTES = 5
+const isStuck = (c, minutes) => {
+  const threshold = c.integrationHold && !/is running in the background$/.test(c.integrationHold) ? Math.min(minutes, INTEGRATION_STUCK_MINUTES) : minutes
+  return c.minutes >= threshold && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait && !c.decisionWait
+}
 
 // Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
 function integrationAheadOfMaster(project) {

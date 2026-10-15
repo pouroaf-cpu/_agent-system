@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { reconcileCompletedHandoffs } from './lib/completed-handoff.mjs'
+import { reconcileCompletedHandoffs, returnIntegrationConflict } from './lib/completed-handoff.mjs'
+import { readWorktrees } from './lib/worktrees.mjs'
 import { archiveNoReviewCards, promoteAutoReview, routeReviewVerdicts } from './lib/autospawn.mjs'
 import { appendReviewPass, canArchive, findCard, moveCard } from './lib/cards.mjs'
 import { evidenceFingerprint, readWorkflow } from './lib/workflow-state.mjs'
@@ -330,6 +331,19 @@ test('integration conflicts never loop: a Builder resolution, one fresh re-apply
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, true)
   writeFileSync(findCard(tasksDir, 'T-2').path, planned('T-2').replace('process.exit(0)', 'process.exit(3)'))
   assert.equal((await runRecordedCheck(findCard(tasksDir, 'T-2'), { workspacePath: root })).ok, false)
+})
+
+test('a conflict whose move is refused is a held result with the reason, and the worktree state is not changed to conflict', t => {
+  const root = mkdtempSync(join(tmpdir(), 'refused-conflict-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  // No card file: the move back out of Completed is refused, as it was for a card moved by hand (2026-10-15 audit).
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-9': { cardId: 'T-9', state: 'rebased', worktreePath: root, workspacePath: root, baseCommit: 'b0123456789abcdef', conflictFailures: 0 } }))
+  const result = returnIntegrationConflict(tasksDir, 'T-9', { reason: 'integration conflict while rebasing onto master', files: ['app.js'] })
+  assert.equal(result.status, 'held')
+  assert.equal(result.id, 'T-9')
+  assert.match(result.reason, /could not move it to owner \(unknown card: T-9\).*integration conflict while rebasing onto master/)
+  assert.equal(readWorktrees(tasksDir)['T-9'].state, 'rebased')
 })
 
 test('a card the board could not retry goes to Owner with the files and action, and spends no try', async t => {
