@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { readCardPlanners, saveCardPlanners as save, assertPlannerAssignment } from './planner-state.mjs'
 export { readCardPlanners } from './planner-state.mjs'
-import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites, unmetBlockers } from './cards.mjs'
+import { readBoard, moveCard, findCard, needsBrowser, awaitsOperatorApproval, askForApproval, convertLegacyCard, waitingOnPrerequisites, unmetBlockers, approveInvestigation } from './cards.mjs'
 import { readWorktrees } from './worktrees.mjs'
 import { agentList, agentWorkspaceOr, tabCreate, waitForPrompt, agentStart, paneClose, paneRead, paneSendKeys, sessionOf } from './herdr.mjs'
 import { deliver, START_TIMEOUT_MS, startFailed, recordStartFailure, startRetryHold, stagedInput, submitStaged } from './spawn.mjs'
@@ -92,20 +92,12 @@ export function drainIssues(tasksDir, onError = () => {}) {
 // Board Approve button on a Pou or Owner card: record the decision, add the operator-only
 // investigation marker when that is all the plan waits on, then retry the card in
 // the lane it left (Planning for investigation approvals or when history is silent).
-const APPROVED = '**Investigation approved:** yes'
 export function operatorApprove(tasksDir, cardId, now = new Date()) {
   const card = findCard(tasksDir, cardId)
   if (!['pou', 'owner'].includes(card.column)) throw new Error(`${card.id} is in ${card.column}; Approve works only on Pou or Owner cards`)
   let text = readFileSync(card.path, 'utf8')
   const investigation = awaitsOperatorApproval(text)
-  if (investigation) {
-    const head = text.split(/^## Approved brief/m)[0]
-    const existing = head.match(/^\*\*Investigation approved:\*\*[^\n]*$/im)
-    const readiness = head.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)
-    text = existing ? text.replace(existing[0], APPROVED)
-      : readiness ? text.replace(readiness[0], `${readiness[0]}\n${APPROVED}`)
-      : text.replace(/^## Approved brief/m, `${APPROVED}\n\n$&`)
-  }
+  if (investigation) text = approveInvestigation(text)
   writeFileSync(card.path, `${text}\n\n---\n\n**Operator decision** ${now.toISOString()}\n\nApproved by operator from board\n`)
   const from = laneBeforeOwner(tasksDir, card.id)
   // Working means an agent is on it; a retried build starts from Queue.

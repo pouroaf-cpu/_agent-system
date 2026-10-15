@@ -115,6 +115,21 @@ test('card-update changes priority, blockers and appends a dated note', async ()
   assert.equal(r.status, 200)
 })
 
+test('card-update sets Investigation approved above ## Approved brief, once, and refuses to clear it', async () => {
+  const c = createCard(tasks, { title: 'Approve me', brief: 'x', prefix: 'P' })
+  const path = findCard(tasks, c.id).path
+  writeFileSync(path, `${readFileSync(path, 'utf8').trimEnd()}\n\n## Approved brief\n\nScope.\n`)
+  let r = await post('/api/card-update', { id: c.id, investigationApproved: false })
+  assert.equal(r.status, 400)
+  r = await post('/api/card-update', { id: c.id, investigationApproved: true })
+  assert.equal(r.status, 200, r.body.error)
+  assert.deepEqual(r.body.changes, ['investigation approved'])
+  assert.ok(text(c.id).indexOf('**Investigation approved:** yes') < text(c.id).indexOf('## Approved brief'))
+  r = await post('/api/card-update', { id: c.id, investigationApproved: true })
+  assert.equal(r.status, 200, r.body.error)
+  assert.equal(text(c.id).match(/\*\*Investigation approved:\*\*/g).length, 1)
+})
+
 test('card-update notes lift Planner decision waits but preserve board waits', async () => {
   const decision = createCard(tasks, { title: 'Decision', brief: 'x', prefix: 'P' })
   const board = createCard(tasks, { title: 'Board', brief: 'x', prefix: 'P' })

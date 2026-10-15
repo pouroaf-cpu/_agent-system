@@ -823,7 +823,18 @@ export function cycleFor(card, board) {
 // POST /api/card-update: orchestrators maintain their own cards (priority, blockers,
 // dated decision notes) without hand-editing the file. The caller sets `lockBlockers`
 // while a live agent holds the card.
-export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], removeBlockedBy = [], note, workspace } = {}, { lockBlockers = false, projectPath = '', now = new Date() } = {}) {
+// The operator-only header line. Approve on the board and card-update both set it through approveInvestigation.
+export const APPROVED_LINE = '**Investigation approved:** yes'
+export function approveInvestigation(text) {
+  const head = text.split(/^## Approved brief/m)[0]
+  const existing = head.match(/^\*\*Investigation approved:\*\*[^\n]*$/im)
+  const readiness = head.match(/^\*\*Plan readiness:\*\*[^\n]*$/im)
+  return existing ? text.replace(existing[0], APPROVED_LINE)
+    : readiness ? text.replace(readiness[0], `${readiness[0]}\n${APPROVED_LINE}`)
+    : text.replace(/^## Approved brief/m, `${APPROVED_LINE}\n\n$&`)
+}
+
+export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], removeBlockedBy = [], note, workspace, investigationApproved } = {}, { lockBlockers = false, projectPath = '', now = new Date() } = {}) {
   const card = findCard(tasksDir, cardId)
   if (card.column === 'archive') throw new Error(`${card.id} is archived; archived cards cannot be updated`)
   let text = readFileSync(card.path, 'utf8')
@@ -839,6 +850,14 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     const value = checkWorkspace(projectPath, workspace)
     text = withWorkspace(text, value)
     changes.push(`workspace ${value}`)
+  }
+  if (investigationApproved !== undefined) {
+    if (investigationApproved !== true) throw new Error('investigationApproved must be true; the approval marker cannot be removed here')
+    const next = approveInvestigation(text)
+    // No ## Approved brief and no existing line: nothing to write the marker above.
+    if (next === text && !/^\*\*Investigation approved:\*\* yes\s*$/im.test(text)) throw new Error(`${card.id} has no ## Approved brief section to approve`)
+    text = next
+    changes.push('investigation approved')
   }
   const add = cardIds(addBlockedBy, 'addBlockedBy'), remove = cardIds(removeBlockedBy, 'removeBlockedBy')
   if (add.length || remove.length) {
@@ -862,7 +881,7 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     text = `${text.trimEnd()}${eol}${eol}**${heading}** ${now.toISOString()}${eol}${eol}${body.replace(/\r?\n/g, eol)}${eol}`
     changes.push(`note: ${heading}`)
   }
-  if (!changes.length) throw new Error('Nothing to update: send priority, workspace, addBlockedBy, removeBlockedBy or note')
+  if (!changes.length) throw new Error('Nothing to update: send priority, workspace, investigationApproved, addBlockedBy, removeBlockedBy or note')
   writeFileSync(card.path, text)
   appendHistory(tasksDir, card.id, { event: 'card-update', changes })
   return { card: parseCard(card.path, card.column), changes }
