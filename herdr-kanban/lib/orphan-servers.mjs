@@ -8,11 +8,23 @@ import { resolve } from 'node:path'
 // has no worktree path in its command line, so its working directory is matched too. Killing
 // the tree also stops Next's workers, which resolve into the junctioned node_modules elsewhere.
 export function stopServersIn(dir, { list = () => nodeProcesses({ cwd: true }), kill = killTree } = {}) {
-  const needle = resolve(dir).toLowerCase()
-  const inside = s => `${s.toLowerCase().replaceAll('/', '\\')}\\`.includes(`${needle}\\`)
-  const hits = list().filter(p => p.pid !== process.pid && (inside(p.cmd) || inside(p.cwd || '')))
+  const hits = matchServersIn(list(), dir)
   for (const p of hits) try { kill(p.pid) } catch {}
   return hits.map(p => p.pid)
+}
+
+// Same match, with the listing and kill awaited. autospawn calls this when an agent finishes, on the
+// board's event loop; the sync listing blocked it for as long as PowerShell took (up to 20 s per card).
+export async function stopServersInAsync(dir, { list = () => nodeProcessesAsync({ cwd: true }), kill = killTreeAsync } = {}) {
+  const hits = matchServersIn(await list(), dir)
+  for (const p of hits) try { await kill(p.pid) } catch {}
+  return hits.map(p => p.pid)
+}
+
+function matchServersIn(rows, dir) {
+  const needle = resolve(dir).toLowerCase()
+  const inside = s => `${s.toLowerCase().replaceAll('/', '\\')}\\`.includes(`${needle}\\`)
+  return rows.filter(p => p.pid !== process.pid && (inside(p.cmd) || inside(p.cwd || '')))
 }
 
 function killTree(pid) {

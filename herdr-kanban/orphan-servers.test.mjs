@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stopServersIn, stopRunawayTsservers, stopOrphanWebKit } from './lib/orphan-servers.mjs'
+import { stopServersIn, stopServersInAsync, stopRunawayTsservers, stopOrphanWebKit } from './lib/orphan-servers.mjs'
 
 test('a tsserver spinning for hours on a board project is stopped; a fresh one or one elsewhere is not', async () => {
   const list = () => [
@@ -50,4 +50,16 @@ test('a WebKit process whose browser is gone is stopped; a live run, a fresh one
   // pid 3 survives the kill, so it is not reported as stopped.
   assert.deepEqual(await stopOrphanWebKit({ now, list, kill: pids => { killed.push(...pids); procs = procs.filter(p => p.pid !== 1) } }), [1])
   assert.deepEqual(killed, [1, 3])
+})
+
+test('the async variant used when an agent finishes stops the same servers as the sync one', async () => {
+  const list = async () => [
+    { pid: 1, cmd: 'node C:/Work/.kanban-worktrees/Tradeflow/tf63-x/tradesflow-website/node_modules/.bin/../next/dist/bin/next start -p 3100' },
+    { pid: 2, cmd: 'node C:\\Work\\.kanban-worktrees\\Tradeflow\\tf66-y\\node_modules\\next\\dist\\bin\\next dev' },
+    { pid: 27744, cwd: 'C:\\Work\\.worktrees\\Injectbuddy\\cards\\i227-x\\', cmd: 'node node_modules/next/dist/bin/next start -p 3107' },
+  ]
+  const killed = []
+  assert.deepEqual(await stopServersInAsync('C:\\Work\\.kanban-worktrees\\Tradeflow\\tf63-x', { list, kill: async pid => killed.push(pid) }), [1])
+  assert.deepEqual(killed, [1])
+  assert.deepEqual(await stopServersInAsync('C:/Work/.worktrees/Injectbuddy/cards/i227-x', { list, kill: async () => {} }), [27744])
 })

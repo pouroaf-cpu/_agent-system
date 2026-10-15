@@ -634,7 +634,7 @@ export async function closeFinished({ tasksDir, agents, project, now = Date.now(
       let column = ''
       try { column = findCard(tasksDir, id).column } catch {}
       if (!worktree || readBindings(tasksDir)[id] || column === 'working' || inUse.has(id)) continue
-      const pids = stopServersIn(worktree)
+      const pids = await stopServersInAsync(worktree)
       if (pids.length) boardLog(`${id}: stopped server(s) ${pids.join(', ')} left running in ${worktree}`)
     }
   }
@@ -704,7 +704,7 @@ export function archiveNoReviewCards(tasksDir) {
 }
 
 import { explicitOwnerReason } from './owner-reason.mjs'
-import { stopServersIn } from './orphan-servers.mjs'
+import { stopServersIn, stopServersInAsync } from './orphan-servers.mjs'
 
 export function routeReviewVerdicts(tasksDir, { log, reviewBusy = false, busyCardIds = [], includeCompleted = false, reviewRoot, onlyIds } = {}) {
   if (reviewBusy) return []
