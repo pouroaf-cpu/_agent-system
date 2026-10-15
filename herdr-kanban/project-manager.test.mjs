@@ -263,6 +263,28 @@ test('a card held by a rejected model reads "model rejected" in the summary, not
   moveCard(tasks, card.id, 'archive', { operatorArchive: true })
 })
 
+// HK85: the scheduler's integration hold is a Needs you note with a non-ISO date; STUCK said "no reason given".
+test('an owner card with a Needs you note is stuck with that note as its reason; an Operator hold stays a wait', async () => {
+  const mk = (title, note) => {
+    const c = createCard(tasks, { title, brief: 'x', prefix: 'P' })
+    moveCard(tasks, c.id, 'planning')
+    const { path: owned } = moveCard(tasks, c.id, 'owner')
+    const path = historyPath(tasks, c.id)
+    writeFileSync(path, readFileSync(path, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - 2 * 3600000).toISOString()}"`))
+    appendFileSync(owned, note)
+    return { id: c.id, path: owned }
+  }
+  const asked = mk('Asked', '\n\n---\n\n**Needs you** 15 Oct, 8:05 pm\n\nintegration checkout has card-api.test.mjs dirty')
+  const held = mk('Held', '\n\n---\n\n**Operator hold** 2026-10-15T09:00:00.000Z\n\nparked')
+  try {
+    const cards = (await get('/api/stuck?project=Proj&minutes=20')).body.cards
+    assert.match(cards.find(c => c.id === asked.id)?.reason ?? '', /card-api\.test\.mjs dirty/)
+    assert.ok(!cards.some(c => c.id === held.id), 'operator hold listed as stuck')
+    const waiting = (await get('/api/summary')).body.projects[0].waitingCards.find(c => c.id === held.id)
+    assert.equal(waiting?.on, 'operator hold')
+  } finally { rmSync(asked.path, { force: true }); rmSync(held.path, { force: true }) }
+})
+
 test('hkb found goes to the registered manager inbox, to the Kanban Manager without one, and always with --board', async () => {
   mkdirSync(join(tasks, 'working'), { recursive: true })
   writeFileSync(join(tasks, 'working', 'T-1-card.md'), '# T-1 — Card\n')

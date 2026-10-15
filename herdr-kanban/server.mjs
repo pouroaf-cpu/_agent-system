@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { runCardPlanner, readCardPlanners, operatorRetry, operatorApprove, busyPlanners, drainIssues } from './lib/card-planner.mjs'
 import { plannersStarting } from './lib/planner-state.mjs'
 import { stopRunawayTsservers, stopStaleE2eServers, stopOrphanWebKit, freeCommitGb } from './lib/orphan-servers.mjs'
-import { alertOwnerCards } from './lib/owner-alerts.mjs'
+import { alertOwnerCards, ownerReason } from './lib/owner-alerts.mjs'
 import { checkBoardAlerts } from './lib/board-alerts.mjs'
 import { readManagerTasks } from './lib/manager-tasks.mjs'
 import { isHardHold, notifyManagerException, resolveManagerException, ownerAgeing } from './lib/manager-alerts.mjs'
@@ -509,6 +509,8 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const holder = filesBusyHolder(holds[card.id])
     const fileWait = live.has(holder)
     const held = card.column === 'owner' && isOperatorHold(card)
+    // The scheduler's own Needs you note (an integration hold) is the reason an owner card sits there; it stays stuck.
+    const asked = card.column === 'owner' && !held ? ownerReason(readFileSync(card.path, 'utf8')) : ''
     const decisionWait = !!wait?.decision || held
     const on = quota[card.id] ? `${[SIGN_IN, MODEL_REJECTED].find(why => quota[card.id].includes(why)) ?? 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
       : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'decision')
@@ -517,7 +519,7 @@ function cardWaits(project, now = Date.now(), snapshot) {
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
     return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? (wait?.decision ? 'waiting for a decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
   })
   return { board, cards }
 }
