@@ -870,6 +870,17 @@ export function promotePlanned(tasksDir, { mission, project, planCheck = true } 
   return promoted
 }
 
+// Audit 2026-10-16 F6: why a Planned or Queue card with no file, card or slot hold is not moving yet,
+// so its wait names a cause instead of "no reason given". null for other columns.
+export function idleDispatchReason({ column, paused, slotsOff, breakerTripped, autoQueue }) {
+  if (column !== 'planned' && column !== 'queue') return null
+  if (paused) return 'board paused'
+  if (slotsOff) return 'Builder slots are off (maxConcurrentAgents is 0)'
+  if (breakerTripped) return 'auto-spawn breaker tripped'
+  if (column === 'planned') return autoQueue ? 'waiting for the next queue pass' : 'auto-queue is off: move it to Queue to start it'
+  return 'queued; waiting for the next dispatch pass'
+}
+
 export const reviewerRunning = (agents, now = Date.now()) =>
   agents.some((a) => isReviewerAgent(a) && !doneLongEnough(a, now))
 

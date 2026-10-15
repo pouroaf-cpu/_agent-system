@@ -1162,6 +1162,19 @@ function blockerState(id, board, integrated) {
 export function unmetBlockers(card, board, integrated = {}) {
   return (card.blockedBy || []).filter((id) => blockerState(id, board, integrated) !== 'landed')
 }
+// Audit 2026-10-16 F6: a Planned or Queue card keeps a blocker only until it lands. Dispatch already
+// ignores a landed blocker (unmetBlockers); this drops it from the card so the stall watchdog, spawn
+// and card planner stop reading it. Returns [cardId, landedIds] for each card changed.
+export function clearLandedBlockers(tasksDir, integrated = {}) {
+  const board = readBoard(tasksDir), cleared = []
+  for (const card of [...(board.planned || []), ...(board.queue || [])]) {
+    const landed = (card.blockedBy || []).filter((id) => blockerState(id, board, integrated) === 'landed')
+    if (!landed.length) continue
+    try { updateCard(tasksDir, card.id, { removeBlockedBy: landed }) } catch { continue }
+    cleared.push([card.id, landed])
+  }
+  return cleared
+}
 // Unmet prerequisites that are still live cards: an allowed wait (TF44). A
 // prerequisite missing from every board can never land, so that is not a wait.
 export function waitingOnPrerequisites(card, board, integrated = {}) {

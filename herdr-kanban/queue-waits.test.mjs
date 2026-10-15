@@ -6,9 +6,9 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { appendReviewPass, findCard, moveCard, parseCard } from './lib/cards.mjs'
+import { appendReviewPass, clearLandedBlockers, findCard, moveCard, parseCard } from './lib/cards.mjs'
 import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall, updateWorktree } from './lib/worktrees.mjs'
-import { autoSpawn, fileHoldDetails, holdsFor } from './lib/autospawn.mjs'
+import { autoSpawn, fileHoldDetails, holdsFor, idleDispatchReason } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 
@@ -159,6 +159,28 @@ test('F2 AC1/AC3: a file-held card reports its holder and minutes, and the longe
   assert.deepEqual(started, ['T-60', 'T-62'], 'the card that waited since the first pass takes the free slot, not the newer T-61')
   assert.equal(findCard(f.tasks, 'T-61').column, 'queue')
   assert.deepEqual(fileHoldDetails('f2', holdsFor('f2')).map(d => [d.card, d.holder]), [['T-61', 'T-62']], 'T-61 now waits on the card that took the file')
+})
+
+// Audit 2026-10-16 F6: a blocker whose card has landed comes off a queued card once (the scheduler
+// does this each pass), and an idle Planned or Queue card names its cause instead of none.
+test('F6: a landed blocker comes off a queued card, and an idle card names why it has not started', async t => {
+  const f = repo(t)
+  mkdirSync(join(f.tasks, 'archive'), { recursive: true })
+  f.add('T-80', ['site/app.js'], 'archive')
+  const queued = f.add('T-81', ['site/other.js'])
+  writeFileSync(queued.path, readFileSync(queued.path, 'utf8').replace('**Workspace:** site\n', '**Workspace:** site\n**Blocked by:** T-80\n'))
+  assert.deepEqual(findCard(f.tasks, 'T-81').blockedBy, ['T-80'])
+  assert.deepEqual(clearLandedBlockers(f.tasks, {}), [['T-81', ['T-80']]])
+  assert.deepEqual(findCard(f.tasks, 'T-81').blockedBy, [])
+  assert.deepEqual(clearLandedBlockers(f.tasks, {}), [], 'a second pass finds nothing to clear')
+
+  assert.equal(idleDispatchReason({ column: 'queue', paused: true }), 'board paused')
+  assert.equal(idleDispatchReason({ column: 'queue', slotsOff: true }), 'Builder slots are off (maxConcurrentAgents is 0)')
+  assert.equal(idleDispatchReason({ column: 'queue', breakerTripped: true }), 'auto-spawn breaker tripped')
+  assert.equal(idleDispatchReason({ column: 'planned', autoQueue: false }), 'auto-queue is off: move it to Queue to start it')
+  assert.equal(idleDispatchReason({ column: 'planned', autoQueue: true }), 'waiting for the next queue pass')
+  assert.equal(idleDispatchReason({ column: 'queue' }), 'queued; waiting for the next dispatch pass')
+  assert.equal(idleDispatchReason({ column: 'working' }), null)
 })
 
 // InjectbuddyApp 2026-10-06: IA19 moved working -> planning at .889; the scheduler's next

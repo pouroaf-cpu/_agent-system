@@ -48,7 +48,7 @@ const { validateAgentBackend } = await import('./lib/agent-backend.mjs')
 const lanHost = process.env.KANBAN_LAN_HOST?.trim()
 const REQUESTS_PATH = process.env.KANBAN_REQUESTS ?? join(config.projectsRoot, 'ORCHESTRATOR-REQUESTS.md')
 
-const { COLUMNS, ARCHIVE, createCard, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
+const { COLUMNS, ARCHIVE, createCard, clearLandedBlockers, readBoard, archiveCount, moveCard, setAutoReview, setPriority, findCard, updateCard, isOperatorHold } = await import('./lib/cards.mjs')
 const { agentList, withAgentListCycle, agentsForProject, isRunning, isSpawning, paneRead, paneClose, focusAgent, openProjectSession, openProjects, ensureAgentWorkspace } = await import('./lib/herdr.mjs')
 const { boardLog } = await import('./lib/board-log.mjs')
 const { cachedAsync, execText } = await import('./lib/async-cache.mjs')
@@ -68,7 +68,7 @@ const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-
 const { beginStoppage, clearStoppage, dropStoppages, noteStart, readyCard, checkResume, resumeAlert } = await import('./lib/resume-watch.mjs')
 const resumeStart = project => { try { noteStart(HERE, { project }) } catch (err) { console.error(`resume watch failed: ${err.message}`) } }
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, fileHoldDetails: schedulerFileHoldDetails, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, idleDispatchReason, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, fileHoldDetails: schedulerFileHoldDetails, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { dispatchTestResults } = await import('./lib/test-handoff.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
@@ -592,9 +592,26 @@ function cardWaits(project, now = Date.now(), snapshot) {
     const integrationHold = integrationHolds.get(project)?.[card.id] || null
     return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), ...(integrationHold && { integrationHold }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting on decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? null }
+      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting on decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? idleDispatchReason({ column: card.column, paused: controlState(project, CONFIG_PATH).paused, slotsOff: !(config.maxConcurrentAgents > 0), breakerTripped: breakerState(project).breakerTripped, autoQueue: config.mode === 'manager' || config.autoQueuePlanned === true }) ?? null }
   })
   return { board, cards }
+}
+
+// Audit 2026-10-16 F6: a Planned or Queue card waiting 5 minutes or more gets one activity line per
+// distinct reason, so its log says why it has not moved. Checked at most once a minute per project.
+const dispatchHoldLogged = new Map(), dispatchHoldChecked = new Map()
+function logDispatchHolds(project, now = Date.now()) {
+  if (now - (dispatchHoldChecked.get(project) ?? 0) < 60000) return
+  dispatchHoldChecked.set(project, now)
+  const board = readBoard(tasksDirOf(project))
+  if (!board.planned.length && !board.queue.length) { dispatchHoldLogged.delete(project); return }
+  const logged = dispatchHoldLogged.get(project) ?? new Map(), current = new Map()
+  for (const c of cardWaits(project, now).cards) {
+    if ((c.lane !== 'planned' && c.lane !== 'queue') || c.minutes < 5 || !c.reason) continue
+    current.set(c.id, c.reason)
+    if (logged.get(c.id) !== c.reason) activity(project, c.id, 'dispatch-hold', `waiting ${c.minutes}m: ${c.reason}`)
+  }
+  dispatchHoldLogged.set(project, current)
 }
 
 // Stuck = waiting past the threshold with nobody working on it and no unfinished blocker.
@@ -673,6 +690,8 @@ async function tick(project, agents) {
   // Card-owned Checks need independent verification before Queue; other plans
   // promote directly. Builder dependency and dirty-file guards still apply.
   const tasksDir = tasksDirOf(project)
+  // Audit 2026-10-16 F6: a Planned or Queue card drops a blocker once that card has landed.
+  try { for (const [id, landed] of clearLandedBlockers(tasksDir, readWorktrees(tasksDir))) activity(project, id, 'unblock', `blocker ${landed.join(', ')} has landed; removed from Blocked by`) } catch (err) { schedulerActivity(project, `landed blockers not cleared — ${err.message}`) }
   const max = config.maxConcurrentAgents
   if (max <= 0 || breakerState(project).breakerTripped) return []
   if (config.mode === 'manager' || config.autoQueuePlanned === true) {
@@ -948,6 +967,7 @@ async function pollProject(project) {
     // housekeeping so a guarded poll never starves Queue capacity.
     for (const id of confirmLateDeliveries({ tasksDir, session: sessionOf(project), agents })) activity(project, id, 'delivery', 'agent started after a slow start; delivery confirmed, hold cleared')
     if (!lowDisk) { await tick(project, agents); holdsReady.add(project) }
+    if (!lowDisk) logDispatchHolds(project, now)
 
     if (autoEnabled && !lowDisk) {
       if (config.leadPlanner?.autoIssues && (readBoard(tasksDir).planning.length || Object.values(readCardPlanners(tasksDir)).some(owner => !owner.closedAt))) {
