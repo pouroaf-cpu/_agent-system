@@ -10,10 +10,26 @@ function Update-BoardOutage {
     [IO.File]::WriteAllText($StatePath, (Get-Date -Format o))
     & $Send
 }
+# A board is only "Gone" (safe to relaunch) when it answers no request in the whole window,
+# its port has no listener AND its process has exited. A live process is never relaunched:
+# a slow board under memory pressure must not be killed (watchdog false DOWN, 2026-10-15).
 function Get-BoardFailureStatus {
-    param([scriptblock]$Request, [scriptblock]$ListenerCheck)
-    if (-not (& $ListenerCheck)) { return 'Gone' }
-    try { & $Request; return 'Slow' } catch { return 'Down' }
+    param([scriptblock]$Request, [scriptblock]$ListenerCheck, [scriptblock]$ProcessCheck, [int]$Attempts = 4, [int]$DelaySeconds = 15)
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try { & $Request; return 'Slow' } catch { }
+        if ($i -lt $Attempts) { Start-Sleep -Seconds $DelaySeconds }
+    }
+    if ((& $ProcessCheck) -or (& $ListenerCheck)) { return 'Down' }
+    return 'Gone'
+}
+# The board's node process, from the pid file kanban.ps1 writes. No node process under that pid reads as not alive.
+function Test-BoardProcessAlive {
+    param([string]$PidFile)
+    if (-not (Test-Path -LiteralPath $PidFile)) { return $false }
+    $serverPid = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ("$serverPid" -notmatch '^\d+$') { return $false }
+    $proc = Get-Process -Id ([int]$serverPid) -ErrorAction SilentlyContinue
+    return [bool]($proc -and $proc.ProcessName -eq 'node')
 }
 # Watchdog alerts go to the Kanban Manager inbox, not Pushover (operator, 2026-10-09).
 function Send-Push {

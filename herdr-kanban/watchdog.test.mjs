@@ -34,15 +34,17 @@ async function fixture(t, extraAlertFunctions = '') {
   writeFileSync(join(root, 'watchdog-alert.ps1'), readFileSync(join(HERE, 'watchdog-alert.ps1'), 'utf8') + `
 function Send-Push { param([string]$Title, [string]$Message, [string]$Kind) Add-Content -LiteralPath (Join-Path $PSScriptRoot 'pushes.txt') $Title }
 function Get-LanAddress { $env:TEST_LAN_ADDRESS }
-function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
+function Get-NetTCPConnection { param($LocalPort, $State, $ErrorAction) if ($env:TEST_NO_LISTENER) { return }; [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 1 } }
 ${extraAlertFunctions}`)
   writeFileSync(join(root, 'board.config.json'), JSON.stringify({ port: server.address().port }))
+  // The board's pid as kanban.ps1 records it: this test process is a live node process.
+  writeFileSync(join(root, '.server.pid'), String(process.pid))
   writeFileSync(join(root, 'kanban.ps1'), `Add-Content (Join-Path $PSScriptRoot 'kanban-calls.txt') 'kanban'`)
   writeFileSync(join(root, 'restart-kanban.ps1'), `param([switch]$Lan)\nAdd-Content (Join-Path $PSScriptRoot 'restarts.txt') "restart Lan=$Lan"`)
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^path$/i.test(k)))
   env.Path = [dirname(process.execPath), join(process.env.SystemRoot, 'System32'), join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
-  const run = (lanAddress = '') => new Promise(done => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'watch-kanban.ps1')],
-    { env: { ...env, TEST_LAN_ADDRESS: lanAddress }, timeout: 45000, windowsHide: true }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
+  const run = (lanAddress = '', extraEnv = {}) => new Promise(done => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'watch-kanban.ps1')],
+    { env: { ...env, TEST_LAN_ADDRESS: lanAddress, WATCHDOG_RETRY_SECONDS: '0', ...extraEnv }, timeout: 45000, windowsHide: true }, (err, stdout, stderr) => done({ code: err?.code ?? 0, out: stdout + stderr })))
   const read = name => existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8') : ''
   const lines = name => read(name).split(/\r?\n/).filter(Boolean)
   return { root, run, read, lines }
@@ -103,4 +105,52 @@ test('the real Send-Push writes "- <KIND> <n> <time> <title>: <message>" to the 
         done()
       } catch (e) { fail(e) }
     }))
+})
+
+// A board that answers nothing: every request times out, as under memory pressure.
+const NEVER_ANSWERS = `
+$script:boardRequestCount = 0
+function Invoke-WebRequest {
+  param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+  $script:boardRequestCount++
+  throw 'fixture board timed out'
+}
+`
+
+test('a board that never answers but whose process is alive is not relaunched, and alerts once', async t => {
+  const { read, lines, run } = await fixture(t, NEVER_ANSWERS)
+  const first = await run()
+  const second = await run()
+  assert.equal(first.code, 1, first.out + read('watchdog.log'))
+  assert.equal(second.code, 1, second.out + read('watchdog.log'))
+  assert.match(read('watchdog.log'), /FAILED - Board did not answer after retry/)
+  assert.deepEqual(lines('pushes.txt'), ['Kanban board down'], 'one alert per outage')
+  assert.equal(read('kanban-calls.txt'), '', 'a live board process is never relaunched')
+})
+
+test('no listener and a board process that has exited is relaunched through kanban.ps1 after the whole retry window fails', async t => {
+  const { root, read, lines, run } = await fixture(t, `
+$script:boardRequestCount = 0
+function Invoke-WebRequest {
+  param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+  $script:boardRequestCount++
+  if ($script:boardRequestCount -le 5) { throw 'fixture board is gone' }
+}
+`)
+  // A pid that has just exited: no node process answers to it.
+  const deadPid = await new Promise(done => { const child = execFile(process.execPath, ['-e', '0'], () => done(child.pid)) })
+  writeFileSync(join(root, '.server.pid'), String(deadPid))
+  const result = await run('', { TEST_NO_LISTENER: '1' })
+  assert.equal(result.code, 0, result.out + read('watchdog.log'))
+  assert.deepEqual(lines('kanban-calls.txt'), ['kanban'])
+  assert.deepEqual(lines('pushes.txt'), ['Kanban board down'])
+  assert.match(read('watchdog.log'), /UP - board check passed/)
+})
+
+test('no listener alone does not relaunch a board whose process is still alive', async t => {
+  const { read, lines, run } = await fixture(t, NEVER_ANSWERS)
+  const result = await run('', { TEST_NO_LISTENER: '1' })
+  assert.equal(result.code, 1, result.out + read('watchdog.log'))
+  assert.equal(read('kanban-calls.txt'), '', 'a live board process is never relaunched')
+  assert.deepEqual(lines('pushes.txt'), ['Kanban board down'])
 })

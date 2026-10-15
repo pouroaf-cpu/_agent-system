@@ -16,9 +16,14 @@ try {
         Update-BoardOutage -Healthy $true -StatePath $state -Send { }
     } else {
         "$(Get-Date -Format o) DOWN - checking recovery" | Out-File -Append -Encoding utf8 $log
-        $recovery = Get-BoardFailureStatus -Request {
-            Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 5 | Out-Null
-        } -ListenerCheck { Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue }
+        # Retries over about a minute (4 tries, 10 s timeout, 15 s apart); the test hook shortens the gap.
+        $retryDelay = if ($env:WATCHDOG_RETRY_SECONDS) { [int]$env:WATCHDOG_RETRY_SECONDS } else { 15 }
+        $recovery = Get-BoardFailureStatus -DelaySeconds $retryDelay -Request {
+            Invoke-WebRequest "http://127.0.0.1:$port/api/board" -UseBasicParsing -TimeoutSec 10 | Out-Null
+        } -ListenerCheck {
+            # A failed listener query counts as a listener: only a clean "none" can end in a relaunch.
+            try { [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop) } catch { $true }
+        } -ProcessCheck { Test-BoardProcessAlive (Join-Path $root '.server.pid') }
         if ($recovery -eq 'Gone') {
             try {
                 Update-BoardOutage -Healthy $false -StatePath $state -Send { Send-BoardDownPush }
