@@ -24,13 +24,19 @@ function fixture(t) {
     for (let i = 0; i < 300; i++) { const r = read(recordPath); if (r.state === 'finished') return r; await sleep(100) }
     throw new Error('record never finished')
   }
-  // Stub spawn: captures the prompt the fresh agent would get, then reports a bound pane.
-  const dispatch = async () => {
-    const prompts = []
-    const spawn = async opts => { prompts.push(opts.shortPrompt({ workspacePath: root })); return { pane_id: 'p-fixture', tab_id: 't-fixture', name: 'fixture' } }
-    const started = await dispatchTestResults({ project: 'fixture', projectPath: root, tasksDir: tasks, boardRoot: root, model: 'm', engine: 'claude', agents: [], max: 4, spawn })
+  // Stub spawn: captures the prompt and model the fresh agent would get, then reports a bound pane.
+  // Defaults: the card's Builder assignment is Claude, and the agent is live.
+  const claudeBuilder = () => ({ engine: 'claude', model: 'claude-sonnet-5-5', reasoning: 'high' })
+  const dispatch = async ({ spawn: stub, confirmLive = async () => true, log, assignmentForCard = claudeBuilder } = {}) => {
+    const prompts = [], spawned = []
+    const spawn = stub || (async opts => {
+      prompts.push(opts.shortPrompt({ workspacePath: root }))
+      spawned.push({ model: opts.model, engine: opts.engine })
+      return { pane_id: 'p-fixture', tab_id: 't-fixture', name: 'fixture' }
+    })
+    const started = await dispatchTestResults({ project: 'fixture', projectPath: root, tasksDir: tasks, boardRoot: root, assignmentForCard, agents: [], max: 4, spawn, confirmLive, log })
     unbind(tasks, 'T-1') // the stub's pane is not a live agent; free the slot for the next run
-    return { started, prompts }
+    return { started, prompts, spawned }
   }
   return { root, tasks, submit, finished, dispatch }
 }
@@ -115,4 +121,59 @@ test('a Working card with a handed-off run stays in Working when its Builder exi
   assert.ok(testRunPending(tasks, 'T-1'))
   assert.equal(readBindings(tasks)['T-1'], undefined)
   await finished(run.record)
+})
+
+test('IA235: the test-result agent gets the card Builder model and engine; a gpt name never reaches a Claude spawn', async t => {
+  const { submit, finished, dispatch } = fixture(t)
+  const run = submit('model', `node -e "console.log('1 passed')"`)
+  await finished(run.record)
+  const { started, spawned } = await dispatch()
+  assert.deepEqual(started, ['T-1'])
+  assert.deepEqual(spawned, [{ model: 'claude-sonnet-5-5', engine: { kind: 'claude', effort: 'high' } }])
+  assert.ok(!spawned.some(s => /gpt/i.test(s.model)))
+})
+
+test('IA235: a test-result agent that is not running is not logged as handed off and the run stays queued', async t => {
+  const { tasks, submit, finished, dispatch } = fixture(t)
+  const run = submit('dead', `node -e "console.log('1 passed')"`)
+  await finished(run.record)
+  const log = []
+  const { started } = await dispatch({ log: m => log.push(m), confirmLive: async () => false })
+  assert.deepEqual(started, [])
+  assert.ok(!log.some(m => /handed to a fresh agent/.test(m)), 'no success line for a dead agent')
+  assert.ok(log.some(m => /dispatch failed \(1\/3\).*is not running/.test(m)), log.join('\n'))
+  assert.ok(testRunPending(tasks, 'T-1'), 'the run stays queued for the next poll')
+  assert.doesNotMatch(readFileSync(join(tasks, '.history', 'T-1.jsonl'), 'utf8'), /test-handoff-dispatched/)
+  assert.equal(readBindings(tasks)['T-1'], undefined)
+})
+
+test('IA235: the success line is written only after the fresh agent is confirmed live', async t => {
+  const { submit, finished, dispatch } = fixture(t)
+  const run = submit('live', `node -e "console.log('1 passed')"`)
+  await finished(run.record)
+  const order = []
+  const { started } = await dispatch({
+    log: m => order.push(`log: ${m}`),
+    confirmLive: async () => { order.push('confirm'); return true },
+  })
+  assert.deepEqual(started, ['T-1'])
+  assert.deepEqual(order, ['confirm', 'log: T-1: test result handed to a fresh agent'])
+})
+
+test('IA235: no Builder assignment for the card means nothing spawns and the failure is logged', async t => {
+  const { submit, finished, dispatch } = fixture(t)
+  const run = submit('noassign', `node -e "console.log('1 passed')"`)
+  await finished(run.record)
+  const log = []
+  const { started, spawned } = await dispatch({ log: m => log.push(m), assignmentForCard: () => null })
+  assert.deepEqual(started, [])
+  assert.deepEqual(spawned, [])
+  assert.match(log.join('\n'), /test result dispatch failed/)
+})
+
+test('IA235: no spawn site reads config.models, so a legacy gpt name cannot reach a Claude spawn', () => {
+  for (const f of ['server.mjs', 'lib/card-runner.mjs', 'lib/test-handoff.mjs', 'lib/autospawn.mjs']) {
+    const src = readFileSync(new URL(`./${f}`, import.meta.url), 'utf8')
+    assert.doesNotMatch(src, /config\.models\??\.\w+|model:\s*config\.models/, `${f} reads config.models`)
+  }
 })

@@ -69,7 +69,9 @@ const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await im
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
 const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures } = await import('./lib/worktrees.mjs')
-const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
+const { STAGES, SUPPORTED, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
+// The legacy config.models fields. Spawns read the resolved assignment (modelFor), never these raw values.
+const LEGACY_MODEL_ROLES = ['planning', 'working', 'issues', 'review', 'trivial']
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
 const tasksDirOf = (project) => join(config.projectsRoot, project, 'TASKS')
@@ -102,6 +104,7 @@ const projectHoldOf = (project) => { projectSettingsOf(project); return resolved
 const integrationPathOf = (project) => projectSettingsOf(project)?.integrationPath ?? projectPathOf(project)
 const holdsFor = (project) => schedulerHoldsFor(project, { tasksDir: tasksDirOf(project), projectPath: integrationPathOf(project), gitSettings: projectSettingsOf(project) })
 const engineFor = (role) => engineForAssignment(globalSettings(config)[role])
+const modelFor = (role) => globalSettings(config)[role].model
 const assignmentForCard = (project, card, stage) => assignmentFor(config, { ...card, workflowState: readWorkflow(tasksDirOf(project))[card.id] }, stage)
 // Cards waiting for an engine that is out of usage: shown on the card, an allowed stall wait.
 const quotaHoldsOf = (project, board = readBoard(tasksDirOf(project))) => quotaHolds(HERE, board, (card, stage) => { const { assignment: a } = selectQuotaAssignment(HERE, assignmentForCard(project, card, stage)); return quotaKey(a.engine, a.model) })
@@ -474,8 +477,8 @@ function buildBoardPayload(project) {
       stallSeconds: config.stallSeconds,
       maxConcurrentAgents: config.maxConcurrentAgents,
       leadPlanner: config.leadPlanner ?? { autoIssues: false },
-      model: config.models.working,
-      reviewModel: config.models.review,
+      model: modelFor('working'),
+      reviewModel: modelFor('review'),
       engine: engineFor('working').kind ?? engineFor('working'),
       agentSettings: globalSettings(config),
       tinyEnabled: config.agentSettings?.tinyEnabled === true,
@@ -628,7 +631,7 @@ async function tick(project, agents) {
   // HK64: a finished handed-off test run starts a fresh short agent before new Builders take the slots.
   await dispatchTestResults({
     project, projectPath: integrationPathOf(project), tasksDir, boardRoot: HERE,
-    model: config.models.working, engine: engineFor('working'), max, agents,
+    assignmentForCard: (card, stage) => assignmentForCard(project, card, stage), max, agents,
     gitSettings: projectSettingsOf(project), onChange: () => broadcastBoard(project),
     log: (msg) => schedulerActivity(project, msg),
   }).catch(err => schedulerActivity(project, `test result dispatch skipped — ${err.message}`))
@@ -637,7 +640,7 @@ async function tick(project, agents) {
     projectPath: integrationPathOf(project),
     tasksDir,
     boardRoot: HERE,
-      model: config.models.working,
+      model: modelFor('working'),
       engine: engineFor('working'),
     max,
     agents,
@@ -868,7 +871,7 @@ async function pollProject(project) {
         projectPath: integrationPathOf(project),
         tasksDir,
         boardRoot: HERE,
-        model: config.models.planning,
+        model: modelFor('planning'),
         engine: engineFor('planning'),
         maxPlanners: config.maxPlanners ?? 4,
         // The Finder is on for the live board; "finder": false in board.config.json turns it off.
@@ -902,7 +905,7 @@ async function pollProject(project) {
       projectPath: integrationPathOf(project),
       tasksDir,
       boardRoot: HERE,
-      model: config.models.review,
+      model: modelFor('review'),
       engine: engineFor('review'),
       assignmentForCard: (card, stage) => assignmentForCard(project, card, stage),
       agents,
@@ -1560,7 +1563,7 @@ const handleRequest = async (req, res) => {
         projectPath: integrationPathOf(p),
         tasksDir,
         boardRoot: HERE,
-        model: config.models.working,
+        model: modelFor('working'),
         engine: engineFor('working'),
         max: config.maxConcurrentAgents,
         agents: polled.agents,
@@ -1689,6 +1692,15 @@ const handleRequest = async (req, res) => {
           config.projectSettings[project] = { ...(config.projectSettings[project] || {}), integrationCheck: entry.integrationCheck }
         }
       }
+      if ('models' in patch) {
+        const models = patch.models
+        if (!models || typeof models !== 'object' || Array.isArray(models)) throw new Error('models must be an object of role: Claude model')
+        for (const [role, model] of Object.entries(models)) {
+          if (!LEGACY_MODEL_ROLES.includes(role)) throw new Error(`models.${role} is not a board role`)
+          if (!SUPPORTED.claude.models.includes(model)) throw new Error(`models.${role} must be a Claude model (one of ${SUPPORTED.claude.models.join(', ')})`)
+        }
+        config.models = { ...(config.models || {}), ...models }
+      }
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
       json(res, 200, { ok: true, config })
     } catch (err) {
@@ -1798,7 +1810,7 @@ const handleRequest = async (req, res) => {
         projectPath: integrationPathOf(p),
         tasksDir: tasksDirOf(p),
         boardRoot: HERE,
-        model: config.models.review,
+        model: modelFor('review'),
         engine: engineFor('review'),
         assignmentForCard: (card, stage) => assignmentForCard(p, card, stage),
         cardIds,

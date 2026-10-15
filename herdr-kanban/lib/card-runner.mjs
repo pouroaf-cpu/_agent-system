@@ -1,4 +1,4 @@
-import { engineForAssignment } from './agent-settings.mjs'
+import { engineForAssignment, globalSettings } from './agent-settings.mjs'
 import { readFileSync } from 'node:fs'
 import { readBoard, findCard, validatePlan, moveCard, currentReviewDecision } from './cards.mjs'
 import { readBindings } from './bindings.mjs'
@@ -94,7 +94,6 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
     if (blockers.length) return stop(`Blocked by ${blockers.join(', ')}`)
     const limit = checkWorkflowLimits(tasksDir, card.id, role)
     if (limit) return stop(limit)
-    const engine = r => config.engines?.[r] ?? config.engine
     const selected = stage => config.assignmentForCard?.(card, stage)
     const common = { project, projectPath, tasksDir, boardRoot }
     if (role === 'plancheck') {
@@ -102,16 +101,16 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
         planCheck: true, gitSettings, assignmentForCard: config.assignmentForCard }))
     }
     if (card.column === 'planning') {
-      const setting = selected('planning')
-      return await withCardRunAssignment(run, 'planner', () => io.runCardPlanner({ ...common, onlyIds: [card.id], model: setting?.model ?? config.models.planning, engine: setting ? engineForAssignment(setting) : engine('planning'), assignmentForCard: config.assignmentForCard, mission: config.mission }))
+      const setting = selected('planning') ?? globalSettings(config).planning
+      return await withCardRunAssignment(run, 'planner', () => io.runCardPlanner({ ...common, onlyIds: [card.id], model: setting.model, engine: engineForAssignment(setting), assignmentForCard: config.assignmentForCard, mission: config.mission }))
     }
     if (['planned', 'queue'].includes(card.column)) {
       validatePlan(readFileSync(card.path, 'utf8'))
       const hold = startHoldReason({ card: { ...card, column: 'queue' }, board: readBoard(tasksDir), projectPath, tasksDir, mission: config.mission, gitSettings })
       if (hold) return stop(hold)
       if (card.column === 'planned') card = moveCard(tasksDir, card.id, 'queue')
-      const setting = selected('working')
-      return await withCardRunAssignment(run, 'builder', () => io.autoSpawn({ ...common, onlyIds: [card.id], max: 1, agents, model: setting?.model ?? config.models.working, engine: setting ? engineForAssignment(setting) : engine('working'), assignmentForCard: config.assignmentForCard, gitSettings, mission: config.mission, log }))
+      const setting = selected('working') ?? globalSettings(config).working
+      return await withCardRunAssignment(run, 'builder', () => io.autoSpawn({ ...common, onlyIds: [card.id], max: 1, agents, model: setting.model, engine: engineForAssignment(setting), assignmentForCard: config.assignmentForCard, gitSettings, mission: config.mission, log }))
     }
     if (card.column === 'completed') {
       if (gitSettings) {
@@ -125,8 +124,8 @@ export async function tickCardRun({ project, projectPath, tasksDir, boardRoot, r
     }
     if (['completed', 'review'].includes(card.column)) {
       if (!run.autoReview) return stopCardRun(project, card.id, 'Ready for review; no Reviewer authorized', 'ready-review')
-      const setting = selected('review')
-      return await withCardRunAssignment(run, 'reviewer', () => io.spawnReviewer({ ...common, cardIds: [card.id], reviewRoot, model: setting?.model ?? config.models.review, engine: setting ? engineForAssignment(setting) : engine('review'), assignmentForCard: config.assignmentForCard, inventory }))
+      const setting = selected('review') ?? globalSettings(config).review
+      return await withCardRunAssignment(run, 'reviewer', () => io.spawnReviewer({ ...common, cardIds: [card.id], reviewRoot, model: setting.model, engine: engineForAssignment(setting), assignmentForCard: config.assignmentForCard, inventory }))
     }
     stop(`Unexpected stage ${card.column}; no dispatch`)
   } catch (err) { stop(err.message); log?.(`${run.cardId}: explicit run stopped — ${err.message}`) }

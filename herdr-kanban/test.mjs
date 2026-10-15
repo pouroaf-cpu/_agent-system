@@ -471,7 +471,7 @@ test('review dispatch without eligible cards fails closed', async () => {
 test('reviewers start from the poll tick through the existing reviewer path', () => {
   const source = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8')
   const tick = source.slice(source.indexOf('async function tick'), source.indexOf('// --- SSE'))
-  assert.match(source, /autoReview\(\{[\s\S]+config\.models\.review/, 'polling uses the configured review model')
+  assert.match(source, /autoReview\(\{[\s\S]+modelFor\('review'\)/, 'polling uses the configured review model')
   assert.doesNotMatch(tick, /spawnReviewer/, 'tick still does not grow a second reviewer implementation')
   assert.match(source, /url\.pathname === '\/api\/review'[\s\S]+?spawnReviewer\(/,
     'the confirmed Review action remains available')

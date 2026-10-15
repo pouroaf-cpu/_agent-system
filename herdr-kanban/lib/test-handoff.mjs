@@ -13,7 +13,9 @@ import { bind, unbind, liveBindings } from './bindings.mjs'
 import { spawnForCard } from './spawn.mjs'
 import { routeBuilderNoHandoff, slotsFree } from './autospawn.mjs'
 import { testResultPrompt } from './prompt.mjs'
-import { engineKind } from './quota.mjs'
+import { engineKind, selectQuotaAssignment } from './quota.mjs'
+import { engineForAssignment } from './agent-settings.mjs'
+import { agentList, paneClose } from './herdr.mjs'
 import { sessionOf } from './project-key.mjs'
 import { recordUsageStart } from './request-usage.mjs'
 import { builderDifficulty } from './difficulty.mjs'
@@ -55,7 +57,27 @@ export function submitTestRun({ tasksDir, cardId, name, command, cwd, timeoutSec
 // Module-level so two overlapping scheduler passes never start two agents for one result.
 const dispatching = new Set()
 
-export async function dispatchTestResults({ project, projectPath, tasksDir, boardRoot, model, engine, gitSettings, onChange, log, agents, max, spawn = spawnForCard }) {
+// The fresh agent takes the card's Builder assignment, as a queued Builder does in autoSpawn. A
+// config.models value is a legacy fallback and never reaches a spawn: a gpt name sent to Claude
+// died with unrecognized_model (IA235, 2026-10-16) while the handoff was logged as sent.
+export function freshAgentAssignment(card, { assignmentForCard, boardRoot, now = Date.now() }) {
+  const primary = assignmentForCard?.(card, 'working')
+  if (!primary) throw new Error(`${card.id}: no agent assignment for the Builder stage`)
+  const choice = selectQuotaAssignment(boardRoot, primary, now)
+  return { hold: choice.hold, model: choice.assignment.model, engine: engineForAssignment(choice.assignment) }
+}
+
+// spawnForCard returns once herdr started the agent and the prompt was typed in. A Claude that
+// rejects its model exits at once, so the pane can still come back. Only an agent herdr still
+// lists, and not done, counts as live; anything else is closed and the dispatch fails.
+export async function confirmFreshAgent(result, session) {
+  const agent = (await agentList(session, { ensureSession: false }).catch(() => [])).find(a => a.pane_id === result.pane_id)
+  if (agent && agent.agent_status !== 'done') return true
+  await paneClose(result.pane_id, session).catch(() => {})
+  return false
+}
+
+export async function dispatchTestResults({ project, projectPath, tasksDir, boardRoot, assignmentForCard, gitSettings, onChange, log, agents, max, spawn = spawnForCard, confirmLive = confirmFreshAgent }) {
   const started = []
   for (const [id, state] of Object.entries(readWorkflow(tasksDir))) {
     if (!state?.testRun || dispatching.has(id)) continue
@@ -75,9 +97,17 @@ export async function dispatchTestResults({ project, projectPath, tasksDir, boar
     }
     if (record.state !== 'finished') continue
 
+    // Chosen before the slot is taken: a quota block waits like a queued Builder; a broken
+    // assignment is logged and retried on the next poll.
+    let fresh
+    try { fresh = freshAgentAssignment(card, { assignmentForCard, boardRoot }) }
+    catch (err) { log?.(`${id}: test result dispatch failed — ${err.message}`); continue }
+    if (fresh.hold) continue
+
     dispatching.add(id)
     try {
       const difficulty = builderDifficulty(card, state)
+      const { model, engine } = fresh
       const result = await spawn({
         project, projectPath, tasksDir, boardRoot, card, model, engine, gitSettings,
         shortPrompt: ({ workspacePath }) => testResultPrompt({ card, record, recordPath, workspacePath, boardRoot, tasksDir, engine }),
@@ -89,6 +119,7 @@ export async function dispatchTestResults({ project, projectPath, tasksDir, boar
           onChange?.()
         },
       })
+      if (!await confirmLive(result, sessionOf(project))) throw new Error(`fresh agent ${result.name || result.pane_id} is not running`)
       const binding = { ...result, engine: engineKind(engine), model }
       bind(tasksDir, id, binding)
       updateWorkflow(tasksDir, id, { builder: binding, testRun: null })
@@ -104,7 +135,7 @@ export async function dispatchTestResults({ project, projectPath, tasksDir, boar
       log?.(`${id}: test result dispatch failed (${failures}/${MAX_DISPATCH_FAILURES}) — ${err.message}`)
       if (err.movedAway || failures >= MAX_DISPATCH_FAILURES) {
         updateWorkflow(tasksDir, id, { testRun: null })
-        if (!err.movedAway) routeBuilderNoHandoff({ tasksDir, cardId: id, reason: `test result could not be handed to an agent; result at ${recordPath}`, evidence: err.message, boardRoot, engine, model, session: sessionOf(project) })
+        if (!err.movedAway) routeBuilderNoHandoff({ tasksDir, cardId: id, reason: `test result could not be handed to an agent; result at ${recordPath}`, evidence: err.message, boardRoot, engine: fresh.engine, model: fresh.model, session: sessionOf(project) })
       }
     } finally { dispatching.delete(id); onChange?.() }
   }
