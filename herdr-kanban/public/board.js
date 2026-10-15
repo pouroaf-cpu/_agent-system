@@ -1792,6 +1792,15 @@ function laneNode(col, cards) {
   head.innerHTML = '<span class="lane-label">' + CHEVRON + '<span class="lane-name"></span></span><span class="count"></span>';
   head.querySelector('.lane-name').textContent = col.label;
   head.querySelector('.count').textContent = cards.length;
+  // Who acts in this lane, shown under the name and read out with the lane (audit
+  // 2026-10-16 F4). Collapsed strips hide it; the title keeps the full text.
+  const desc = document.createElement('span');
+  desc.className = 'lane-desc';
+  desc.id = 'lane-desc-' + col.key;
+  desc.textContent = LANE_ACTOR[col.key] || '';
+  desc.title = desc.textContent;
+  if (desc.textContent) head.setAttribute('aria-describedby', desc.id);
+  head.append(desc);
   head.addEventListener('click', () => toggleLane(col.key));
 
   const body = document.createElement('div');
@@ -2412,6 +2421,19 @@ async function spawn(hit) {
 
 
 const LANE_LABEL = { pou: 'Pou', owner: 'Owner', planning: 'Planning', planned: 'Planned', queue: 'Queue', working: 'Working', issues: 'Issues', review: 'Review', completed: 'Completed', archive: 'Archive' };
+// Who acts in each lane, from HOW-IT-WORKS.md ("The lanes").
+const LANE_ACTOR = {
+  pou: 'You: only the decisions that need you.',
+  owner: 'Kanban Manager: fixes board issues and asks product questions.',
+  planning: 'Planner: writes the plan.',
+  planned: 'Plan checker: checks the plan before Queue.',
+  queue: 'Board: starts a Builder once blockers and files are clear.',
+  working: 'Builder: builds in its own worktree.',
+  issues: 'Board: routes technical recovery automatically.',
+  review: 'Reviewer: checks the integrated code.',
+  completed: 'Board: integrates the commit, then archives it.',
+  archive: 'Done: nobody acts here.',
+};
 async function operatorAction(op, id, button) {
   if (MOCK) return toast('mock: would ' + op + ' ' + id);
   button.disabled = true;

@@ -151,6 +151,12 @@ select {
 .lane-head:focus-visible { outline-offset: -2px; }
 .lane-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .lane-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lane-head { flex-wrap: wrap; row-gap: 4px; }
+.lane-desc {
+  flex: 0 0 100%; font: 400 12px/1.35 var(--font); color: var(--muted); text-align: left;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+.lane.collapsed .lane-desc { display: none; }
 .lane-head:hover .lane-name { color: var(--active); }
 .lane-chev { display: none; color: var(--muted); }
 .count { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
