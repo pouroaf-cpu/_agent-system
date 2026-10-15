@@ -2,12 +2,12 @@
 // holder in Owner, and workspace-prefixed file paths that were doubled.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard } from './lib/cards.mjs'
-import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall } from './lib/worktrees.mjs'
+import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall, updateWorktree } from './lib/worktrees.mjs'
 import { autoSpawn, holdsFor } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
@@ -219,4 +219,42 @@ test('workspace . links node_modules into installed package subfolders (Tradeflo
   const entry = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: parseCard(path, 'queue'), gitSettings: f.settings })
   assert.ok(lstatSync(join(entry.workspacePath, 'site', 'node_modules')).isSymbolicLink(), 'site gets the shared junction')
   assert.ok(!existsSync(join(entry.workspacePath, 'other', 'node_modules')), 'uninstalled folder is left alone')
+})
+
+// Audit 2026-10-15 F8: two queued cards list the same file, which is not a parallel file. The
+// scheduler starts one and holds the other as files busy until the first has integrated and
+// archived; it never lets them build together to meet as a rebase conflict.
+test('F8 AC1/AC2: the second of two queued cards editing the same file waits as files busy and starts once the first archives', async t => {
+  const f = repo(t)
+  f.add('T-40', ['site/app.js'])
+  f.add('T-41', ['site/app.js'])
+  const started = []
+  // Like spawnForCard: the card worktree, whose registry entry carries the plan Files, is
+  // prepared before the Builder starts.
+  const spawn = async ({ card, projectPath, tasksDir, gitSettings }) => {
+    prepareCardWorktree({ projectPath, tasksDir, card, gitSettings })
+    started.push(card.id)
+    return { pane_id: `pane-${card.id}`, tab_id: `tab-${card.id}`, name: `b-${card.id.toLowerCase()}` }
+  }
+  const args = { project: 'f8', projectPath: f.integration, tasksDir: f.tasks, boardRoot: f.root, model: 'm', agents: [], max: 5, gitSettings: f.settings, spawn }
+  await autoSpawn(args)
+  assert.deepEqual(started, ['T-40'], 'AC1: one dispatched')
+  assert.equal(findCard(f.tasks, 'T-40').column, 'working')
+  assert.equal(findCard(f.tasks, 'T-41').column, 'queue')
+  assert.equal(holdsFor('f8')['T-41'], 'files busy, held by T-40 — site/app.js', 'AC1: the other held with the files-busy reason')
+
+  // Still held while the first sits in Completed waiting to integrate.
+  const move = (id, column) => { const c = findCard(f.tasks, id); mkdirSync(join(f.tasks, column), { recursive: true }); renameSync(c.path, join(f.tasks, column, c.file)) }
+  move('T-40', 'completed')
+  await autoSpawn(args)
+  assert.deepEqual(started, ['T-40'])
+  assert.equal(holdsFor('f8')['T-41'], 'files busy, held by T-40 — site/app.js')
+
+  // Integrated and archived: the held card starts on the next pass.
+  updateWorktree(f.tasks, 'T-40', { state: 'integrated', cleaned: true })
+  move('T-40', 'archive')
+  await autoSpawn(args)
+  assert.deepEqual(started, ['T-40', 'T-41'], 'AC2: the held card dispatches once the first archives')
+  assert.equal(findCard(f.tasks, 'T-41').column, 'working')
+  assert.equal(holdsFor('f8')['T-41'], undefined)
 })

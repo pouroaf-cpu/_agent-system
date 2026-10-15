@@ -706,3 +706,39 @@ test('a Claude Builder with no recorded session is identified by its live board-
   assert.doesNotMatch(result.reason || '', /identity/)
   assert.equal(integrated, 1)
 })
+
+test('a rebase that fails without a conflicting file is re-run with backoff twice before a Builder is spent; a content conflict returns at once (audit 2026-10-15 F8)', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'rebase-retry-')), tasksDir = join(root, 'TASKS')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const plan = id => `# ${id} — task\n**Workflow:** card-owned\n\n## Approved brief\nDo it\n## Files\n- \`app.js\` — change\n## Implementation plan\nChange app.js\n## Acceptance criteria\n- AC1: works\n## Implementation\nStage: builder\nOutcome: PASS\n## Evidence\nCheck: node -e "process.exit(0)"\nResult: passed\n`
+  mkdirSync(join(tasksDir, 'completed'), { recursive: true })
+  for (const id of ['T-1', 'T-2']) writeFileSync(join(tasksDir, 'completed', `${id}.md`), plan(id))
+  const entry = id => ({ cardId: id, state: 'building', worktreePath: root, workspacePath: root, baseCommit: 'b0' })
+  writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry('T-1'), 'T-2': entry('T-2') }))
+  let rebases = 0
+  const noFiles = { status: 'conflict', reason: 'integration conflict while rebasing onto master h1h1h1h1h1h1', files: [], hunks: 'fatal: Unable to create index.lock: File exists.', head: 'h1' }
+  const io = { agentList: async () => [], reconcile: ({ onlyIds }) => { rebases++; return [{ id: onlyIds[0], ...noFiles }] } }
+  let now = 1_000_000
+  const poll = () => reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-1'], io, now })
+  let [r] = await poll()
+  assert.equal(r.status, 'held'); assert.match(r.reason, /^rebase onto integration failed without a conflicting file \(integration conflict while rebasing onto master h1h1h1h1h1h1\); re-running it; retrying at /)
+  assert.equal(findCard(tasksDir, 'T-1').column, 'completed', 'no Builder spent')
+  assert.equal(JSON.parse(readFileSync(join(tasksDir, '.board-worktrees.json'), 'utf8'))['T-1'].state, 'building')
+  ;[r] = await poll()
+  assert.equal(r.status, 'held'); assert.equal(rebases, 1, 'not re-run before the backoff passes')
+  now += 2 * 60000
+  ;[r] = await poll()
+  assert.equal(rebases, 2); assert.equal(r.status, 'held')
+  now += 6 * 60000
+  ;[r] = await poll()
+  assert.equal(rebases, 3)
+  assert.deepEqual([r.status, r.to], ['returned', 'queue'], 'the third failure returns it to a Builder')
+  assert.equal(findCard(tasksDir, 'T-1').column, 'queue')
+  assert.equal(readWorkflow(tasksDir)['T-1'].integrationRetry, null)
+
+  // A content conflict names its files: a re-run would hit the same conflict, so it returns now.
+  const conflict = { ...noFiles, files: ['app.js'], hunks: '<<<<<<< HEAD\nmaster\n=======\ncard\n>>>>>>> card' }
+  const [first] = await reconcileCompletedHandoffs({ tasksDir, project: 'Proof', onlyIds: ['T-2'], io: { ...io, reconcile: ({ onlyIds }) => [{ id: onlyIds[0], ...conflict }] }, now })
+  assert.deepEqual([first.status, first.to], ['returned', 'queue'])
+  assert.match(first.reason, /\(files: app\.js\)/)
+})

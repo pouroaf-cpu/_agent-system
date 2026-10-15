@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCard, findCard, moveCard } from './lib/cards.mjs'
@@ -248,4 +248,25 @@ test('F7 AC4: the board page loads against a real server with no console error a
     assert.deepEqual(errors, [])
     assert.deepEqual(failed, [])
   } finally { await browser.close() }
+})
+
+test('F8: a board drag into Working is refused while a live card holds one of its files', async () => {
+  const holder = createCard(tasks, { title: 'Holder', brief: 'x', prefix: 'P' })
+  const waiter = createCard(tasks, { title: 'Waiter', brief: 'x', prefix: 'P' })
+  // The template already carries an empty "## Files" section: fill that one in.
+  for (const c of [holder, waiter]) writeFileSync(c.path, readFileSync(c.path, 'utf8').replace(/## Files\r?\n<!--[^\n]*\n/, '## Files\n\n- `app/app.mjs` — change\n'))
+  mkdirSync(join(tasks, 'working'), { recursive: true })
+  renameSync(holder.path, join(tasks, 'working', holder.path.split(/[\\/]/).pop()))
+  const app = join(root, 'Proj', 'app', 'app.mjs').replace(/\\/g, '/').toLowerCase()
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ [holder.id]: { cardId: holder.id, state: 'building', integrationWorkspace: join(root, 'Proj'), files: [app] } }))
+  const from = findCard(tasks, waiter.id).column
+  let r = await post('/api/move', { id: waiter.id, to: 'working' })
+  assert.equal(r.status, 409, JSON.stringify(r.body))
+  assert.equal(r.body.error, `${waiter.id} cannot start: files busy, held by ${holder.id} — app/app.mjs`)
+  assert.equal(findCard(tasks, waiter.id).column, from, 'the card stays where it was')
+  // The holder integrated: the same drag goes through.
+  writeFileSync(join(tasks, '.board-worktrees.json'), JSON.stringify({ [holder.id]: { cardId: holder.id, state: 'integrated', cleaned: true, files: [app] } }))
+  r = await post('/api/move', { id: waiter.id, to: 'working' })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  assert.equal(findCard(tasks, waiter.id).column, 'working')
 })

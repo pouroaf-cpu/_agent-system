@@ -192,6 +192,19 @@ export function returnIntegrationConflict(tasksDir, cardId, { reason, files = []
   return { id: cardId, status: 'returned', to, reason: to === 'owner' ? `${detail}${planError ? ` (not returned to a Builder: ${planError})` : ''}. ${action}` : detail }
 }
 
+// Audit 2026-10-15 F8: a rebase that failed with no conflicting file (git refused it: a lock, a
+// dirty worktree, integration moving while it ran) is re-run with backoff, twice, before a
+// Builder is spent on it. A content conflict names its files and returns at once: re-running
+// the same rebase onto the same history would only conflict again.
+function rebaseRetry(tasksDir, cardId, result, now) {
+  if (result.blocked || result.files?.length) return null
+  const retry = nextRetry(readWorkflow(tasksDir)[cardId]?.integrationRetry, now)
+  if (retry.exhausted || retry.tries > 2) return null
+  const reason = retryHold(`rebase onto integration failed without a conflicting file (${String(result.reason).split('\n')[0]}); re-running it`, retry.nextAt)
+  updateWorkflow(tasksDir, cardId, { integrationRetry: { since: retry.since, tries: retry.tries, nextAt: retry.nextAt, reason } })
+  return { id: cardId, status: 'held', reason }
+}
+
 // Recorded Check re-runs in flight under `background`, by tasksDir + card id: { commit, result }.
 const recordedChecks = new Map()
 const RECORDED_RUNNING = 'recorded check is running in the background'
@@ -268,7 +281,10 @@ export async function reconcileCompletedHandoffs({ tasksDir, project, onlyIds, i
     if (gated) { results.push(gated); continue }
     const batch = readWorktrees(tasksDir)[card.id]?.state === 'rebased' ? [{ id: card.id, status: 'rebased' }] : io.reconcile({ tasksDir, onlyIds: [card.id] })
     for (const result of batch) {
-      if (result.status === 'conflict') { results.push(returnIntegrationConflict(tasksDir, card.id, result)); continue }
+      if (result.status === 'conflict') {
+        const retry = rebaseRetry(tasksDir, card.id, result, now)
+        results.push(retry || returnIntegrationConflict(tasksDir, card.id, result)); continue
+      }
       if (result.status !== 'rebased') { results.push(result); continue }
       const worktree = readWorktrees(tasksDir)[card.id], run = io.runCheck ?? runRecordedCheck, job = recordedChecks.get(key)
       recordedChecks.delete(key)

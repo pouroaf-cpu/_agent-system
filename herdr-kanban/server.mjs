@@ -65,7 +65,7 @@ const { readRetries } = await import('./lib/retries.mjs')
 const { recordSpawn, recordSpawnFailure, breakerState, resetBreaker } = await import('./lib/breaker.mjs')
 const { cardUsageSummary, mergeUsageSummaries, reconcileUsage, recordUsageFinish, usageSummary, readUsage, recordUsageStart } = await import('./lib/request-usage.mjs')
 const { activityLog } = await import('./lib/activity.mjs')
-const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, freeGb, integratedDependencyHold, forgetInstallFailures } = await import('./lib/worktrees.mjs')
+const { readWorktrees, reconcileCompletedWorktrees, resolveGitSettings, recordedOverlapBlockers, filesBusyHolder, overlapHoldReason, freeGb, integratedDependencyHold, forgetInstallFailures } = await import('./lib/worktrees.mjs')
 const { STAGES, globalSettings, assignmentFor, engineForAssignment, validateSettingsPatch, catalog, setCardOverride } = await import('./lib/agent-settings.mjs')
 
 const projectPathOf = (project) => join(config.projectsRoot, project)
@@ -1436,6 +1436,14 @@ const handleRequest = async (req, res) => {
     try {
       const { project: p = config.projects[0], id, to } = posted
       const before = findCard(tasksDirOf(p), id)
+      // Audit 2026-10-15 F8: a drag into Working skipped the scheduler's files-busy hold, so
+      // sibling cards editing the same file built together and the later ones came back as
+      // rebase conflicts. The drag is refused with the hold the scheduler would show.
+      if (to === 'working' && before.column !== 'working') {
+        const settings = projectSettingsOf(p) || {}
+        const hold = overlapHoldReason({ tasksDir: tasksDirOf(p), card: before, projectPath: integrationPathOf(p), parallelFiles: settings.parallelFiles, generatedFiles: settings.generatedFiles })
+        if (filesBusyHolder(hold)) return json(res, 409, { ok: false, error: `${before.id} cannot start: ${hold}` })
+      }
       const card = moveCard(tasksDirOf(p), id, to, { operatorArchive: to === 'archive' })
       // A person moving a Planning card with any Planner wait is the answer: lift the hold.
       const wait = before.column === 'planning' && readWorkflow(tasksDirOf(p))[card.id]?.waitFor
