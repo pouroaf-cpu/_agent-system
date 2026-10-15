@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
@@ -156,6 +156,27 @@ test('a card whose node_modules exists but is empty still waits for an install',
   mkdirSync(join(card, 'node_modules'), { recursive: true }) // the junction target was emptied
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': { workspacePath: card } }))
   assert.ok(f.hold()?.startsWith(`installing dependencies in ${f.folder}`)) // may queue behind an earlier test's install
+})
+
+// Injectbuddy I1318 (Workspace public) and I1324 (Workspace app), 15 Oct 2026: a card whose Workspace is a plain folder
+// under the package root got no node_modules at all, so every Builder's build failed. It now links the root's.
+test('a Workspace that is a plain folder under the package root links the root node_modules', t => {
+  const root = mkdtempSync(join(tmpdir(), 'hkb-deps-sub-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const integ = join(root, 'integration'), card = join(root, 'card')
+  for (const dir of [integ, card]) {
+    mkdirSync(join(dir, 'public'), { recursive: true })
+    writeFileSync(join(dir, 'package.json'), '{"dependencies":{"dep":"1"}}')
+    writeFileSync(join(dir, 'package-lock.json'), '{}')
+    writeFileSync(join(dir, '.gitignore'), 'node_modules/\n')
+    writeFileSync(join(dir, 'public', 'index.html'), '')
+    spawnSync('git', ['-C', dir, 'init'], { windowsHide: true })
+  }
+  mkdirSync(join(integ, 'node_modules', 'dep'), { recursive: true })
+  writeFileSync(join(integ, 'node_modules', 'dep', 'package.json'), '{"version":"1.0.0"}')
+  prepareWorktreeEnvironment({ workspacePath: join(card, 'public'), integrationWorkspace: join(integ, 'public') })
+  assert.equal(lstatSync(join(card, 'node_modules')).isSymbolicLink(), true)
+  assert.ok(existsSync(join(card, 'node_modules', 'dep', 'package.json')))
 })
 
 // IA97 2026-10-09: stale .expo/types made tsc reject /auth/login after the auth cards landed.

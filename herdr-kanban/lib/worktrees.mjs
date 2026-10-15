@@ -228,6 +228,19 @@ function installedVersionDrift(folder) {
   return drift
 }
 
+// The nearest folder above a workspace, inside its git checkout, that has a package.json (null outside a checkout).
+function packageRootAbove(workspacePath) {
+  const top = gitRoot(workspacePath)
+  if (!top) return null
+  const root = resolve(top)
+  const inside = (dir) => { const rel = relative(root, dir); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) }
+  for (let dir = dirname(resolve(workspacePath)); inside(dir); dir = dirname(dir)) {
+    if (existsSync(join(dir, 'package.json'))) return dir
+    if (dir === root) break
+  }
+  return null
+}
+
 function prepareDependencies(workspacePath, source) {
   if (!existsSync(join(workspacePath, 'package.json'))) {
     // Workspace `.` over package subfolders (Tradeflow tradesflow-website, TF109-TF118 2026-10-01):
@@ -235,6 +248,12 @@ function prepareDependencies(workspacePath, source) {
     for (const d of readdirSync(workspacePath, { withFileTypes: true })) {
       if (d.isDirectory() && d.name !== 'node_modules' && existsSync(join(workspacePath, d.name, 'package.json')) && existsSync(join(source, d.name, 'node_modules'))) prepareDependencies(join(workspacePath, d.name), join(source, d.name))
     }
+    // A plain folder under the package root (a card whose Workspace is `public` or `app`, Injectbuddy I1318 and I1324,
+    // 15 Oct 2026) has no package.json and no package subfolders, so it got no node_modules and every Builder's build
+    // failed with "Cannot find package". Node and npm resolve modules from the nearest package root, so link that one.
+    const packageFolders = readdirSync(workspacePath, { withFileTypes: true }).some(d => d.isDirectory() && existsSync(join(workspacePath, d.name, 'package.json')))
+    const above = packageFolders ? null : packageRootAbove(workspacePath)
+    if (above) prepareDependencies(above, resolve(source, relative(workspacePath, above)))
     return
   }
   const manifest = JSON.parse(readFileSync(join(workspacePath, 'package.json'), 'utf8'))
