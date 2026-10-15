@@ -12,6 +12,17 @@
     table { border-collapse: collapse; background: white; width: 100%; }
     th, td { padding: 8px; border: 1px solid #dde1e7; text-align: right; }
     th { font-weight: 600; } th:first-child, td:first-child { text-align: left; white-space: nowrap; }
+    /* Under 1300 px the 24-column daily table ran 1,928 px wide inside the page (audit
+       2026-10-15 F10): each day becomes a block of label/value pairs instead. */
+    @media (max-width: 1300px) {
+      .table-wrap { overflow: visible; }
+      table, tbody, tr, td { display: block; width: 100%; box-sizing: border-box; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      tr { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0 16px; padding: 8px 12px; margin-bottom: 8px; border: 1px solid #dde1e7; background: white; }
+      td { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 0; border: 0; border-bottom: 1px solid #eef0f3; text-align: right; }
+      td:first-child { grid-column: 1 / -1; text-align: left; white-space: normal; font-weight: 600; }
+      td::before { content: attr(data-label); text-align: left; color: #5b6472; overflow-wrap: anywhere; }
+    }
   </style>
 </head>
 <body>

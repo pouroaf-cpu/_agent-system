@@ -498,9 +498,13 @@ select {
   .drawer { left: 0; width: 100vw; border-left: 0; }
   .drawer-head, .drawer-body { padding: 16px; }
   .drawer-dl { grid-template-columns: 76px minmax(0, 1fr); }
-  .drawer-body .pri-set { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; width: 100%; border: 0; overflow: visible; }
-  .drawer-body .pri-step { width: auto; min-width: 0; height: 44px; border: 1px solid var(--line); border-radius: var(--radius); }
-  .settings-steps .pri-step { height: 44px; }
+  /* Step buttons wrap into as many 44 px columns as fit (audit 2026-10-15 F10): six fixed
+     columns gave 39 px priority buttons beside the drawer's label column, and the Settings
+     row clipped steps 8 to 10 past the right edge of a 375 px phone. */
+  .drawer-body .pri-set { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; width: 100%; border: 0; overflow: visible; }
+  .drawer-body .pri-step, .settings-steps .pri-step { width: auto; min-width: 44px; height: 44px; border: 1px solid var(--line); border-radius: var(--radius); }
+  .settings-steps { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; border: 0; overflow: visible; }
+  .settings-steps .pri-step { flex: 1 0 44px; }
   .override-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .auto-review input { width: 20px; height: 20px; }
   .more-menu { position: fixed; top: auto; left: 16px; right: 16px; width: auto; max-width: none; }

@@ -38,7 +38,8 @@ async function refresh() {
             row.kickBacksPerFinishedCard == null ? '—' : row.kickBacksPerFinishedCard.toFixed(2),
             ...difficulties.flatMap(d => [row.builderDifficulty?.[d]?.attempts || 0, row.builderDifficulty?.[d]?.kickBacks || 0])]
           const tr = body.insertRow()
-          for (const value of cells) tr.insertCell().textContent = value
+          // data-label carries the column heading for the stacked layout under 1300 px.
+          cells.forEach((value, i) => { const cell = tr.insertCell(); cell.textContent = value; cell.dataset.label = headings[i] })
         }
         wrap.append(table)
         section.append(wrap)
@@ -66,7 +67,7 @@ async function refresh() {
           const g = row[role][group]
           if (group !== 'all' && !g.sessions) continue
           const tr = body.insertRow()
-          for (const value of [row.day, role === 'planner' ? 'Planner' : 'Builder', label, g.sessions, g.unknown, g.medianSteps, g.p90Steps, g.medianTokens]) tr.insertCell().textContent = show(value)
+          ;[row.day, role === 'planner' ? 'Planner' : 'Builder', label, g.sessions, g.unknown, g.medianSteps, g.p90Steps, g.medianTokens].forEach((value, i) => { const cell = tr.insertCell(); cell.textContent = show(value); cell.dataset.label = stepHeadings[i] })
         }
         wrap.append(table)
         section.append(wrap)
