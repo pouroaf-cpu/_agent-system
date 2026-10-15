@@ -26,16 +26,16 @@ function fixture() {
   return tasks
 }
 
-test('the archived-card sweep plans caches and over-cap files for archived cards only', () => {
-  const plan = planArchivedEvidence(fixture())
+test('the archived-card sweep plans caches and over-cap files for archived cards only', async () => {
+  const plan = await planArchivedEvidence(fixture())
   assert.deepEqual(plan.cards.map(c => c.id), ['T-1'])
   assert.deepEqual(plan.cards[0].items.map(i => i.kind).sort(), ['cache', 'oversize'])
   assert.deepEqual(plan.skipped, { live: 1, audit: 1, unknown: 2 })
 })
 
-test('applying the plan removes archived cache folders, cuts over-cap files, and touches nothing else', () => {
+test('applying the plan removes archived cache folders, cuts over-cap files, and touches nothing else', async () => {
   const tasks = fixture()
-  const done = applyEvidencePlan(planArchivedEvidence(tasks))
+  const done = await applyEvidencePlan(await planArchivedEvidence(tasks))
   assert.deepEqual(done.failed, [])
   const ev = id => join(tasks, '.evidence', id)
   assert.equal(existsSync(join(ev('T-1'), 'node_modules')), false)
@@ -47,22 +47,31 @@ test('applying the plan removes archived cache folders, cuts over-cap files, and
   }
 })
 
-test('with keepDays, an archived card whose files are all older is planned and removed as a whole folder', () => {
+test('with keepDays, an archived card whose files are all older is planned and removed as a whole folder', async () => {
   const tasks = fixture()
   const old = new Date(Date.now() - 100 * 86400000)
   utimesSync(join(tasks, '.evidence', 'T-1', 'big.json'), old, old)
   utimesSync(join(tasks, '.evidence', 'T-1', 'summary.md'), old, old)
-  assert.deepEqual(planArchivedEvidence(tasks).cards[0].items.map(i => i.kind).sort(), ['cache', 'oversize'])
-  const plan = planArchivedEvidence(tasks, { keepDays: 30 })
+  assert.deepEqual((await planArchivedEvidence(tasks)).cards[0].items.map(i => i.kind).sort(), ['cache', 'oversize'])
+  const plan = await planArchivedEvidence(tasks, { keepDays: 30 })
   assert.equal(plan.cards.length, 1)
   assert.deepEqual(plan.cards[0].items.map(i => i.kind), ['age'])
   assert.equal(plan.cards[0].items[0].path, join(tasks, '.evidence', 'T-1'))
-  assert.deepEqual(applyEvidencePlan(plan).failed, [])
+  assert.deepEqual((await applyEvidencePlan(plan)).failed, [])
   assert.equal(existsSync(join(tasks, '.evidence', 'T-1')), false)
   assert.ok(existsSync(join(tasks, '.evidence', 'T-2', 'node_modules')))
 })
 
-test('an archived card with fresh files is not aged out when keepDays is set', () => {
-  const plan = planArchivedEvidence(fixture(), { keepDays: 30 })
+test('an archived card with fresh files is not aged out when keepDays is set', async () => {
+  const plan = await planArchivedEvidence(fixture(), { keepDays: 30 })
   assert.deepEqual(plan.cards.map(c => c.items.map(i => i.kind)), [['cache', 'oversize']])
+})
+
+test("the plan yields to the board event loop while it walks the evidence", async () => {
+  const tasks = fixture()
+  let ran = false
+  const pending = planArchivedEvidence(tasks)
+  setImmediate(() => { ran = true })
+  await pending
+  assert.equal(ran, true)
 })

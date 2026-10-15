@@ -13,7 +13,7 @@ if (!tasksDir || !(keepDays >= 0)) {
   process.exit(2)
 }
 const mb = bytes => (bytes / (1024 * 1024)).toFixed(1)
-const plan = planArchivedEvidence(resolve(tasksDir), { keepDays })
+const plan = await planArchivedEvidence(resolve(tasksDir), { keepDays })
 let total = 0
 for (const card of plan.cards) {
   total += card.bytes
@@ -22,7 +22,7 @@ for (const card of plan.cards) {
 }
 console.log(`${plan.cards.length} archived card(s), ${mb(total)} MB would be freed. Skipped: live ${plan.skipped.live}, audit ${plan.skipped.audit}, unknown ${plan.skipped.unknown}.`)
 if (argv.includes('--apply')) {
-  const done = applyEvidencePlan(plan)
+  const done = await applyEvidencePlan(plan)
   console.log(`changed ${done.items} item(s), ${mb(done.bytes)} MB; failed ${done.failed.length}`)
   for (const line of done.failed) console.log(`    ${line}`)
 } else {

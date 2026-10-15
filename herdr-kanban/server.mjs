@@ -212,16 +212,23 @@ function checkDisk(now = Date.now()) {
     // Archived-card evidence: off unless board.config.json sets evidenceSweep or evidenceKeepDays (days, 0 = no age rule).
     // Live and audit cards are never planned (lib/evidence-sweep.mjs).
     const keepDays = Number(config.evidenceKeepDays) || 0
-    if (config.evidenceSweep || keepDays > 0) {
-      for (const project of config.projects) {
-        try {
-          const freed = sweepArchivedEvidence(tasksDirOf(project), { keepDays })
-          if (freed.items) boardLog(`${project}: archived evidence swept: ${freed.items} item(s), ${(freed.bytes / 1e6).toFixed(0)} MB`)
-          if (freed.failed.length) boardLog(`${project}: evidence sweep could not remove ${freed.failed.length} item(s)`, 'error')
-        } catch (err) { console.error(`evidence sweep failed for ${project}: ${err.message}`) }
-      }
-    }
+    if (config.evidenceSweep || keepDays > 0) sweepEvidence(keepDays).catch(err => console.error(`evidence sweep failed: ${err.message}`))
   }
+}
+// One run at a time. The sweep is async, so the board keeps answering while it walks the evidence folders.
+let evidenceSweeping = false
+async function sweepEvidence(keepDays) {
+  if (evidenceSweeping) return
+  evidenceSweeping = true
+  try {
+    for (const project of config.projects) {
+      try {
+        const freed = await sweepArchivedEvidence(tasksDirOf(project), { keepDays })
+        if (freed.items) boardLog(`${project}: archived evidence swept: ${freed.items} item(s), ${(freed.bytes / 1e6).toFixed(0)} MB`)
+        if (freed.failed.length) boardLog(`${project}: evidence sweep could not remove ${freed.failed.length} item(s)`, 'error')
+      } catch (err) { console.error(`evidence sweep failed for ${project}: ${err.message}`) }
+    }
+  } finally { evidenceSweeping = false }
 }
 function diskLoop() {
   checkDisk()

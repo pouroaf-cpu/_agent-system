@@ -62,30 +62,13 @@ export function walkEvidence(folder, { maxEntries = 5000 } = {}) {
   return { files, caches, truncated }
 }
 
-// Total bytes and newest mtime under a path. A cache folder is measured in full.
-export function measure(path, { maxEntries = 200000 } = {}) {
-  let bytes = 0, newest = 0, seen = 0
-  const walk = p => {
-    if (++seen > maxEntries) return
-    let st
-    try { st = statSync(p) } catch { return }
-    if (st.isDirectory()) {
-      let names = []
-      try { names = readdirSync(p) } catch { /* unreadable: counted as-is */ }
-      for (const name of names) walk(join(p, name))
-      return
-    }
-    bytes += st.size
-    newest = Math.max(newest, st.mtimeMs)
-  }
-  walk(path)
-  return { bytes, newest, truncated: seen > maxEntries }
-}
-
 // The over-cap files a folder holds now, for --pre to compare against after the command.
 export function overCapFiles(folder) {
   return walkEvidence(folder).files.filter(f => f.bytes > EVIDENCE_FILE_CAP).map(f => f.path)
 }
+
+// The text left where a cut removed the middle of an over-cap file.
+export const cutMarker = (cut, cap = EVIDENCE_FILE_CAP) => Buffer.from(`\n[... the board cut ${mb(cut)} MB from the middle of this file: evidence files are capped at ${mb(cap)} MB. Keep counts and summaries here; put a full log in a file that is read with head or tail ...]\n`)
 
 // Cuts a file over the cap to its first and last half, with a marker where the middle was removed. Returns
 // the bytes removed (0 when the file is within the cap).
@@ -100,8 +83,7 @@ export function truncateEvidenceFile(path, cap = EVIDENCE_FILE_CAP) {
     readSync(fd, tail, 0, half, size - half)
   } finally { closeSync(fd) }
   const cut = size - 2 * half
-  const marker = Buffer.from(`\n[... the board cut ${mb(cut)} MB from the middle of this file: evidence files are capped at ${mb(cap)} MB. Keep counts and summaries here; put a full log in a file that is read with head or tail ...]\n`)
-  writeFileSync(path, Buffer.concat([head, marker, tail]))
+  writeFileSync(path, Buffer.concat([head, cutMarker(cut, cap), tail]))
   return cut
 }
 
