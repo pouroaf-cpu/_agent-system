@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendReviewPass, findCard, moveCard, parseCard, readBoard } from './lib/cards.mjs'
-import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, cleanupPreparedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree, rebaseCompletedOntoIntegration } from './lib/worktrees.mjs'
+import { overlapHoldReason, recordedOverlapBlockers, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, recoverAbandonedWorktree, completeUnchangedWorktree, cleanupPreparedWorktree, semanticDirtyFiles, integrationStartHoldReason, normalizeGuardedEol, formatChangeError, filesBusyHolder, updateWorktree, rebaseCompletedOntoIntegration, handoffCommitError } from './lib/worktrees.mjs'
 import { readWorkflow, updateWorkflow } from './lib/workflow-state.mjs'
 import { startHoldReason, preflightBlocks } from './lib/autospawn.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
@@ -1214,6 +1214,26 @@ test('HK78: a first Builder run gets no hand-over', () => {
     moveCard(f.tasks, 'T-1', 'planning'); moveCard(f.tasks, 'T-1', 'queue')
     const card = moveCard(f.tasks, 'T-1', 'working')
     assert.equal(prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings }).handover, undefined)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('the allowed-files check resolves Files against the card Workspace, not the folder its worktree was made under', () => {
+  const f = fixture()
+  try {
+    mkdirSync(join(f.integration, 'public'))
+    writeFileSync(join(f.integration, 'public', 'app.js'), 'public base\n')
+    git(f.integration, 'add', 'public/app.js')
+    git(f.integration, 'commit', '-m', 'public folder')
+    const card = f.addCard('T-1', 'app.js')
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    assert.equal(prepared.entry.workspaceRel, '')
+    // The card moves to public with its Files still relative to it; the registry entry still names the root.
+    writeFileSync(card.path, readFileSync(card.path, 'utf8').replace('**Workspace:** .', '**Workspace:** public'))
+    writeFileSync(join(prepared.workspacePath, 'public', 'app.js'), 'card one\n')
+    git(prepared.workspacePath, 'add', 'public/app.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    f.complete('T-1')
+    assert.equal(handoffCommitError(f.tasks, parseCard(findCard(f.tasks, 'T-1').path, 'completed')), null)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

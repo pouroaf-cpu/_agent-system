@@ -756,7 +756,11 @@ function commitsAfter(entry) {
 }
 
 function expectedRepoFiles(card, entry) {
-  return workspaceFiles(card, entry.integrationWorkspace || entry.workspacePath).map((file) => slash(join(entry.workspaceRel || '', file))).sort()
+  // Files are Workspace-relative, so they resolve against the card's current Workspace. The registry's
+  // workspaceRel can still name the folder the worktree was made under (Injectbuddy I1322: public -> '.').
+  const workspace = resolve(entry.repoRoot, card.workspace || '.')
+  const rel = slash(relative(entry.repoRoot, workspace))
+  return workspaceFiles(card, workspace).map((file) => slash(join(rel, file))).sort()
 }
 
 function commitFiles(entry, commit) {

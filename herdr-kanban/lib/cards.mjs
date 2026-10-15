@@ -782,6 +782,29 @@ function withWorkspace(text, workspace) {
   return heading ? text.replace(heading[0], () => `${heading[0]}\n\n${line}`) : `${line}\n\n${text}`
 }
 
+// Files are Workspace-relative, so a Workspace change re-bases each listed path to name the same file
+// (Injectbuddy I1322: Workspace public -> '.' left `ib-calc.css` pointing at the repo root). A path the
+// new Workspace does not hold refuses the change, so nothing is left pointing outside it.
+function rebaseFiles(text, from, to, projectPath) {
+  const section = text.match(FILES_SECTION)
+  if (!section) return text
+  const folderOf = (ws) => { const s = String(ws).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, ''); return !s || s === '.' ? '' : `${s}/` }
+  const [fromFolder, toFolder] = [folderOf(from), folderOf(to)]
+  const outside = []
+  const body = section[1].replace(/^(-\s*`)([^`]+)(`)/gm, (line, open, file, close) => {
+    let path = file.replace(/\\/g, '/').replace(/^\.\//, '')
+    // Same rule as the integration check: a path written with the old folder in front keeps it when
+    // that folder does not also hold a folder of that name (Tradeflow T-31..T-35).
+    if (fromFolder && path.toLowerCase().startsWith(fromFolder.toLowerCase()) && !existsSync(resolve(projectPath, fromFolder, fromFolder))) path = path.slice(fromFolder.length)
+    const repo = fromFolder + path
+    if (!repo.toLowerCase().startsWith(toFolder.toLowerCase()) || repo.split('/').includes('..')) { outside.push(file); return line }
+    return `${open}${repo.slice(toFolder.length)}${close}`
+  })
+  if (outside.length) throw new Error(`Workspace ${to} does not hold these Files: ${outside.join(', ')}; move or remove them before changing Workspace`)
+  const at = section.index + section[0].length - section[1].length
+  return text.slice(0, at) + body + text.slice(at + section[1].length)
+}
+
 // The header's Blocked-by line sits right under Priority (I270's format). An empty list removes it.
 function withBlockers(text, ids) {
   const line = ids.length ? `**Blocked by:** ${ids.join(', ')}` : ''
@@ -860,6 +883,7 @@ export function updateCard(tasksDir, cardId, { priority, addBlockedBy = [], remo
     if (typeof workspace !== 'string') throw new Error('workspace must be a project-relative path string')
     const value = checkWorkspace(projectPath, workspace)
     text = withWorkspace(text, value)
+    if (value !== (card.workspace || '.')) text = rebaseFiles(text, card.workspace || '.', value, projectPath)
     changes.push(`workspace ${value}`)
   }
   if (investigationApproved !== undefined) {
