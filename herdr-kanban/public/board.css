@@ -445,11 +445,23 @@ select {
 .usage-runs th:last-child, .usage-runs td:last-child { text-align: right; padding-left: 12px; font-variant-numeric: tabular-nums; }
 .usage-runs tr.shared td { color: var(--muted); }
 .usage-breakdown { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
-.usage-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.usage-table-scroll {
+  max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius);
+  /* Edge shadows show only when the table is wider than the box: the cover layers (local) hide them at the content edge. */
+  background:
+    linear-gradient(to right, var(--surface) 30%, rgba(255, 255, 255, 0)) left center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 30%, rgba(255, 255, 255, 0)) right center / 24px 100% no-repeat local,
+    linear-gradient(to right, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) left center / 10px 100% no-repeat scroll,
+    linear-gradient(to left, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) right center / 10px 100% no-repeat scroll,
+    var(--surface);
+}
 .usage-table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 12px; color: var(--text); }
 .usage-table th, .usage-table td { padding: 8px 12px; vertical-align: top; border-bottom: 1px solid var(--line); text-align: left; }
 .usage-table thead th { font-weight: 400; color: var(--muted); }
 .usage-table th[scope="row"] { min-width: 180px; max-width: 300px; font-weight: 400; overflow-wrap: anywhere; }
+/* First column stays visible while the rest of the table scrolls sideways. */
+.usage-table th[scope="row"], .usage-table thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
+.usage-table thead th:first-child { z-index: 2; }
 .usage-table .usage-number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .usage-table .usage-detail { display: block; margin-top: 4px; color: var(--muted); }
 .usage-table tfoot th, .usage-table tfoot td { font-weight: 600; border-bottom: 0; }
