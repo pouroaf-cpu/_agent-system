@@ -75,44 +75,12 @@ try {
             }
         }
     }
-    $herdr = (Get-Command herdr -ErrorAction Stop).Source
-    # Board agents all live in herdr's default session.
-    $session = 'default'
-    # Windows PowerShell 5.1 (the scheduled task's host) turns herdr's stderr into a terminating
-    # error under 'Stop', which skipped this recovery after every reboot: test the exit code instead.
-    function Test-Herdr { $ErrorActionPreference = 'Continue'; & $herdr agent list *> $null; $LASTEXITCODE -eq 0 }
-    $herdrState = Join-Path $root '.watchdog-herdr-outage'
-    if (-not (Test-Herdr)) {
-        $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-            CommandLine = "conhost.exe --headless `"$herdr`" --session $session server"
-            CurrentDirectory = $root
-        }
-        $ready = $false
-        if ($started.ReturnValue -eq 0) {
-            foreach ($i in 1..40) {
-                Start-Sleep -Milliseconds 250
-                if (Test-Herdr) { $ready = $true; break }
-            }
-        }
-        if (-not $ready) {
-            try {
-                Update-BoardOutage -Healthy $false -StatePath $herdrState -Send {
-                    Send-Push 'Herdr down' "The watchdog could not start herdr session $session at $(Get-NzAlertTime). Board agents cannot run." 'HD'
-                }
-            } catch {
-                "$(Get-Date -Format o) ALERT FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log
-            }
-            throw "Herdr session $session did not start (process create $($started.ReturnValue)) or did not answer within 10s"
-        }
-        "$(Get-Date -Format o) HERDR - started session $session" | Out-File -Append -Encoding utf8 $log
-    }
-    Update-BoardOutage -Healthy $true -StatePath $herdrState -Send { }
     # Orphaned Playwright browsers (dead test runners) hold memory; never fail the watchdog over it.
     try {
         $swept = @(& (Join-Path $root 'sweep-browser-orphans.ps1'))
         if ($swept.Count) { "$(Get-Date -Format o) SWEEP - killed $($swept.Count) orphaned Playwright browser processes" | Out-File -Append -Encoding utf8 $log }
     } catch { "$(Get-Date -Format o) SWEEP FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log }
-    "$(Get-Date -Format o) UP - board and Herdr check passed" | Out-File -Append -Encoding utf8 $log
+    "$(Get-Date -Format o) UP - board check passed" | Out-File -Append -Encoding utf8 $log
     exit 0
 } catch {
     "$(Get-Date -Format o) FAILED - $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $log

@@ -29,8 +29,8 @@ foreach ($path in $targets) {
     $lnk.TargetPath = $shellExe
     $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""
     $lnk.WorkingDirectory = $root          # so the shortcut works from anywhere
-    $lnk.IconLocation = "$((Get-Command herdr).Source),0"
-    $lnk.Description = 'Open the kanban board and herdr'
+    $lnk.IconLocation = "$shellExe,0"
+    $lnk.Description = 'Open the kanban board'
     $lnk.WindowStyle = 7                   # minimised: no console flash
     $lnk.Save()
     Write-Host "created $path"

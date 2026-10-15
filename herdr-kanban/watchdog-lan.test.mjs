@@ -14,7 +14,6 @@ test('LAN timeouts keep the board; a missing listener waits for recovery before 
   }
   writeFileSync(join(root, 'board.config.json'), '{"port":12345}')
   writeFileSync(join(root, '.lan-on'), '')
-  writeFileSync(join(root, 'herdr.cmd'), '@echo off\r\nexit /b 0\r\n')
   writeFileSync(join(root, 'kanban.ps1'), `param([switch]$Silent, [switch]$Lan)
 if (-not $Silent -or -not $Lan) { throw 'Missing silent LAN flags' }
 Add-Content "$PSScriptRoot/events.txt" 'launch'
@@ -36,7 +35,6 @@ function Invoke-WebRequest {
   param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
   if ($Uri -like '*192.168.1.11*' -and -not (Test-Path "$PSScriptRoot/ready")) { throw 'fixture LAN timeout' }
 }
-function Get-Command { param($Name, $ErrorAction) [pscustomobject]@{ Source = "$PSScriptRoot/herdr.cmd" } }
 & "$PSScriptRoot/watch-kanban.ps1"
 exit $LASTEXITCODE
 `)

@@ -1,21 +1,17 @@
-﻿# Single launch: board server, browser, herdr.
-# New agents: HERDR prefix+a uses herdr-roles.ps1 (Codex with full bypass).
+﻿# Single launch: board server and browser. Board agents are headless (no herdr).
 # Select orchestrator to load C:\Users\PFrew\Projects\ORCHESTRATOR.md.
 #
-#   .\kanban.ps1              # board + browser + herdr
-#   .\kanban.ps1 -NoHerdr     # board + browser only
+#   .\kanban.ps1              # board + browser
 #   .\kanban.ps1 -Lan         # also listen on this PC's 192.168.1.x for phones (sticky)
-#   .\kanban.ps1 -Silent      # server only - no browser tab, no herdr focus-steal.
+#   .\kanban.ps1 -Silent      # server only - no browser tab.
 #                               For unattended restarts (scheduled tasks, watchdogs,
 #                               anything not a human sitting at the shortcut) - opening
-#                               a browser tab and attaching herdr on every restart was
-#                               stealing the operator's active window on every scheduled
-#                               fire, not just the first real launch.
+#                               a browser tab on every restart was stealing the
+#                               operator's active window on every scheduled fire.
 #   .\kanban.ps1 -Stop        # stop the board server
 
 [CmdletBinding()]
 param(
-    [switch]$NoHerdr,
     [switch]$Silent,
     [switch]$Lan,
     [switch]$Stop,
@@ -120,27 +116,3 @@ if ($alive) {
 if ($Silent) { return }
 
 Start-Process "http://127.0.0.1:$port/?project=$Project"
-
-if (-not $NoHerdr) {
-    # Every board agent lives in herdr's default session, one workspace per project,
-    # so plain `herdr` shows them all. It attaches if the session is running.
-    Start-Process herdr
-    Write-Host 'herdr: default session (one workspace per project)'
-    Write-Host 'agents: prefix+a -> role (Codex, full bypass); orchestrator brief: C:\Users\PFrew\Projects\ORCHESTRATOR.md'
-
-    # One workspace per project, labelled with the project name. Open them up front
-    # rather than on the first spawn. Silently skipped if herdr is not answering
-    # yet — the board's poll makes each one before it spawns there.
-    foreach ($i in 1..6) {
-        try {
-            $ws = (herdr workspace list 2>$null | ConvertFrom-Json).result.workspaces
-            foreach ($wsLabel in $config.projects) {
-                if (-not ($ws | Where-Object { $_.label -eq $wsLabel })) {
-                    herdr workspace create --label $wsLabel --no-focus 2>$null | Out-Null
-                    Write-Host "herdr: workspace '$wsLabel' created"
-                }
-            }
-            break
-        } catch { Start-Sleep -Milliseconds 500 }
-    }
-}
