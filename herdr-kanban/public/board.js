@@ -307,6 +307,15 @@ function trackStatuses(agents) {
 
 
 
+// Audit 2026-10-16 F10: the drawer and the Agents view print the same state label, and long ids are shortened (full id in title).
+function agentStateText(agent) {
+  return agent.agent_status + ' for ' + fmtDur(heldMs(agent));
+}
+function shortAgentId(value) {
+  const text = String(value ?? '');
+  return text.length > 14 ? text.slice(0, 12) + '…' : text;
+}
+
 function heldMs(agent) {
 
   const s = statusSince.get(agent.name);
@@ -980,11 +989,13 @@ function renderAgentsScreen() {
     head.innerHTML = '<strong class="agent-name"></strong>' +
       '<span class="agent-status"></span><span class="agent-pane"></span>';
 
-    head.querySelector('.agent-name').textContent = b ? b.id : a.name;
+    head.querySelector('.agent-name').textContent = shortAgentId(b ? b.id : a.name);
+    head.querySelector('.agent-name').title = b ? b.id : a.name;
 
-    head.querySelector('.agent-status').textContent = a.agent_status;
+    head.querySelector('.agent-status').textContent = agentStateText(a);
 
-    head.querySelector('.agent-pane').textContent = a.pane_id;
+    head.querySelector('.agent-pane').textContent = shortAgentId(a.pane_id);
+    head.querySelector('.agent-pane').title = a.pane_id;
 
 
 
@@ -1006,7 +1017,6 @@ function renderAgentsScreen() {
 
     if (b?.model) bits.push(b.model);
 
-    if (b?.started) bits.push('running ' + fmtDur(Date.now() - Date.parse(b.started)));
 
     if (!b) bits.push('not started by the board');
 
@@ -2889,8 +2899,8 @@ function renderDrawer() {
   dl.append(pterm, pdef);
   if (agent) {
     const model = bind?.model || agent.model;
-    const running = bind?.started ? fmtDur(Date.now() - Date.parse(bind.started)) : fmtDur(heldMs(agent));
-    row(dl, 'Agent', agent.name + ' · ' + agent.agent_status + (bind ? '' : ' (unbound match)') + (model ? ' · ' + model : '') + ' · running ' + running);
+    row(dl, 'Agent', shortAgentId(agent.name) + ' · ' + agentStateText(agent) + (model ? ' · ' + model : ''));
+    dl.lastElementChild.title = agent.name + (bind ? '' : ' (matched by name; no card binding)');
   } else {
     row(dl, 'Agent', bind ? 'bound to ' + (bind.name || bind.pane_id) + ' — pane not found' : 'none');
   }
