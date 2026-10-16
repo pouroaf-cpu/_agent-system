@@ -67,6 +67,13 @@ test('files: a path listed as read-only is FILES OK (read-only, do not edit) and
   assert.equal(readFileSync(path, 'utf8'), CARD)
 })
 
+// The other spellings a plan uses for read-only ("-- read only", "— read only") are read-only too, so a Builder is never told to edit them.
+test('files: "-- read only" and "— read only" bullets are read-only, not edit paths', () => {
+  const text = CARD.replace('- `herdr-kanban/ro.mjs` — unchanged, read only', '- `herdr-kanban/ro.mjs` -- read only\n- `herdr-kanban/ro2.mjs` — read only')
+  assert.deepEqual(readOnlyFromFiles(text, ['herdr-kanban/ro.mjs', 'herdr-kanban/ro2.mjs', 'herdr-kanban/a.mjs']), ['herdr-kanban/ro.mjs', 'herdr-kanban/ro2.mjs'])
+  assert.deepEqual(missingFromFiles(text, ['herdr-kanban/ro.mjs', 'herdr-kanban/ro2.mjs']), [])
+})
+
 test('files verb refuses a card outside working', t => {
   const { tasks } = board(t, 'queue')
   const r = hkb(tasks, 'files', 'T-1', 'herdr-kanban/a.mjs')
@@ -79,7 +86,8 @@ test('AC1/AC3: the Builder brief runs the Files check, with the [planning] hand-
   const at = w.search(/ files IA999 </)
   assert.ok(at > 0, 'brief lacks the files command')
   assert.match(w, /reports a file missing, rerun with --add "<why>" \(max two tracked files\); if still missing, hand back at once with the issue command below, category \[planning\], naming each missing file, no edit/)
-  assert.match(w, /self-approved widening or automatic planning restart/)
+  assert.match(w, /operator clarification, never self-approved widening/)
+  assert.match(w, /A read-only listed path is never edited/)
   for (const later of ['Follow known functions', 'git -C', ' result IA999 ']) {
     const i = w.indexOf(later)
     assert.ok(i > at, `"${later}" (${i}) must come after the files command (${at})`)

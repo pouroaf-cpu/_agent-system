@@ -451,7 +451,8 @@ export function filesOverlap(a, b) {
   if (isGlob(b)) return globMatches(b, a)
   return a === b
 }
-const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|-|:|\()\s*(?:unchanged|read-only|reference only)\b/i
+// "read only" and "-- read only" count too: a plan that wrote them was read as an edit, and the Builder was told "edit now".
+const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|--|-|:|\()\s*(?:unchanged|read[- ]only|reference only)\b/i
 export function cardFiles(path) {
   // A card can change lanes between the board listing and this read; a moved card lists no
   // files here. Thrown from the board feed's timer this took the whole server down (I1051).

@@ -377,6 +377,30 @@ test('a commit outside the exact card files is rejected and preserved', () => {
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+// A file the plan lists read-only is not card scope: a commit that edits it is refused at handoff, whatever the
+// wording ("-- read only" included), and the worktree is kept for the operator.
+test('a commit that edits a file the card lists read-only is rejected and preserved', () => {
+  const f = fixture()
+  try {
+    writeFileSync(join(f.integration, 'ro.js'), 'reference\n')
+    git(f.integration, 'add', 'ro.js')
+    git(f.integration, 'commit', '-m', 'reference file')
+    const card = f.addCard('T-1', ['app.js', '- `ro.js` -- read only'])
+    const prepared = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card, gitSettings: f.settings })
+    writeFileSync(join(prepared.workspacePath, 'app.js'), 'card one\n')
+    writeFileSync(join(prepared.workspacePath, 'ro.js'), 'edited read-only file\n')
+    git(prepared.workspacePath, 'add', 'app.js', 'ro.js')
+    git(prepared.workspacePath, 'commit', '-m', 'T-1 change')
+    f.complete('T-1')
+
+    const [result] = reconcileCompletedWorktrees({ tasksDir: f.tasks })
+    assert.equal(result.status, 'issue')
+    assert.match(result.reason, /only card-listed files/)
+    assert.match(result.reason, /ro\.js/)
+    assert.equal(existsSync(prepared.entry.worktreePath), true)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('abandoned unchanged work cleans and requeues; dirty work is preserved for Issues', () => {
   const f = fixture()
   try {
