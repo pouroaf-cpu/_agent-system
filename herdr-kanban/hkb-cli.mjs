@@ -21,6 +21,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
 //   node hkb.mjs workspace T-02 <path>   (change the card's Workspace; project-relative, must exist, refused while an agent holds the card)
 //   node hkb.mjs precheck T-02   (Planner: read-only; prints PASS, or every failing item numbered, before move planned)
+//   node hkb.mjs precheck T-02 --parts <part1.md> <part2.md> [...]   (Planner: read-only; the split --parts checks on each part, before split)
 //
 // Run it from the project root. Moving the card IS the report; there is no
 // separate status to update and nothing to keep in sync.
@@ -217,6 +218,18 @@ if (verb === 'locate') {
 if (verb === 'precheck') {
   if (!cardId) fail('usage: hkb precheck T-02 (read-only; run it before hkb move T-02 planned)')
   if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
+  if (rest[0] === '--parts') {
+    const partPaths = rest.slice(1)
+    if (partPaths.length < 2) fail('precheck --parts needs the card id and at least two part files: hkb precheck I12 --parts part1.md part2.md')
+    try {
+      const current = findCard(tasksDir, cardId)
+      const { gitSettings, planWorkspace } = planWorkspaceFor(current)
+      const { problems } = splitPartChecks(current, partPaths, { planWorkspace, sharedFiles: gitSettings?.sharedFiles })
+      if (!problems.length) { console.log(`PRECHECK PASS ${cardId}: split ${cardId} --parts now`); process.exit(0) }
+      console.log(`PRECHECK FAIL ${cardId}: ${problems.length} problem(s); fix only these, then precheck again:\n${problems.map((p, i) => `${i + 1}. ${p}`).join('\n')}`)
+      process.exit(1)
+    } catch (err) { fail(err.message) }
+  }
   try {
     const problems = planGateProblems(findCard(tasksDir, cardId))
     if (!problems.length) { console.log(`PRECHECK PASS ${cardId}: move ${cardId} planned now`); process.exit(0) }
@@ -293,6 +306,81 @@ function planGateProblems(card) {
   if (dirty) problems.push(`${dirty} is changed or untracked in the integration checkout ${repoRoot}, so the board will not start ${card.id}. If you drafted it, move it to TASKS/.evidence/${card.id}/ and point the card there; otherwise hkb found --board ${card.id} "${dirty} dirty in integration".`)
   try { validatePlan(text, { requireReadiness: !!plannerAssignment, workspace: planWorkspace, sharedFiles: gitSettings?.sharedFiles }) } catch (err) { problems.push(...listed(err)) }
   return [...new Set(problems)]
+}
+
+// Every check a split part passes, in one place, so split --parts and precheck --parts refuse the same things.
+// Returns the parsed parts and every problem; writes nothing.
+function splitPartChecks(current, partPaths, check) {
+  // Collect every part's failure and refuse once, so a Planner fixes all parts in one pass.
+  const problems = []
+  const broken = (p) => ({ path: p, title: p, head: '', body: '', blockedTokens: [], partRefs: [], broken: true })
+  const parts = partPaths.map((p, i) => {
+    let raw
+    try { raw = readFileSync(p, 'utf8') } catch { problems.push(`can't read part ${i + 1}: ${p}`); return broken(p) }
+    const title = raw.match(/^#\s+(.+?)\s*\r?$/m)?.[1]?.trim()
+    if (!title) { problems.push(`part ${i + 1} (${p}) needs a title line: # Title`); return broken(p) }
+    const bodyStart = raw.search(/^## /m)
+    if (bodyStart < 0) { problems.push(`part ${i + 1} (${p}) has no ## sections`); return broken(p) }
+    const head = raw.slice(0, bodyStart)
+    const body = raw.slice(bodyStart)
+    const blockedLine = head.match(/^\*\*Blocked by:\*\*\s*([^\r\n]+)/im)?.[1]
+    const blockedTokens = blockedLine ? blockedLine.split(',').map(s => s.trim()).filter(Boolean) : []
+    const partRefs = []
+    for (const t of blockedTokens) {
+      const m = t.match(/^part\s+(\d+)$/i)
+      if (m) {
+        const n = Number(m[1])
+        if (n < 1 || n > partPaths.length || n - 1 === i) { problems.push(`part ${i + 1} (${p}): "${t}" does not refer to one of the other ${partPaths.length - 1} parts`); continue }
+        partRefs.push(n - 1)
+      } else {
+        try { findCard(tasksDir, t) } catch { problems.push(`part ${i + 1} (${p}): Blocked by "${t}" does not match an existing card`) }
+      }
+    }
+    return { path: p, title, head, body, blockedTokens, partRefs, difficulty: difficultyFromText(head) }
+  })
+
+  // Blocked-by cycle check over the part-index graph.
+  const visiting = new Set(), finished = new Set()
+  const detectCycle = (i, chain) => {
+    if (finished.has(i)) return
+    if (visiting.has(i)) { problems.push(`split --parts: Blocked-by cycle: ${chain.concat(i).map(n => `part ${n + 1}`).join(' -> ')}`); return }
+    visiting.add(i)
+    for (const j of parts[i].partRefs) detectCycle(j, chain.concat(i))
+    visiting.delete(i); finished.add(i)
+  }
+  parts.forEach((_, i) => detectCycle(i, []))
+  // Transitive reachability over "blocked by" either direction counts as chained.
+  const reachable = (from) => {
+    const seen = new Set(), stack = [from]
+    while (stack.length) { const n = stack.pop(); for (const j of parts[n].partRefs) if (!seen.has(j)) { seen.add(j); stack.push(j) } }
+    return seen
+  }
+  const reach = parts.map((_, i) => reachable(i))
+  const chained = (i, j) => reach[i].has(j) || reach[j].has(i)
+
+  // Every part is a complete plan in the same shape as a normal planned card.
+  const workflowVersionLine = readFileSync(current.path, 'utf8').match(/^\*\*Workflow version:\*\*[^\r\n]*/m)?.[0] || '**Workflow version:** 2'
+  for (const part of parts) {
+    if (part.broken) continue
+    const diffLine = part.difficulty ? `**Difficulty:** ${part.difficulty}` : current.difficulty ? `**Difficulty:** ${current.difficulty}` : ''
+    const readinessLine = part.head.match(/^\*\*Plan readiness:\*\*[^\r\n]*/im)?.[0] || ''
+    const investigationLine = part.head.match(/^\*\*Investigation approved:\*\*[^\r\n]*/im)?.[0] || ''
+    const newHead = `# ${part.title}\n\n**Workflow:** card-owned\n${workflowVersionLine}\n**Category:** ${current.category}\n` +
+      `**Workspace:** ${current.workspace}\n**Auto-review:** ${current.autoReview ? 'yes' : 'no'}\n${diffLine}\n**Priority** ${current.priority || 5}/10\n` +
+      `${current.mission ? `**Mission:** ${current.mission}\n` : ''}${readinessLine}\n${investigationLine}\n**Split from:** ${current.id}\n`
+    part.merged = `${newHead}\n${part.body}`
+    try { validatePlan(part.merged, { requireReadiness: true, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }) }
+    catch (err) { problems.push(`part "${part.title}" (${part.path}): ${err.message}`); continue }
+    part.files = planEditedFiles(part.merged)
+  }
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      if (chained(i, j) || !parts[i].files || !parts[j].files) continue
+      const shared = parts[i].files.find(f => parts[j].files.includes(f))
+      if (shared) problems.push(`split --parts: part ${i + 1} ("${parts[i].title}") and part ${j + 1} ("${parts[j].title}") both edit ${shared}. Merge them into one part, or add **Blocked by:** part ${i + 1} (or part ${j + 1}) to the other.`)
+    }
+  }
+  return { parts, problems }
 }
 
 // This project's projectSettings entry in the board config (read-only). No config: none, so the
@@ -403,76 +491,8 @@ if (verb === 'split' && rest[0] === '--parts') {
     if (!readCardPlanners(tasksDir)[current.id]?.assignmentId) fail('split --parts requires the assigned Planner and --planner-assignment')
     assertPlannerHandoff(tasksDir, current.id, plannerAssignment)
 
-    // Collect every part's failure and refuse once, so a Planner fixes all parts in one pass.
-    const problems = []
-    const broken = (p) => ({ path: p, title: p, head: '', body: '', blockedTokens: [], partRefs: [], broken: true })
-    const parts = partPaths.map((p, i) => {
-      let raw
-      try { raw = readFileSync(p, 'utf8') } catch { problems.push(`can't read part ${i + 1}: ${p}`); return broken(p) }
-      const title = raw.match(/^#\s+(.+?)\s*\r?$/m)?.[1]?.trim()
-      if (!title) { problems.push(`part ${i + 1} (${p}) needs a title line: # Title`); return broken(p) }
-      const bodyStart = raw.search(/^## /m)
-      if (bodyStart < 0) { problems.push(`part ${i + 1} (${p}) has no ## sections`); return broken(p) }
-      const head = raw.slice(0, bodyStart)
-      const body = raw.slice(bodyStart)
-      const blockedLine = head.match(/^\*\*Blocked by:\*\*\s*([^\r\n]+)/im)?.[1]
-      const blockedTokens = blockedLine ? blockedLine.split(',').map(s => s.trim()).filter(Boolean) : []
-      const partRefs = []
-      for (const t of blockedTokens) {
-        const m = t.match(/^part\s+(\d+)$/i)
-        if (m) {
-          const n = Number(m[1])
-          if (n < 1 || n > partPaths.length || n - 1 === i) { problems.push(`part ${i + 1} (${p}): "${t}" does not refer to one of the other ${partPaths.length - 1} parts`); continue }
-          partRefs.push(n - 1)
-        } else {
-          try { findCard(tasksDir, t) } catch { problems.push(`part ${i + 1} (${p}): Blocked by "${t}" does not match an existing card`) }
-        }
-      }
-      return { path: p, title, head, body, blockedTokens, partRefs, difficulty: difficultyFromText(head) }
-    })
-
-    // Blocked-by cycle check over the part-index graph.
-    const visiting = new Set(), finished = new Set()
-    const detectCycle = (i, chain) => {
-      if (finished.has(i)) return
-      if (visiting.has(i)) { problems.push(`split --parts: Blocked-by cycle: ${chain.concat(i).map(n => `part ${n + 1}`).join(' -> ')}`); return }
-      visiting.add(i)
-      for (const j of parts[i].partRefs) detectCycle(j, chain.concat(i))
-      visiting.delete(i); finished.add(i)
-    }
-    parts.forEach((_, i) => detectCycle(i, []))
-    // Transitive reachability over "blocked by" either direction counts as chained.
-    const reachable = (from) => {
-      const seen = new Set(), stack = [from]
-      while (stack.length) { const n = stack.pop(); for (const j of parts[n].partRefs) if (!seen.has(j)) { seen.add(j); stack.push(j) } }
-      return seen
-    }
-    const reach = parts.map((_, i) => reachable(i))
-    const chained = (i, j) => reach[i].has(j) || reach[j].has(i)
-
-    // Every part is a complete plan in the same shape as a normal planned card.
     const check = planCheck(current)
-    const workflowVersionLine = readFileSync(current.path, 'utf8').match(/^\*\*Workflow version:\*\*[^\r\n]*/m)?.[0] || '**Workflow version:** 2'
-    for (const part of parts) {
-      if (part.broken) continue
-      const diffLine = part.difficulty ? `**Difficulty:** ${part.difficulty}` : current.difficulty ? `**Difficulty:** ${current.difficulty}` : ''
-      const readinessLine = part.head.match(/^\*\*Plan readiness:\*\*[^\r\n]*/im)?.[0] || ''
-      const investigationLine = part.head.match(/^\*\*Investigation approved:\*\*[^\r\n]*/im)?.[0] || ''
-      const newHead = `# ${part.title}\n\n**Workflow:** card-owned\n${workflowVersionLine}\n**Category:** ${current.category}\n` +
-        `**Workspace:** ${current.workspace}\n**Auto-review:** ${current.autoReview ? 'yes' : 'no'}\n${diffLine}\n**Priority** ${current.priority || 5}/10\n` +
-        `${current.mission ? `**Mission:** ${current.mission}\n` : ''}${readinessLine}\n${investigationLine}\n**Split from:** ${current.id}\n`
-      part.merged = `${newHead}\n${part.body}`
-      try { validatePlan(part.merged, { requireReadiness: true, workspace: check.planWorkspace, sharedFiles: check.sharedFiles }) }
-      catch (err) { problems.push(`part "${part.title}" (${part.path}): ${err.message}`); continue }
-      part.files = planEditedFiles(part.merged)
-    }
-    for (let i = 0; i < parts.length; i++) {
-      for (let j = i + 1; j < parts.length; j++) {
-        if (chained(i, j) || !parts[i].files || !parts[j].files) continue
-        const shared = parts[i].files.find(f => parts[j].files.includes(f))
-        if (shared) problems.push(`split --parts: part ${i + 1} ("${parts[i].title}") and part ${j + 1} ("${parts[j].title}") both edit ${shared}. Merge them into one part, or add **Blocked by:** part ${i + 1} (or part ${j + 1}) to the other.`)
-      }
-    }
+    const { parts, problems } = splitPartChecks(current, partPaths, check)
     if (problems.length === 1) fail(problems[0])
     if (problems.length) fail(`split --parts refused, nothing created (${problems.length} problems):\n- ${problems.join('\n- ')}`)
 
