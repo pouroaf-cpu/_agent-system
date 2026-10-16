@@ -43,7 +43,7 @@ for (const version of ['15.5.18', '15.5.27']) test(`shared integration Next ${ve
   symlinkSync(join(f.folder, 'node_modules'), join(card, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   const entry = { workspacePath: card, integrationWorkspace: f.folder }
   writeFileSync(join(tasksDir, '.board-worktrees.json'), JSON.stringify({ 'T-1': entry }))
-  const calls = [], install = dir => { calls.push(dir); writeFileSync(join(dir, 'node_modules', 'next', 'package.json'), '{"version":"15.5.27"}'); writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}') }
+  const calls = [], install = dir => { calls.push(dir); mkdirSync(join(dir, 'node_modules', 'next'), { recursive: true }); writeFileSync(join(dir, 'node_modules', 'next', 'package.json'), '{"version":"15.5.27"}'); writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}') }
   if (version === '15.5.18') {
     assert.throws(() => prepareWorktreeEnvironment(entry), err => err.installIn === f.folder)
     assert.equal(f.hold({ install }), `installing dependencies in ${f.folder}`)
@@ -71,6 +71,23 @@ test('a missing node_modules starts one background install; the card waits, then
   writeFileSync(join(f.folder, 'node_modules', '.package-lock.json'), '{}')
   f.settle().ok(); await tick()
   assert.equal(f.hold(), null)
+})
+
+test('a failed install puts the previous node_modules back untouched (I1323)', async t => {
+  const f = fixture(t)
+  const live = join(f.folder, 'node_modules')
+  mkdirSync(join(live, 'next'), { recursive: true })
+  writeFileSync(join(live, 'next', 'package.json'), '{"version":"15.5.18"}')
+  // What a failed npm ci leaves: a partial new tree, then an EPERM on a file a dev server holds.
+  const install = dir => new Promise((ok, fail) => {
+    mkdirSync(join(dir, 'node_modules'), { recursive: true }); writeFileSync(join(dir, 'node_modules', 'partial'), '')
+    fail(new Error('npm error code EPERM, unlink next-swc.win32-x64-msvc.node'))
+  })
+  assert.equal(f.hold({ install }), `installing dependencies in ${f.folder}`)
+  await tick()
+  assert.equal(readFileSync(join(live, 'next', 'package.json'), 'utf8'), '{"version":"15.5.18"}', 'the previous tree is back, whole')
+  assert.equal(existsSync(join(live, 'partial')), false, 'the partial install is set aside, not kept in place')
+  assert.match(String(f.hold({ install })), /EPERM/, 'a lock backs off with the reason')
 })
 
 test('low disk goes to Owner without installing', t => {

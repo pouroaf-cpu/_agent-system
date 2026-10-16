@@ -2,9 +2,9 @@ import { formatNZTime } from './nz-time.mjs'
 // Isolated Git worktrees for Builder cards. Runtime state lives beside the board,
 // never in a card or a pushed branch.
 
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, unlinkSync, writeFileSync, fsyncSync, statSync, lstatSync, symlinkSync, readdirSync, statfsSync, copyFileSync, rmSync, rm } from 'node:fs'
 import { renameSync } from './fs-retry.mjs'
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { cardFiles, findCard, readBoard, filesOverlap, isGlob, globMatches } from './cards.mjs'
 import { evidenceFingerprint, updateWorkflow } from './workflow-state.mjs'
@@ -417,7 +417,14 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
   const modules = join(folder, 'node_modules')
   try { if (lstatSync(modules).isSymbolicLink()) unlinkSync(modules) } catch (err) { if (err.code !== 'ENOENT') throw err }
   mkdirSync(join(tasksDir, '.evidence'), { recursive: true })
-  const logPath = join(tasksDir, '.evidence', `dependency-install-${Date.now()}.log`)
+  const stamp = Date.now()
+  const logPath = join(tasksDir, '.evidence', `dependency-install-${stamp}.log`)
+  // npm ci deletes node_modules before it installs. When a running dev server had a .node file
+  // loaded, that delete failed half-way and left Injectbuddy's shared tree empty (I1323, 2026-10-16).
+  // So the live tree is renamed aside first: npm writes a fresh one, and a failure renames the old one back.
+  const aside = join(dirname(folder), `.${basename(folder)}.node_modules-old-${stamp}`)
+  const failed = join(dirname(folder), `.${basename(folder)}.node_modules-failed-${stamp}`)
+  let moved = false
   const run = { ...state, running: true, startedAt: now }
   installs.set(key, run)
   // Only this run may settle its slot: a hung run already expired above must not overwrite a newer one.
@@ -429,10 +436,32 @@ export function startDependencyInstall({ folder, tasksDir, install = runInstall,
     const error = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)
     installs.set(key, isTransient(error) ? { failures: state.failures, error, retry: nextRetry(state.retry, Date.now()) } : { failures: state.failures + 1, error })
   }
-  Promise.resolve().then(() => install(folder, command, logPath, pid => { run.pid = pid; recordInstall(key, { folder, pid, startedAt: Date.now() }) }))
-    .then(() => settle(null), settle)
+  Promise.resolve().then(() => {
+    // A rename that a lock refuses fails the run as transient (EPERM) before npm touches anything.
+    if (existsSync(modules)) { renameSync(modules, aside); moved = true }
+    return install(folder, command, logPath, pid => { run.pid = pid; recordInstall(key, { folder, pid, startedAt: Date.now() }) })
+  }).then(() => {
+    if (moved) discardInBackground(aside)
+    settle(null)
+  }, err => settle(moved ? restoreLive(modules, aside, failed, err) : err))
   return waiting
 }
+
+// Puts the previous tree back after a failed install. Only renames, so nothing is deleted; if a
+// rename fails too, the error says where the old tree is, and it is not discarded.
+function restoreLive(modules, aside, failed, cause) {
+  try {
+    if (existsSync(modules)) renameSync(modules, failed)
+    renameSync(aside, modules)
+    discardInBackground(failed)
+    return cause
+  } catch (err) {
+    return new Error(`${String(cause?.message || cause)}; the previous node_modules could not be put back (${err.message}); it is at ${aside}`)
+  }
+}
+// Removing a tree can be slow, and a loaded file can refuse it: do it in the background. A leftover
+// sits beside the folder, outside the repo.
+const discardInBackground = path => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }, () => {})
 
 // Before a Builder starts: when the integration folder has a lockfile but no
 // node_modules, install there once in the background instead of sending the card
