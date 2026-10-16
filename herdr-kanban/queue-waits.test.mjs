@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { appendReviewPass, clearLandedBlockers, findCard, moveCard, parseCard } from './lib/cards.mjs'
 import { dependencyInstallHold, forgetInstallFailures, prepareCardWorktree, readWorktrees, reconcileCompletedWorktrees, startDependencyInstall, updateWorktree } from './lib/worktrees.mjs'
-import { autoSpawn, fileHoldDetails, holdsFor, idleDispatchReason } from './lib/autospawn.mjs'
+import { autoSpawn, builderBudgetMinutes, fileHoldDetails, holdsFor, idleDispatchReason, newHolderOverruns } from './lib/autospawn.mjs'
 import { checkStalls } from './lib/stall-watchdog.mjs'
 import { readWorkflow } from './lib/workflow-state.mjs'
 
@@ -159,6 +159,24 @@ test('F2 AC1/AC3: a file-held card reports its holder and minutes, and the longe
   assert.deepEqual(started, ['T-60', 'T-62'], 'the card that waited since the first pass takes the free slot, not the newer T-61')
   assert.equal(findCard(f.tasks, 'T-61').column, 'queue')
   assert.deepEqual(fileHoldDetails('f2', holdsFor('f2')).map(d => [d.card, d.holder]), [['T-61', 'T-62']], 'T-61 now waits on the card that took the file')
+})
+
+// Audit 2026-10-16 F2 AC2: a holder past 3x the median integrated Builder run (never under 30 min) is
+// reported once, with one overrun per holder and file, and a holder inside its budget is not.
+test('F2 AC2: a holder past its file budget is reported once; the budget is 3x the median integrated run', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z'), at = min => new Date(now - min * 60000).toISOString()
+  const run = (minutes, integratedAgo) => ({ state: 'integrated', createdAt: new Date(now - (integratedAgo + minutes) * 60000).toISOString(), integratedAt: at(integratedAgo) })
+  assert.equal(builderBudgetMinutes({}), 30, 'no history uses the 30 min floor')
+  assert.equal(builderBudgetMinutes({ A: run(5, 5), B: run(6, 6), C: run(7, 7) }), 30, 'a 6 min median (18 min) stays at the 30 min floor')
+  const registry = { A: run(40, 1), B: run(40, 2), C: run(40, 3), 'T-60': { state: 'building', createdAt: at(130) }, 'T-61': { state: 'building', createdAt: at(100) } }
+  assert.equal(builderBudgetMinutes(registry), 120)
+  const details = [{ card: 'T-62', holder: 'T-60', file: 'site/app.js', since: at(20), minutes: 20 }, { card: 'T-63', holder: 'T-61', file: 'site/x.js', since: at(5), minutes: 5 }]
+  const seen = new Set()
+  const first = newHolderOverruns({ project: 'f2', details, registry, seen, now })
+  assert.deepEqual(first.map(o => [o.card, o.holder, o.file, o.holderMinutes, o.budget]), [['T-62', 'T-60', 'site/app.js', 130, 120]], 'only the holder past 120 min is an overrun')
+  assert.equal(first[0].key, 'f2:holder-overrun:T-60:site/app.js')
+  assert.deepEqual(newHolderOverruns({ project: 'f2', details, registry, seen, now: now + 60000 }), [], 'the same overrun is not reported again')
+  assert.deepEqual(newHolderOverruns({ project: 'other', details, registry, seen, now }).map(o => o.key), ['other:holder-overrun:T-60:site/app.js'], 'projects are keyed apart')
 })
 
 // Audit 2026-10-16 F6: a blocker whose card has landed comes off a queued card once (the scheduler

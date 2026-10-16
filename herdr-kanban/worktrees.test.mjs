@@ -765,6 +765,30 @@ test('a card commit outside its Files list fails once, then the second identical
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test('a successful integration clears the failure count, so a fixed card does not carry an old failure into Owner (audit 2026-10-16 Throughput F1)', async () => {
+  const f = fixture()
+  try {
+    const t1 = prepareCardWorktree({ projectPath: f.integration, tasksDir: f.tasks, card: f.addCard('T-1', 'app.js'), gitSettings: f.settings })
+    writeFileSync(join(t1.workspacePath, 'other.js'), 'card\n')
+    git(t1.workspacePath, 'add', 'other.js')
+    git(t1.workspacePath, 'commit', '-m', 'card')
+    f.complete('T-1')
+    const run = () => reconcileCompletedHandoffs({ tasksDir: f.tasks, project: 'Test' })
+    const [first] = (await run()).filter(r => r.id === 'T-1')
+    assert.equal(first.status, 'issue')
+    assert.equal(readWorktrees(f.tasks)['T-1'].issueFailure.count, 1)
+    git(t1.workspacePath, 'reset', '--hard', 'HEAD~1')
+    writeFileSync(join(t1.workspacePath, 'app.js'), 'fixed\n')
+    git(t1.workspacePath, 'add', 'app.js')
+    git(t1.workspacePath, 'commit', '-m', 'card fixed')
+    const [second] = (await run()).filter(r => r.id === 'T-1')
+    assert.equal(second.status, 'integrated')
+    const entry = readWorktrees(f.tasks)['T-1']
+    assert.equal(entry.state, 'integrated')
+    assert.ok(!entry.issueFailure, "a successful integration clears the failure count")
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 // HK22: a conflict-state card (the board already tried and moved it out) dragged back to Completed.
 async function conflictCardMovedBack({ masterFile, mutate, failures = 1 }) {
   const f = fixture()

@@ -329,6 +329,31 @@ export function holdsFor(project, context = holdContexts.get(project)) {
   return held
 }
 
+// Audit 2026-10-16 F2 AC2: a holder still holding files past its budget is reported once. The budget
+// is 3x the median integrated Builder run (createdAt to integratedAt, last 20), never under 30 min.
+export const HOLDER_BUDGET_FLOOR_MIN = 30
+export function builderBudgetMinutes(registry, floor = HOLDER_BUDGET_FLOOR_MIN) {
+  const runs = Object.values(registry).filter(r => r.state === 'integrated' && r.createdAt && r.integratedAt)
+    .sort((a, b) => Date.parse(a.integratedAt) - Date.parse(b.integratedAt)).slice(-20)
+    .map(r => (Date.parse(r.integratedAt) - Date.parse(r.createdAt)) / 60000)
+    .filter(m => Number.isFinite(m) && m > 0).sort((a, b) => a - b)
+  if (!runs.length) return floor
+  return Math.max(floor, Math.round(3 * runs[Math.floor(runs.length / 2)]))
+}
+// Holds from fileHoldDetails whose holder is past the budget and not yet in seen. Each is returned once
+// (seen is the caller's set, keyed by project, holder and file) so one overrun makes one alert and one log line.
+export function newHolderOverruns({ project, details, registry, seen, now = Date.now() }) {
+  const budget = builderBudgetMinutes(registry)
+  return details.flatMap(d => {
+    const holderMinutes = Math.round((now - Date.parse(registry[d.holder?.toUpperCase()]?.createdAt)) / 60000)
+    if (!Number.isFinite(holderMinutes) || holderMinutes <= budget) return []
+    const key = `${project}:holder-overrun:${d.holder}:${d.file ?? ''}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{ key, card: d.card, holder: d.holder, file: d.file, holderMinutes, budget }]
+  })
+}
+
 // The file-lock holds from holdsFor with how long each card has waited: [{ card, holder, file, since, minutes }].
 export function fileHoldDetails(project, held, now = Date.now()) {
   return Object.entries(fileWaits.get(project) ?? {}).flatMap(([card, since]) => {

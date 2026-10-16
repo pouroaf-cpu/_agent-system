@@ -1299,7 +1299,7 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
         // Persist intent before Git. Its -x trailer makes a post-pick crash replayable.
         const alreadyPicked = entry.state === 'integrating' && git(entry.repoRoot, ['log', '--format=%B', `${entry.integrationBase}..HEAD`]).stdout.includes(`(cherry picked from commit ${commit})`)
         if (alreadyPicked) {
-          updateEntry(tasksDir, entry.cardId, { state: 'integrated', commit, integratedAt: new Date().toISOString(), reason: null })
+          updateEntry(tasksDir, entry.cardId, { state: 'integrated', commit, integratedAt: new Date().toISOString(), reason: null, issueFailure: null })
           results.push({ id: entry.cardId, status: 'integrated', commit, cleanupPending: true })
           continue
         }
@@ -1335,7 +1335,7 @@ export function reconcileCompletedWorktrees({ tasksDir, onlyIds }) {
           }
           continue
         }
-        updateEntry(tasksDir, entry.cardId, { state: 'integrated', commit, integratedAt: new Date().toISOString(), reason: null })
+        updateEntry(tasksDir, entry.cardId, { state: 'integrated', commit, integratedAt: new Date().toISOString(), reason: null, issueFailure: null })
         try {
           removeCleanWorktree(tasksDir, { ...entry, commit }, { integrated: true })
           results.push({ id: entry.cardId, status: 'integrated', commit })
@@ -1406,7 +1406,7 @@ export function completeUnchangedWorktree({ tasksDir, cardId, evidence }) {
     const integrationHead = git(entry.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
     const diff = git(entry.worktreePath, ['diff', '--quiet', entry.baseCommit, integrationHead, '--', ...files], { allowFailure: true })
     if (diff.status !== 0) throw new Error('no-op card files differ from integration; check the latest files first')
-    const done = updateEntry(tasksDir, cardId, { state: 'integrated', noOp: true, environmentSignature, inputFingerprint: evidenceFingerprint(card, entry.integrationWorkspace), commit: integrationHead, evidence: evidence.trim(), integratedAt: new Date().toISOString(), reason: null })
+    const done = updateEntry(tasksDir, cardId, { state: 'integrated', noOp: true, environmentSignature, inputFingerprint: evidenceFingerprint(card, entry.integrationWorkspace), commit: integrationHead, evidence: evidence.trim(), integratedAt: new Date().toISOString(), reason: null, issueFailure: null })
     try { removeCleanWorktree(tasksDir, done, { integrated: true }) }
     catch (err) { return { id: cardId, status: 'integrated', noOp: true, commit: integrationHead, cleanupPending: true, reason: err.message } }
     return { id: cardId, status: 'integrated', noOp: true, commit: integrationHead }

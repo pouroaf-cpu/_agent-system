@@ -69,7 +69,7 @@ const { checkStalls, laneTimes, recordHealthyPoll } = await import('./lib/stall-
 const { beginStoppage, clearStoppage, dropStoppages, noteStart, readyCard, checkResume, resumeAlert } = await import('./lib/resume-watch.mjs')
 const resumeStart = project => { try { noteStart(HERE, { project }) } catch (err) { console.error(`resume watch failed: ${err.message}`) } }
 const { stopCard, resumeDeliveries, confirmLateDeliveries } = await import('./lib/spawn.mjs')
-const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, idleDispatchReason, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, fileHoldDetails: schedulerFileHoldDetails, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
+const { autoSpawn, autoReview, autoPlanCheck, promoteAutoReview, archiveNoReviewCards, promotePlanned, idleDispatchReason, routeReviewVerdicts, spawnReviewer, routeBuilderNoHandoff, reconcileBuilderExits, slotsFree, closeFinished, holdsFor: schedulerHoldsFor, fileHoldDetails: schedulerFileHoldDetails, newHolderOverruns, reviewerBusy, unmetBlockers, reconcileReviewers } = await import('./lib/autospawn.mjs')
 const { dispatchTestResults } = await import('./lib/test-handoff.mjs')
 const { computeReviewPlan, saveReviewGroups } = await import('./lib/review-plan.mjs')
 const { busyReviewCards, reviewClaimFor } = await import('./lib/review-claims.mjs')
@@ -147,6 +147,7 @@ const HERDR_ALERT_AFTER_MS = 6 * 60 * 1000
 
 const announcedBreakers = new Set()
 const lastActivityHold = new Map()
+const holderOverrunsSeen = new Set() // Audit 2026-10-16 F2 AC2: "project:holder-overrun:holder:file" already reported this run
 const integrationHolds = new Map() // project -> { cardId: why integration is waiting }, for the stall watchdog
 const finishedBindingSince = new Map()
 const orphanWorkingSince = new Map()
@@ -861,6 +862,19 @@ async function pollProject(project) {
         if (lastActivityHold.get(`${project}:stall-watchdog`) !== err.message) activity(project, '-', 'stall-watchdog', `stall check failed: ${err.message}`, 'error')
         lastActivityHold.set(`${project}:stall-watchdog`, err.message)
       }
+    }
+    // Audit 2026-10-16 F2 AC2: a holder past its file budget gets one activity line and one Kanban Manager line.
+    try {
+      const overruns = newHolderOverruns({ project, details: schedulerFileHoldDetails(project, holdsFor(project)), registry: readWorktrees(tasksDir), seen: holderOverrunsSeen })
+      for (const o of overruns) {
+        const detail = `${o.card} waits on ${o.file ?? 'files'} held by ${o.holder}, which has been out ${o.holderMinutes} min (budget ${o.budget} min: 3x median Builder run)`
+        activity(project, o.holder, 'holder-overrun', detail, 'error')
+        notifyManagerException({ boardRoot: HERE, key: o.key, cooldownMs: Infinity, title: `${project}: ${o.holder} over its file budget`, detail, code: 'HB' })
+          .catch(err => console.error(`holder overrun inbox alert failed: ${err.message}`))
+      }
+    } catch (err) {
+      if (lastActivityHold.get(`${project}:holder-overrun`) !== err.message) activity(project, '-', 'holder-overrun', `holder budget check failed: ${err.message}`, 'error')
+      lastActivityHold.set(`${project}:holder-overrun`, err.message)
     }
     // Resume watch: after a stoppage, a queued card with a free slot must start. One inbox line if none does.
     try {
