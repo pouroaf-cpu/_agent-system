@@ -51,7 +51,8 @@ import { assertPlannerHandoff } from './lib/planner-state.mjs'
 import { CARD_ID } from './lib/ids.mjs'
 
 const args = process.argv.slice(2)
-let tasksDir = join(process.cwd(), 'TASKS')
+// HKB_TASKS (set by the board for each Builder, lib/headless.mjs): the task folder for `hkb` run from a card's workspace.
+let tasksDir = process.env.HKB_TASKS || join(process.cwd(), 'TASKS')
 if (args[0] === '--tasks') {
   if (!args[1] || !isAbsolute(args[1])) fail('--tasks needs an absolute TASKS directory')
   tasksDir = args[1]

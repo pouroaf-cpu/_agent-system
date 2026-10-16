@@ -429,8 +429,8 @@ async function freeName(base, paneId, session) {
 }
 
 // Resolves to { name } — the name herdr actually registered.
-export async function agentStart({ name, paneId, model, engine, kind, workspacePath, worktreePath, guardArgs, timeoutMs = 90000, session, browser = true }) {
-  if (isHeadless(paneId)) return headless.agentStart({ name, paneId, model, engine, kind, workspacePath, worktreePath, guardArgs, timeoutMs, session, browser })
+export async function agentStart({ name, paneId, model, engine, kind, workspacePath, worktreePath, guardArgs, timeoutMs = 90000, session, browser = true, tasksDir }) {
+  if (isHeadless(paneId)) return headless.agentStart({ name, paneId, model, engine, kind, workspacePath, worktreePath, guardArgs, timeoutMs, session, browser, tasksDir })
   assertPromptAllowed(session)
   name = await freeName(name, paneId, session)
   try {

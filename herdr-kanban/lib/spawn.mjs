@@ -322,7 +322,7 @@ export async function spawnForCard({
   }
 
   try {
-    if (!resume) name = (await agentStart({ name, paneId, model, engine, guardArgs, workspacePath: prepared.workspacePath, worktreePath: prepared.entry?.worktreePath, timeoutMs: startTimeoutMs, session, browser: needsBrowser(card) }))?.name ?? name
+    if (!resume) name = (await agentStart({ name, paneId, model, engine, guardArgs, workspacePath: prepared.workspacePath, worktreePath: prepared.entry?.worktreePath, timeoutMs: startTimeoutMs, session, browser: needsBrowser(card), tasksDir }))?.name ?? name
     const agent = (await agentList(session).catch(() => [])).find((a) => a.pane_id === paneId)
     if (agent) onPane?.({ pane_id: paneId, tab_id: tabId, model, name, spawning: true, agent_session: agent.agent_session, ...worktree })
   } catch (err) {

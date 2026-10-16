@@ -57,6 +57,10 @@ export const viewer = fileURLToPath(new URL('../scripts/agent-view.mjs', import.
 // The registry lives beside the board config, so a test server with its own KANBAN_CONFIG never
 // sees the live board's agents (test.mjs found every slot full, 2026-10-03).
 const BUILDER_COMPACT_WINDOW = '100000'
+// HKB_TASKS: a Builder runs `hkb` (bin/hkb) from its workspace, where cwd has no TASKS folder, so the card's task folder comes from here (I1342, I1343, I1323, 2026-10-16).
+export function boardAgentEnv({ id, name, tasksDir }) {
+  return { ...cleanEnv(), PATH: boardAgentPath(), BOARD_AGENT_ID: id, HERDR_PANE_ID: id, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '1800000', CLAUDE_CODE_AUTO_COMPACT_WINDOW: agentRole(name) === 'b' ? BUILDER_COMPACT_WINDOW : '1000000', ...(tasksDir && { HKB_TASKS: tasksDir }) }
+}
 const defaultRoot =() => process.env.KANBAN_CONFIG ? join(dirname(process.env.KANBAN_CONFIG), '.agents')
   : process.env.KANBAN_TEST ? join(tmpdir(), `kanban-test-agents-${process.pid}`) : fileURLToPath(new URL('../.agents', import.meta.url))
 export function createHeadless({ root = defaultRoot(), command = agentCommand, trees = new PaneProcessTrees(), openTerminal = spawn } = {}) {
@@ -125,7 +129,7 @@ export function createHeadless({ root = defaultRoot(), command = agentCommand, t
         // agent ends without a handoff (I696/I699/I706 2026-10-03: "I'll continue when it finishes").
         // So commands run in the foreground, with timeouts long enough for full checks.
         // Chats auto-compact at 150k (settings.json autoCompactWindow, 2026-10-09); Builders compact at 100k (I1265, 2026-10-14); other board agents keep the model's full window.
-        child = spawn(process.execPath, [supervisor, spec], { cwd: row.cwd, detached: true, stdio: ['ignore', fd, fd, 'ipc'], windowsHide: true, env: { ...cleanEnv(), PATH: boardAgentPath(), BOARD_AGENT_ID: id, HERDR_PANE_ID: id, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '1800000', CLAUDE_CODE_AUTO_COMPACT_WINDOW: agentRole(row.name) === 'b' ? BUILDER_COMPACT_WINDOW : '1000000' } })
+        child = spawn(process.execPath, [supervisor, spec], { cwd: row.cwd, detached: true, stdio: ['ignore', fd, fd, 'ipc'], windowsHide: true, env: boardAgentEnv({ id, name: row.name, tasksDir: row.options.tasksDir }) })
         // Record the detached supervisor before waiting for its launch acknowledgement.
         patch(id, { pid: child.pid || null, childPid: null, error: null, startedAt: new Date().toISOString(), endedAt: null, exitCode: null, exitFile: turnExit, sessionId: row.sessionId, closedAt: null })
         const launched = await new Promise((resolve, reject) => { child.once('error', reject); child.once('message', msg => msg.error ? reject(new Error(msg.error)) : resolve(msg)); child.once('exit', code => reject(new Error(`Agent launch exited ${code}`))) })
