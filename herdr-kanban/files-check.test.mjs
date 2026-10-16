@@ -64,7 +64,7 @@ test('AC1/AC3: the Builder brief runs the Files check, with the [planning] hand-
   const w = workerPrompt({ card: { id: 'IA999', category: 'ui', column: 'approved', path: 'C:/fake/card.md', trivial: false, title: 'x' }, projectPath: 'C:/fake/project', boardRoot: 'C:/Users/PFrew/Projects/herdr-kanban', tasksDir: null, engine: 'claude' })
   const at = w.search(/ files IA999 </)
   assert.ok(at > 0, 'brief lacks the files command')
-  assert.match(w, /if it reports a file missing, hand back at once with the issue command below, category \[planning\], naming each missing file, and make no edit/)
+  assert.match(w, /reports a file missing, rerun with --add "<why>" \(max two tracked files\); if still missing, hand back at once with the issue command below, category \[planning\], naming each missing file, no edit/)
   assert.match(w, /self-approved widening or automatic planning restart/)
   for (const later of ['Follow known functions', 'git -C', ' result IA999 ']) {
     const i = w.indexOf(later)

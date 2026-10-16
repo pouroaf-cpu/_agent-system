@@ -516,12 +516,15 @@ export function dependencyInstallHold({ card, projectPath, tasksDir, gitSettings
 // Cards list files from the workspace (`app/x.tsx`) or from the project root with
 // the workspace prefix (`site/app/x.tsx`). Drop that prefix unless the workspace
 // really has a folder of that name, so it is never doubled (Tradeflow T-31..T-35).
-function workspaceFiles(card, workspace) {
+// One ## Files path as the workspace sees it (see workspaceFiles).
+function workspaceFile(card, workspace, file) {
   const prefix = slash(card.workspace || '').replace(/^\.\/|\/+$/g, '')
-  return cardFiles(card.path).map((file) => {
-    const f = slash(file).replace(/^\.\//, '')
-    return prefix && prefix !== '.' && f.toLowerCase().startsWith(`${prefix.toLowerCase()}/`) && !existsSync(join(workspace, prefix)) ? f.slice(prefix.length + 1) : f
-  })
+  const f = slash(file).replace(/^\.\//, '')
+  return prefix && prefix !== '.' && f.toLowerCase().startsWith(`${prefix.toLowerCase()}/`) && !existsSync(join(workspace, prefix)) ? f.slice(prefix.length + 1) : f
+}
+
+function workspaceFiles(card, workspace) {
+  return cardFiles(card.path).map((file) => workspaceFile(card, workspace, file))
 }
 
 function filesFor(card, workspace) {
@@ -768,6 +771,47 @@ export function overlapHoldReason({ tasksDir, card, projectPath, board = readBoa
 
 // The card holding the files in a "files busy" hold (overlapHoldReason), or null.
 export const filesBusyHolder = (reason) => /^files busy, held by ([A-Za-z]+-?\d+) /.exec(reason || '')?.[1] ?? null
+
+// hkb files --add (item 19): '' when each path may join the card's ## Files, else why not. A path must be a tracked
+// file at the card's base (a new file needs the Planner), and no other unintegrated card may hold it, so an add never
+// takes a lock another card is waiting on. Other cards' locks are read the way overlapHoldReason reads them.
+export function builderFileAddRefusal(tasksDir, card, paths, board = readBoard(tasksDir)) {
+  const id = card.id.toUpperCase()
+  const registry = readWorktrees(tasksDir)
+  const entry = registry[id]
+  if (!entry?.workspacePath || !existsSync(entry.workspacePath)) return `${id} has no card worktree to check the files against`
+  if (entry.state === 'integrated') return `${id} is already integrated`
+  const base = entry.integrationWorkspace || entry.workspacePath
+  const cards = Object.values(board).flat()
+  const targets = paths.map(path => {
+    const abs = resolve(base, workspaceFile(card, base, path))
+    return { path, abs, lock: norm(abs) }
+  })
+  for (const { path, abs } of targets) {
+    if (!existsSync(abs) || git(base, ['ls-files', '--error-unmatch', '--', abs], { allowFailure: true }).status !== 0) return `${path} is not a tracked file at the card's base; a new file needs a hand-back`
+  }
+  for (const [other, held] of Object.entries(registry)) {
+    if (other === id || held.state === 'integrated') continue
+    const live = cardIn(cards, other)
+    if (live?.column === 'archive' || ['pou', 'owner', 'planning', 'planned', 'queue'].includes(live?.column)) continue
+    const files = [...new Set([...(held.files || []), ...(live && held.integrationWorkspace ? filesFor(live, held.integrationWorkspace) : [])])]
+    for (const { path, lock } of targets) {
+      if (files.some(file => filesOverlap(lock, norm(file)))) return `${path} is held by ${other}`
+    }
+  }
+  return ''
+}
+
+// After hkb files --add writes the card, the card's registry lock follows its ## Files, as overlapHoldReason computes it.
+export function addBuilderFileEntries(tasksDir, cardId) {
+  const id = cardId.toUpperCase()
+  const entry = readWorktrees(tasksDir)[id]
+  if (!entry) throw new Error(`${id} has no card worktree`)
+  const card = findCard(tasksDir, id)
+  const base = entry.integrationWorkspace || entry.workspacePath
+  const files = [...new Set([...(entry.files || []), ...filesFor(card, base)])].sort()
+  return updateEntry(tasksDir, id, { files })
+}
 
 // Read-only visualization of persisted exact-file locks, never prose guesses.
 export function recordedOverlapBlockers(card, projectPath, registry, parallelFiles, generatedFiles) {

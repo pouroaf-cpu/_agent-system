@@ -998,6 +998,25 @@ export const isParked = (card) => /\*\*Parked\*\*/.test(readFileSync(card.path, 
 export const isOperatorHold = (card) =>
   [...readFileSync(card.path, 'utf8').matchAll(/^\*\*([A-Za-z][A-Za-z0-9 '-]*)\*\* \d{4}-\d\d-\d\dT/gm)].at(-1)?.[1] === 'Operator hold'
 
+// hkb files --add (item 19): append the existing files a Builder's change needs to ## Files, each marked as added by the
+// Builder with the reason. The caller has checked them (builderFileAddRefusal, worktrees.mjs); this only writes the card.
+export function addBuilderFiles(tasksDir, card, paths, why) {
+  const text = readFileSync(card.path, 'utf8')
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex(line => /^## Files\s*$/.test(line))
+  if (start < 0) throw new Error(`${card.id} has no ## Files section`)
+  let end = lines.findIndex((line, i) => i > start && /^## /.test(line))
+  if (end < 0) end = lines.length
+  let last = start
+  for (let i = start + 1; i < end; i++) if (/^-\s/.test(lines[i])) last = i
+  const reason = String(why).replace(/\s+/g, ' ').trim().slice(0, 200)
+  lines.splice(last + 1, 0, ...paths.map(path => `- \`${path}\` — added by Builder: ${reason}`))
+  writeFileSync(card.path, lines.join(eol))
+  appendHistory(tasksDir, card.id, { event: 'card-update', changes: [`## Files added by Builder: ${paths.join(', ')}`] })
+  return paths
+}
+
 // Full board snapshot: { planning: [...], planned: [...], ..., archive: [...] }
 export function readBoard(tasksDir) {
   const board = {}

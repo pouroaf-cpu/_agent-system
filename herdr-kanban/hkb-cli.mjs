@@ -15,7 +15,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 //   node hkb.mjs covered T-02 T-03 "node check.mjs -> PASS"
 //   node hkb.mjs result T-02 --file result.md   (Builder: write ## Implementation and ## Evidence, or pipe the text)
 //   node hkb.mjs finish T-02 --file result.md [-m "<message>"]   (Builder, after git add: commit, write the result, hand off; names every missing part)
-//   node hkb.mjs files T-02 path [path ...]   (Builder, before the first edit: exit 1 names the needed files ## Files misses)
+//   node hkb.mjs files T-02 path [path ...] [--add "<why>"]   (Builder, before the first edit: exit 1 names the needed files ## Files misses; --add lists up to two tracked, unheld missing files in ## Files)
 //   node hkb.mjs pointer T-02 path name   (Planner: prints the ## Files line, path lines A-B, name, covering every occurrence)
 //   node hkb.mjs tests T-02 <name> "<command>" [--timeout <seconds>]   (Builder: hand a long test run to the board and stop)
 //   node hkb.mjs locate T-02 <term> [<term> ...] [--in <folder>]   (Planner: one search prints file, line and window for every hit of every term)
@@ -31,11 +31,11 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles, pointerLine } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles, pointerLine, addBuilderFiles } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
-import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, commitStagedForHandoff, integrationStartHoldReason } from './lib/worktrees.mjs'
+import { worktreeForCard, completeUnchangedWorktree, resolveGitSettings, readWorktrees, handoffCommitError, commitStagedForHandoff, integrationStartHoldReason, builderFileAddRefusal, addBuilderFileEntries } from './lib/worktrees.mjs'
 import { explicitOwnerReason } from './lib/owner-reason.mjs'
 import { auditDestination, auditStatus, auditOutcome } from './lib/audit-routing.mjs'
 import { requestPlannerCorrection, readCardPlanners, ESCALATION_MODEL } from './lib/card-planner.mjs'
@@ -126,19 +126,30 @@ if (verb === 'finish') {
   verb = 'done'; rest = []; note = ''
 }
 
-// files: read-only Files check a Builder runs before its first edit (HK41); writes nothing, so the issue path and return count are untouched.
+// files: Files check a Builder runs before its first edit (HK41). Read-only, except --add (item 19): up to two missing
+// paths that are tracked at the card's base and held by no other unintegrated card join ## Files, marked as added by the Builder.
 if (verb === 'files') {
-  if (!cardId || !rest.length) fail('usage: hkb files T-02 <path> [<path> ...] (workspace-relative, written as ## Files writes them)')
+  const at = rest.indexOf('--add')
+  const why = at >= 0 ? (rest[at + 1] || '').trim() : ''
+  const paths = at >= 0 ? rest.slice(0, at) : rest
+  if (!cardId || !paths.length || (at >= 0 && (!why || at + 2 !== rest.length))) fail('usage: hkb files T-02 <path> [<path> ...] [--add "<why>"] (workspace-relative, written as ## Files writes them; --add last, with its reason)')
   if (!existsSync(tasksDir)) fail(`no TASKS folder at ${tasksDir}`)
-  const bad = rest.find(p => isAbsolute(p) || /^[a-z]:/i.test(p) || p.split(/[\\/]/).includes('..'))
+  const bad = paths.find(p => isAbsolute(p) || /^[a-z]:/i.test(p) || p.split(/[\\/]/).includes('..'))
   if (bad) fail(`files paths are workspace-relative, as ## Files writes them; "${bad}" is not`)
   try {
     const card = findCard(tasksDir, cardId)
     if (card.column !== 'working') fail(`files checks a Builder's scope; ${cardId} is in ${card.column}`)
-    const missing = missingFromFiles(readFileSync(card.path, 'utf8'), rest)
-    if (!missing.length) { console.log(`FILES OK ${cardId}: all ${rest.length} paths are in ## Files; edit now`); process.exit(0) }
+    const missing = missingFromFiles(readFileSync(card.path, 'utf8'), paths)
+    if (!missing.length) { console.log(`FILES OK ${cardId}: all ${paths.length} paths are in ## Files; edit now`); process.exit(0) }
     const list = missing.join(', ')
-    console.log(`FILES MISSING ${cardId}: ${list}\nHand back now, before any edit: issue ${cardId} "[planning] ## Files misses: ${list}; needed because <why>"`)
+    const refusal = at < 0 ? '' : missing.length > 2 ? 'at most two files can be added at once' : builderFileAddRefusal(tasksDir, card, missing)
+    if (at >= 0 && !refusal) {
+      addBuilderFiles(tasksDir, card, missing, why)
+      addBuilderFileEntries(tasksDir, card.id)
+      console.log(`FILES ADDED ${cardId}: ${list}, listed in ## Files as added by Builder. Edit now.`)
+      process.exit(0)
+    }
+    console.log(`FILES MISSING ${cardId}: ${list}${refusal ? `\nNot added: ${refusal}` : ''}\nHand back now, before any edit: issue ${cardId} "[planning] ## Files misses: ${list}; needed because <why>"`)
     process.exit(1)
   } catch (err) { fail(err.message) }
 }
