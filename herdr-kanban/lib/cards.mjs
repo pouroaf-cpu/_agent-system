@@ -104,7 +104,10 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
   }
   // I530: name the path that failed; the old message blamed globs for a .py bullet.
   // TF167: named dotfiles count as files; a card whose whole job was one .gitignore line could not be planned.
-  const bad = fileLines.filter(([, p]) => /[\\:?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|cjs|css|json|md|html?|txt|xml|svg|ya?ml|sql|py|sh|ps1)$|(^|\/)\.(gitignore|gitattributes|vercelignore|easignore|dockerignore|prettierignore|eslintignore|npmrc|nvmrc|editorconfig|env\.example)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')))
+  // I1408 (2026-10-16): a card that deletes a tracked binary image (public/blog/*.jpg) lists it as a `— delete ...` bullet.
+  // Only that combination is let through; any other binary path, and any other rule above, is refused as before.
+  const deletedImage = (p, rest) => /\.(jpe?g|png|webp|gif|ico|avif|bmp)$/i.test(p) && /^\s*(?:—|–|-)\s*delete(?![\w-])/i.test(rest)
+  const bad = fileLines.filter(([, p, rest]) => /[\\:?<>]|(^|\/)\.\.(\/|$)|^\//.test(p) || !/\.(tsx?|jsx?|mjs|cjs|css|json|md|html?|txt|xml|svg|ya?ml|sql|py|sh|ps1)$|(^|\/)\.(gitignore|gitattributes|vercelignore|easignore|dockerignore|prettierignore|eslintignore|npmrc|nvmrc|editorconfig|env\.example)$/.test(p) && !(readiness === 'investigation' && p.endsWith('/')) && !deletedImage(p, rest))
   if (!files.length && section('Files')) fail('Plan incomplete: ## Files needs exact relative file paths as - `path/to/file.css` bullets')
   for (const [, p] of bad) {
     refused.add(p)

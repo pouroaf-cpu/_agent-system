@@ -82,6 +82,29 @@ test('I556: plan checks cannot depend on a card lane path', async () => {
     assert.equal(plannedShow.stdout, `${resolve(plannedPath)}\n${plannedText}`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+// I1408 (Injectbuddy, 2026-10-16): delete-only bullets for tracked blog JPEGs pass the plan gate; a binary image
+// that is not a delete marker, or any other binary/unknown type, is still refused.
+test('I1408: a Files bullet may delete a tracked binary image, and nothing else binary', () => {
+  const filesSection = (bullets) => realistic.replace('- `src/app.mjs` — handleKeyDown(event) and renderStatus()\n- `test/keyboard.test.mjs` — focused positive and negative keyboard assertions', bullets)
+  const deletes = [
+    '- `public/blog/addiction-treatment-program.jpg` — delete (binary asset, whole file; no references outside TASKS)',
+    '- `public/blog/welcome-to-the-injectbuddy-hub.jpg` — delete (binary asset, whole file; only the page URL is named)',
+    '- `public/blog/hero.PNG` — delete (binary asset, whole file)',
+  ].join('\n')
+  validatePlan(filesSection(deletes))
+  for (const bullet of [
+    '- `public/blog/hero.jpg` — edit the crop',
+    '- `public/blog/hero.jpg` — keep, do not delete',
+    '- `public/blog/hero.jpg`',
+    '- `public/blog/hero.jpg` — delete-free note: delete later',
+    '- `public/blog/hero.exe` — delete (binary asset, whole file)',
+    '- `public/blog/hero.pdf` — delete (binary asset, whole file)',
+    '- `../shared/hero.jpg` — delete (binary asset, whole file)',
+    '- `public/blog/<name>.jpg` — delete (binary asset, whole file)',
+  ]) {
+    assert.throws(() => validatePlan(filesSection(bullet)), /exact relative file paths/i, bullet)
+  }
+})
 assert.throws(() => validatePlan(realistic.replace('**Plan readiness:** build-ready', ''), { requireReadiness: true }),
   /authenticated Planner handoff requires/i)
 const investigation = realistic
