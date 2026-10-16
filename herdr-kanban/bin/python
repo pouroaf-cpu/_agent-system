@@ -1,0 +1,4 @@
+#!/bin/sh
+# Board agents must not run Python: a heredoc into python hung the shell for 10 minutes (16 Oct). Fail at once.
+echo "python is not available to board agents; use node or Edit" >&2
+exit 1

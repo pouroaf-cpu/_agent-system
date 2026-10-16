@@ -1,2 +1,4 @@
 npm text eol=lf
 hkb text eol=lf
+python text eol=lf
+python3 text eol=lf
