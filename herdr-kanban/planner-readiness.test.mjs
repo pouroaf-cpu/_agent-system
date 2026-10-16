@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MAX_PLAN_FILES, validatePlan } from './lib/cards.mjs'
+import { MAX_PLAN_FILES, briefOrdersInvestigation, validatePlan } from './lib/cards.mjs'
 
 const realistic = `**Difficulty:** medium
 **Workflow version:** 2
@@ -350,3 +350,32 @@ console.log('Planner readiness validation passed')
     assert.throws(() => validatePlan(files(`${script}\n${glob.replace('guides', 'guidez')}`), { workspace: root }), /matches no file tracked by git/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
+
+// I1482 (2026-10-16): an Approved brief that orders the measurement is the investigation approval, so
+// the Planner is not bounced to Owner for the marker. A brief that only asks for a fix still needs it.
+test('I1482: an investigation the Approved brief orders needs no marker; a fix-only brief still does', () => {
+  const plan = (change) => `**Plan readiness:** investigation
+## Approved brief
+Why: CLS 0.864 on /calendar/ in 1 of 3 runs.
+${change}
+## Files
+- \`app.mjs\` the shifting element
+## Implementation plan
+Measurement command: node measure.mjs
+Expected result: a list of layout-shift sources with rects and timestamps
+Stop rules: stop if the local build cannot start
+## Acceptance criteria
+- AC1: the shifting element is named
+`
+  const ordered = 'Change: find the shifting element (PerformanceObserver layout-shift sources over ~10 cold loads at 375, Fast 4G, 4x CPU, on a local VERCEL=1 build) and reserve its space.'
+  validatePlan(plan(ordered))
+  assert.equal(briefOrdersInvestigation(plan(ordered)), true)
+  const fixOnly = 'Change: reserve the footer space.'
+  assert.equal(briefOrdersInvestigation(plan(fixOnly)), false)
+  assert.throws(() => validatePlan(plan(fixOnly)), error => error.operatorApproval === true)
+  assert.throws(() => validatePlan(plan('Change: find the shifting element and reserve its space.')), error => error.operatorApproval === true, 'a directive with no measurement method is not an order')
+  // Only the Approved brief decides: a method named in the plan does not approve the investigation.
+  assert.throws(() => validatePlan(plan(fixOnly).replace('Measurement command: node measure.mjs', 'Measurement command: node measure.mjs (PerformanceObserver)')), error => error.operatorApproval === true)
+  // The operator's marker still works with a fix-only brief.
+  validatePlan(plan(fixOnly).replace('**Plan readiness:** investigation', '**Plan readiness:** investigation\n**Investigation approved:** yes'))
+})

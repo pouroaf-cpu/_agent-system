@@ -60,6 +60,17 @@ export function readOnlyFromFiles(text, needed) {
 // HK27: a plan names each place to change as `path` lines START-END, `functionOrSelector`.
 const planPointers = (text) => [...text.matchAll(/\blines?\s+(\d+)\s*[-–]\s*(\d+)\s*,?\s*`([^`]+)`/gi)].map(m => ({ index: m.index, from: +m[1], to: +m[2], name: m[3] }))
 
+// I1482 (2026-10-16): the operator's approved brief can already order an evidence-first investigation.
+// That brief is the approval, so a Planner is not bounced to Owner for the marker. One line of the
+// Approved brief must name both a directive (find, measure, ...) and a concrete measurement method; a
+// brief that only asks for a fix still needs the marker. Only the Approved brief section counts.
+const INVESTIGATION_DIRECTIVE = /\b(?:find|locate|identify|investigate|diagnose|measure|capture)\b/i
+const INVESTIGATION_METHOD = /PerformanceObserver|layout[- ]shift|Lighthouse|DevTools|profil(?:er|ing)|cold loads?|\btrace\b/i
+export function briefOrdersInvestigation(text) {
+  const brief = text.split(/^## Approved brief/m)[1]?.split(/^## /m)[0] ?? ''
+  return brief.split(/\r?\n/).some(line => INVESTIGATION_DIRECTIVE.test(line) && INVESTIGATION_METHOD.test(line))
+}
+
 // `workspace` (absolute) is passed only at a Planner handoff, so cards already
 // queued or working are never blocked retroactively by the plan check.
 export function validatePlan(text, { requireReadiness = false, workspace: planRoot = null, sharedFiles = [] } = {}) {
@@ -142,7 +153,8 @@ export function validatePlan(text, { requireReadiness = false, workspace: planRo
     }
     // Thrown last, and only when nothing else failed: only the operator can add this marker,
     // so a plan failing on it alone is waiting for the operator, not for more planning (T-148).
-    approvalMissing = !/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0])
+    // An Approved brief that already orders the measurement is that approval (I1482, 2026-10-16).
+    approvalMissing = !/^\*\*Investigation approved:\*\* yes\s*$/im.test(text.split(/^## Approved brief/m)[0]) && !briefOrdersInvestigation(text)
   }
   const pointers = []
   if (readiness === 'build-ready') {
