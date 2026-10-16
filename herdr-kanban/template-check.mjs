@@ -30,8 +30,7 @@ try {
     .replace('## Acceptance criteria', '## Acceptance criteria\n- AC1: Heading centered; arrow unchanged.')
     .replace('## Prerequisites', '## Prerequisites\nNone; CSS fixture only.')
   validatePlan(ready.replace(/\n/g, '\r\n'))
-  assert.throws(() => validatePlan(ready
-    .replace('**Trivial:** no', '**Trivial:** yes')
+  assert.throws(() => validatePlan((ready + '\n**Trivial:** yes\n')
     .replace('- `public/ib-calc.css` — center heading', '- `public/ib-calc.css` — center heading\n- `public/a.css` — copy\n- `public/b.css` — copy')),
   /no more than two files/)
   assert.throws(() => validatePlan(ready.replace('public/ib-calc.css', '../outside.css')), /exact relative/)
