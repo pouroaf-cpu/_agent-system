@@ -36,12 +36,25 @@ export function planEditedFiles(text) {
   return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
 }
 
-// HK41: the needed paths the plan's `## Files` does not cover (exact, or under a glob entry), de-duplicated, in the order given.
-// A file listed only as unchanged/read-only is not in planEditedFiles, so a needed edit to it is reported missing.
+// The paths a plan's `## Files` lists only as unchanged/read-only (REFERENCE_ONLY bullets).
+const readOnlyEntries = (text) => {
+  const section = (text.match(/^## Files\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
+  return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
+}
+const normPath = (p) => p.replaceAll('\\', '/').replace(/^\.\//, '')
+const covers = (entries, path) => entries.some(f => isGlob(f) ? globMatches(f, path) : f.toLowerCase() === path.toLowerCase())
+
+// HK41: the needed paths the plan's `## Files` does not list at all, edited or read-only (exact, or under a glob entry), de-duplicated, in the order given.
+// A path listed as read-only is covered (see readOnlyFromFiles), so only a path not listed anywhere is a miss.
 export function missingFromFiles(text, needed) {
-  const norm = (p) => p.replaceAll('\\', '/').replace(/^\.\//, '')
-  const listed = planEditedFiles(text).map(norm)
-  return [...new Set(needed.map(norm))].filter(path => !listed.some(f => isGlob(f) ? globMatches(f, path) : f.toLowerCase() === path.toLowerCase()))
+  const listed = [...planEditedFiles(text), ...readOnlyEntries(text)].map(normPath)
+  return [...new Set(needed.map(normPath))].filter(path => !covers(listed, path))
+}
+
+// The needed paths the plan lists as read-only, do not edit (de-duplicated, in the order given).
+export function readOnlyFromFiles(text, needed) {
+  const ro = readOnlyEntries(text).map(normPath)
+  return [...new Set(needed.map(normPath))].filter(path => covers(ro, path) && !covers(planEditedFiles(text).map(normPath), path))
 }
 
 // HK27: a plan names each place to change as `path` lines START-END, `functionOrSelector`.

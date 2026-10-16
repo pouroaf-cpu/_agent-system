@@ -32,7 +32,7 @@ import { formatNZTime, formatNZText } from './lib/nz-time.mjs'
 
 import { existsSync, appendFileSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles, pointerLine, addBuilderFiles } from './lib/cards.mjs'
+import { moveCard, validatePlan, columnByKey, findCard, updateCard, canArchive, cardFiles, dirtySnapshotForCard, appendDirtySnapshot, setAutoReview, awaitsOperatorApproval, approvalQuestion, readBoard, waitingOnPrerequisites, builderResultError, builderResultProblems, replaceResultSections, parseResultText, unglueHeadings, createCard, planEditedFiles, missingFromFiles, pointerLine, addBuilderFiles, readOnlyFromFiles } from './lib/cards.mjs'
 import { difficultyFromText } from './lib/difficulty.mjs'
 import { unbind, readBindings } from './lib/bindings.mjs'
 import { activityLog } from './lib/activity.mjs'
@@ -140,8 +140,11 @@ if (verb === 'files') {
   try {
     const card = findCard(tasksDir, cardId)
     if (card.column !== 'working') fail(`files checks a Builder's scope; ${cardId} is in ${card.column}`)
-    const missing = missingFromFiles(readFileSync(card.path, 'utf8'), paths)
-    if (!missing.length) { console.log(`FILES OK ${cardId}: all ${paths.length} paths are in ## Files; edit now`); process.exit(0) }
+    const text = readFileSync(card.path, 'utf8')
+    const missing = missingFromFiles(text, paths), readOnly = readOnlyFromFiles(text, paths)
+    // A path the plan lists as read-only is not a miss: it is reported here, and must not be edited.
+    if (!missing.length && readOnly.length === paths.length) { console.log(`FILES OK (read-only, do not edit) ${cardId}: ${readOnly.join(', ')} listed as read-only in ## Files`); process.exit(0) }
+    if (!missing.length) { console.log(`FILES OK ${cardId}: all ${paths.length} paths are in ## Files; edit now (read-only, do not edit: ${readOnly.join(', ')})`); process.exit(0) }
     const list = missing.join(', ')
     const refusal = at < 0 ? '' : missing.length > 2 ? 'at most two files can be added at once' : builderFileAddRefusal(tasksDir, card, missing)
     if (at >= 0 && !refusal) {

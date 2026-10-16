@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { missingFromFiles, validatePlan } from './lib/cards.mjs'
+import { missingFromFiles, readOnlyFromFiles, validatePlan } from './lib/cards.mjs'
 import { workerPrompt } from './lib/prompt.mjs'
 
 const CARD = `# T-1 — card
@@ -25,7 +25,8 @@ const CARD = `# T-1 — card
 
 test('AC2: missingFromFiles reports exactly the uncovered paths, [] when none', () => {
   const needed = ['herdr-kanban/a.mjs', './herdr-kanban/a.mjs', 'herdr-kanban\\A.mjs', 'herdr-kanban/new.test.mjs', 'herdr-kanban/gen/x/y.js', 'herdr-kanban/ro.mjs', 'public/app.js', 'public/app.js', 'herdr-kanban/b.mjs']
-  assert.deepEqual(missingFromFiles(CARD, needed), ['herdr-kanban/ro.mjs', 'public/app.js', 'herdr-kanban/b.mjs'])
+  assert.deepEqual(missingFromFiles(CARD, needed), ['public/app.js', 'herdr-kanban/b.mjs'])
+  assert.deepEqual(readOnlyFromFiles(CARD, needed), ['herdr-kanban/ro.mjs'])
   assert.deepEqual(missingFromFiles(CARD, needed.slice(0, 5)), [])
 })
 
@@ -46,11 +47,24 @@ test('AC2/AC3: files verb passes when covered, names exactly the missing files w
   assert.match(ok.stdout, /FILES OK T-1: all 2 paths/)
   const bad = hkb(tasks, 'files', 'T-1', 'herdr-kanban/a.mjs', 'public/app.js', 'herdr-kanban/ro.mjs')
   assert.equal(bad.status, 1)
-  assert.match(bad.stdout, /FILES MISSING T-1: public\/app\.js, herdr-kanban\/ro\.mjs\n/)
-  assert.match(bad.stdout, /\[planning\] ## Files misses: public\/app\.js, herdr-kanban\/ro\.mjs/)
+  assert.match(bad.stdout, /FILES MISSING T-1: public\/app\.js\n/)
+  assert.match(bad.stdout, /\[planning\] ## Files misses: public\/app\.js/)
+  assert.doesNotMatch(bad.stdout, /ro\.mjs/)
   assert.doesNotMatch(bad.stdout, /herdr-kanban\/a\.mjs/)
   assert.equal(readFileSync(path, 'utf8'), CARD)
   for (const args of [[], ['/abs/x.js'], ['C:/x.js'], ['../x.js']]) assert.equal(hkb(tasks, 'files', 'T-1', ...args).status, 1, args.join(' '))
+})
+
+// A path the plan lists as read-only (not a miss) is reported as read-only, exit 0, and is not added or written.
+test('files: a path listed as read-only is FILES OK (read-only, do not edit) and writes nothing', t => {
+  const { tasks, path } = board(t)
+  const ro = hkb(tasks, 'files', 'T-1', 'herdr-kanban/ro.mjs')
+  assert.equal(ro.status, 0, ro.stdout + ro.stderr)
+  assert.match(ro.stdout, /FILES OK \(read-only, do not edit\) T-1: herdr-kanban\/ro\.mjs/)
+  const mixed = hkb(tasks, 'files', 'T-1', 'herdr-kanban/a.mjs', 'herdr-kanban/ro.mjs')
+  assert.equal(mixed.status, 0, mixed.stdout + mixed.stderr)
+  assert.match(mixed.stdout, /FILES OK T-1: all 2 paths are in ## Files; edit now \(read-only, do not edit: herdr-kanban\/ro\.mjs\)/)
+  assert.equal(readFileSync(path, 'utf8'), CARD)
 })
 
 test('files verb refuses a card outside working', t => {
