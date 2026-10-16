@@ -74,6 +74,22 @@ test('files: "-- read only" and "— read only" bullets are read-only, not edit 
   assert.deepEqual(missingFromFiles(text, ['herdr-kanban/ro.mjs', 'herdr-kanban/ro2.mjs']), [])
 })
 
+// IA305 (16 Oct 2026): the marker came before the path ("- Read-only, no change: `e2e/demo-data.ts` lines 31-56"), so both the
+// read-only file and a path with parentheses were reported as misses. Both are read-only now, and the files verb says so with exit 0.
+test('files: a read-only marker before the path is read-only, parentheses in the path included', t => {
+  const { tasks, path } = board(t)
+  const text = CARD.replace('- `herdr-kanban/ro.mjs` — unchanged, read only', '- Read-only, no change: `herdr-kanban/ro.mjs` lines 1-3, `fn`\n- Read-only, no change: `herdr-kanban/src/app/(tabs)/plotter.tsx` (renders the picker at line 61)')
+  writeFileSync(path, text)
+  const paths = ['herdr-kanban/ro.mjs', 'herdr-kanban/src/app/(tabs)/plotter.tsx']
+  assert.deepEqual(readOnlyFromFiles(text, paths), paths)
+  assert.deepEqual(missingFromFiles(text, paths), [])
+  const r = hkb(tasks, 'files', 'T-1', ...paths)
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stdout, /FILES OK \(read-only, do not edit\) T-1: herdr-kanban\/ro\.mjs, herdr-kanban\/src\/app\/\(tabs\)\/plotter\.tsx/)
+  assert.doesNotMatch(r.stdout, /MISSING/)
+  assert.equal(readFileSync(path, 'utf8'), text)
+})
+
 test('files verb refuses a card outside working', t => {
   const { tasks } = board(t, 'queue')
   const r = hkb(tasks, 'files', 'T-1', 'herdr-kanban/a.mjs')

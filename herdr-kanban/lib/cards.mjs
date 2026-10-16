@@ -36,10 +36,10 @@ export function planEditedFiles(text) {
   return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && !REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
 }
 
-// The paths a plan's `## Files` lists only as unchanged/read-only (REFERENCE_ONLY bullets).
+// The paths a plan's `## Files` lists only as unchanged/read-only (read-only bullets, either marker position).
 const readOnlyEntries = (text) => {
   const section = (text.match(/^## Files\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim()
-  return section.split(/\r?\n/).filter(line => /^-\s+`[^`]+`/.test(line) && REFERENCE_ONLY.test(line)).map(line => line.match(/`([^`]+)`/)[1])
+  return section.split(/\r?\n/).filter(line => isReadOnlyBullet(line)).map(line => line.match(/`([^`]+)`/)[1])
 }
 const normPath = (p) => p.replaceAll('\\', '/').replace(/^\.\//, '')
 const covers = (entries, path) => entries.some(f => isGlob(f) ? globMatches(f, path) : f.toLowerCase() === path.toLowerCase())
@@ -456,6 +456,10 @@ export function filesOverlap(a, b) {
 }
 // "read only" and "-- read only" count too: a plan that wrote them was read as an edit, and the Builder was told "edit now".
 const REFERENCE_ONLY = /^-\s*`[^`]+`\s*(?:—|–|--|-|:|\()\s*(?:unchanged|read[- ]only|reference only)\b/i
+// The marker before the path counts too: "- Read-only, no change: `e2e/demo-data.ts` lines 31-56" was read as neither edit nor
+// listed, so hkb files reported it missing (Injectbuddy IA305, 16 Oct 2026). Only a bullet that starts with the marker qualifies.
+const READ_ONLY_FIRST = /^-\s*(?:unchanged|read[- ]only|reference only)\b[^`\n]{0,40}`[^`]+`/i
+const isReadOnlyBullet = (line) => REFERENCE_ONLY.test(line) || READ_ONLY_FIRST.test(line)
 export function cardFiles(path) {
   // A card can change lanes between the board listing and this read; a moved card lists no
   // files here. Thrown from the board feed's timer this took the whole server down (I1051).
