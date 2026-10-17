@@ -61,14 +61,26 @@ export function readOnlyFromFiles(text, needed) {
 const planPointers = (text) => [...text.matchAll(/\blines?\s+(\d+)\s*[-–]\s*(\d+)\s*,?\s*`([^`]+)`/gi)].map(m => ({ index: m.index, from: +m[1], to: +m[2], name: m[3] }))
 
 // I1482 (2026-10-16): the operator's approved brief can already order an evidence-first investigation.
-// That brief is the approval, so a Planner is not bounced to Owner for the marker. One line of the
-// Approved brief must name both a directive (find, measure, ...) and a concrete measurement method; a
-// brief that only asks for a fix still needs the marker. Only the Approved brief section counts.
+// That brief is the approval, so a Planner is not bounced to Owner for the marker. Only the Approved
+// brief section counts. Two ways to order it:
+//  - one line names a directive (find, measure, ...) and a concrete measurement method; or
+//  - IA273 (2026-10-17): one line orders finding the cause, and the brief cites concrete failing
+//    evidence (a failing test or spec reference, an error, or a measured value).
+// A brief that only asks for a fix still needs the marker.
 const INVESTIGATION_DIRECTIVE = /\b(?:find|locate|identify|investigate|diagnose|measure|capture)\b/i
 const INVESTIGATION_METHOD = /PerformanceObserver|layout[- ]shift|Lighthouse|DevTools|profil(?:er|ing)|cold loads?|\btrace\b/i
+const CAUSE_ORDER = /\b(?:cause|source)\b/i
+const FAILING_EVIDENCE = [
+  /\b(?:fails|failing|failed)\b/i,                              // a failing test
+  /[\w./-]+\.(?:spec|test)\.[cm]?[jt]sx?\b/i,                   // a spec or test file reference
+  /\b[A-Za-z]*Error\b|\berror\b/i,                              // an error
+  /\b\d+(?:\.\d+)?\s*(?:ms|s|%|px|kb|mb|gb)\b|\b\d+\.\d+\b/i,   // a measured value
+]
 export function briefOrdersInvestigation(text) {
   const brief = text.split(/^## Approved brief/m)[1]?.split(/^## /m)[0] ?? ''
-  return brief.split(/\r?\n/).some(line => INVESTIGATION_DIRECTIVE.test(line) && INVESTIGATION_METHOD.test(line))
+  const lines = brief.split(/\r?\n/)
+  if (lines.some(line => INVESTIGATION_DIRECTIVE.test(line) && INVESTIGATION_METHOD.test(line))) return true
+  return lines.some(line => INVESTIGATION_DIRECTIVE.test(line) && CAUSE_ORDER.test(line)) && FAILING_EVIDENCE.some(re => re.test(brief))
 }
 
 // `workspace` (absolute) is passed only at a Planner handoff, so cards already

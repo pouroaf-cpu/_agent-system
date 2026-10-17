@@ -379,3 +379,36 @@ Stop rules: stop if the local build cannot start
   // The operator's marker still works with a fix-only brief.
   validatePlan(plan(fixOnly).replace('**Plan readiness:** investigation', '**Plan readiness:** investigation\n**Investigation approved:** yes'))
 })
+
+// IA273 (2026-10-17): an Approved brief that orders finding the cause and cites concrete failing evidence
+// is the approval too, even with no measurement method on the line. The order and the evidence both count.
+test('IA273: a cause order plus failing evidence in the Approved brief needs no marker', () => {
+  const plan = (brief) => `**Plan readiness:** investigation
+## Approved brief
+${brief}
+## Files
+- \`app.mjs\` the guard
+## Implementation plan
+Measurement command: npx playwright test e2e/avatar-sync.spec.ts -g "already has avatar_url"
+Expected result: fails at the img toBeAttached assertion if the bug is live
+Stop rules: stop if the cause is outside the named files
+## Acceptance criteria
+- AC1: the test passes
+`
+  const failing = 'e2e/avatar-sync.spec.ts:128 "AC2" fails on master 829408a. Find the cause; fix the app, or the spec if the spec is stale.'
+  validatePlan(plan(failing))
+  assert.equal(briefOrdersInvestigation(plan(failing)), true)
+  // An order to find the cause with no failing evidence still needs the marker.
+  const noEvidence = 'Find the cause; fix the app, or the spec if the spec is stale.'
+  assert.equal(briefOrdersInvestigation(plan(noEvidence)), false)
+  assert.throws(() => validatePlan(plan(noEvidence)), error => error.operatorApproval === true)
+  // Evidence with a fix-only order still needs the marker.
+  const fixWithEvidence = 'e2e/avatar-sync.spec.ts:128 fails on master. Fix the guard in app.mjs.'
+  assert.equal(briefOrdersInvestigation(plan(fixWithEvidence)), false)
+  assert.throws(() => validatePlan(plan(fixWithEvidence)), error => error.operatorApproval === true)
+  // A measured value alone, with the order on a line that does not name a cause, is not enough.
+  const valueOnly = 'Why: CLS 0.864 on /calendar/. Find the shifting element and reserve its space.'
+  assert.equal(briefOrdersInvestigation(plan(valueOnly)), false)
+  // The evidence must be in the Approved brief, not only in the plan.
+  assert.throws(() => validatePlan(plan(noEvidence).replace('## Files', '## Files\nSee e2e/avatar-sync.spec.ts:128 which fails.')), error => error.operatorApproval === true)
+})
