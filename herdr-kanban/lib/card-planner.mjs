@@ -37,7 +37,15 @@ export function correctionFingerprint(text) {
 export function requestPlannerCorrection(dir, cardId, { correction = true, failure = false } = {}) {
   const owners = readCardPlanners(dir)
   const owner = owners[String(cardId).toUpperCase()]
-  if (!owner || ['retired', 'retiring'].includes(owner.lifecycle)) return false
+  if (!owner || owner.lifecycle === 'retiring') return false
+  // A Planning recovery the operator authorized (planner-reconcile recover) is retired with
+  // recoveryReady. A correction request asks for its fresh Planner; the poll launches it.
+  if (owner.lifecycle === 'retired') {
+    if (!owner.recoveryReady) return false
+    owner.recoveryRequested = new Date().toISOString()
+    save(dir, owners)
+    return true
+  }
   owner.submitted = false
   owner.replacementAttempts = 0
   if (correction) owner.correctionRequestedAt = new Date().toISOString()
@@ -519,7 +527,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
       let fresh = deliveryFailed || !!owner?.startRetry
       if (owner?.lifecycle === 'retiring') continue
       if (owner?.lifecycle === 'retired') {
-        if (!owner.recoveryReady || !cardRunContext()) continue
+        if (!owner.recoveryReady || !(cardRunContext() || owner.recoveryRequested)) continue
         const recovered = await launch(card, owner)
         await submit(card, recovered.owner, recovered.agent)
         return { cards: [card.id], pane_id: recovered.owner.paneId, spawnedNewAgent: true }
