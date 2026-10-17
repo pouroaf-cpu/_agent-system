@@ -213,9 +213,9 @@ export function finderPrompt({ card, projectPath }) {
   const root = resolve(projectPath, card.workspace || '.')
   return oneLine(
     `You are the Finder for card ${card.id}. You are read-only: you have Read, Grep and Glob only; change nothing.`,
-    `Read the card at ${psLiteral(card.path.replaceAll('\\', '/'))} (## Approved brief and ## Files only), then search ${psLiteral(root.replaceAll('\\', '/'))} for the code the card's ask touches.`,
+    `Read the card at ${psLiteral(card.path.replaceAll('\\', '/'))} (## Approved brief, ## Files, and any later note that narrows Files; the newest such note wins), then search ${psLiteral(root.replaceAll('\\', '/'))} for the code the card's ask touches.`,
     `Print only the list, one line per place, exactly: \`repository-relative path\` lines START-END, \`function or selector name\` — one line on why. At most 40 lines and at most 25 tool calls.`,
-    `Then print one final line exactly: Size: N files, M areas (N = files the change will edit, M = distinct flows or areas), or exactly: Size: unbounded when you cannot bound the scope within the 25 tool calls. When you find nothing, print only Size: unbounded. Nothing else but the list and that one size line: no headings, no prose.`
+    `Then print one final line exactly: Size: N files, M areas (N = files the change will edit, M = distinct flows or areas; a generated-file glob listed beside its generator counts as one file), or exactly: Size: unbounded when you cannot bound the scope within the 25 tool calls. When you find nothing, print only Size: unbounded. Nothing else but the list and that one size line: no headings, no prose.`
   )
 }
 

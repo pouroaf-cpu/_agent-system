@@ -143,6 +143,29 @@ export function parseFinderSize(text) {
   }
   return size
 }
+// I1492 (2026-10-17): the card's own Files list sets the size. A generated-file glob listed beside its
+// generator is one entry (CARD-GUIDE), so the glob is not counted once per match. Sources, newest first:
+// a note whose heading names files (a narrowing note, I1454), then ## Files, then the Files: bullets of
+// the Approved brief. Null when the card declares no list, so the Finder's own count stands.
+const FILE_BULLET = /^[-*]\s+`([^`]+)`(.*)$/
+const READ_ONLY_REST = /^\s*(?:—|–|--|-|:|\()\s*(?:unchanged|read[- ]only|reference only)\b/i
+export function declaredFileCount(text) {
+  const clean = String(text ?? '').replace(/<!--[\s\S]*?-->/g, '')
+  const entries = (body) => body.split(/\r?\n/).map(line => FILE_BULLET.exec(line)).filter(m => m && !READ_ONLY_REST.test(m[2])).map(m => m[1].replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase())
+  const notes = [...clean.matchAll(/^\*\*[^*\n]*files[^*\n]*\*\*[^\n]*\r?\n([\s\S]*?)(?=^\*\*|^## |$(?![\s\S]))/gim)].map(m => m[1]).reverse()
+  const files = clean.match(/^## Files\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] ?? ''
+  const brief = clean.split(/^## Approved brief/m)[1]?.split(/^## /m)[0] ?? ''
+  const briefFiles = brief.match(/^Files:[^\n]*\r?\n((?:[-*][^\n]*(?:\r?\n|$))*)/m)?.[1] ?? ''
+  for (const body of [...notes, files, briefFiles]) {
+    const listed = entries(body)
+    if (listed.length) return new Set(listed).size
+  }
+  return null
+}
+// The card's declared count replaces the Finder's own count; an unbounded or absent size is kept as it is.
+export function sizeWithDeclaredFiles(size, declared) {
+  return size && !size.unbounded && declared !== null ? { ...size, files: declared } : size
+}
 // A headless log tail is stream-json (one event per line); a herdr pane is plain text.
 export function finderText(raw) {
   return String(raw ?? '').split(/\r?\n/).flatMap(line => {
@@ -464,7 +487,7 @@ export async function runCardPlanner({ project, projectPath, tasksDir, boardRoot
           }
           const text = finderText(raw)
           const lines = parseFinderList(text)
-          const size = timedOut ? null : parseFinderSize(text)
+          const size = timedOut ? null : sizeWithDeclaredFiles(parseFinderSize(text), declaredFileCount(readFileSync(card.path, 'utf8')))
           const reason = timedOut ? null
             : size?.unbounded ? 'unbounded scope'
             : size?.files > FINDER_MAX_FILES ? `${size.files} files, over the limit of ${FINDER_MAX_FILES}`
