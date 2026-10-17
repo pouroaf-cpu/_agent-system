@@ -206,6 +206,39 @@ test('summary and board share card, file, decision and slot waits, separate from
   }
 })
 
+// Injectbuddy I1434 and I1438 sat in Planning for 40 hours behind a Finder hold nobody was woken for (2026-10-15).
+test('a Finder or board hold in Planning is stuck after the threshold with its reason; an operator decision is not', async () => {
+  const make = title => {
+    const card = createCard(tasks, { title, brief: 'x', prefix: 'P' })
+    moveCard(tasks, card.id, 'owner')
+    moveCard(tasks, card.id, 'planning') // a lane entry in history, so its age can be set
+    return card
+  }
+  const finder = make('Finder held'), board = make('Board held'), operator = make('Operator decision')
+  const since = new Date().toISOString()
+  updateWorkflow(tasks, finder.id, { waitFor: { cards: [], files: [], decision: true, finder: true, why: 'Finder: no list and no size;\n  the plan needs   more than 10 files', since } })
+  updateWorkflow(tasks, board.id, { waitFor: { cards: [], files: [], decision: true, board: true, why: 'Precheck refused the plan', since } })
+  updateWorkflow(tasks, operator.id, { waitFor: { cards: [], files: [], decision: true } })
+  for (const c of [finder, board, operator]) {
+    const p = historyPath(tasks, c.id)
+    writeFileSync(p, readFileSync(p, 'utf8').replace(/"at":"[^"]+"/g, `"at":"${new Date(Date.now() - 3 * 3600000).toISOString()}"`))
+  }
+  try {
+    const r = await get('/api/stuck?project=Proj&minutes=60')
+    assert.equal(r.status, 200, r.body.error)
+    const byId = Object.fromEntries(r.body.cards.map(c => [c.id, c]))
+    assert.equal(byId[finder.id]?.reason, 'Finder: no list and no size; the plan needs more than 10 files')
+    assert.equal(byId[board.id]?.reason, 'Precheck refused the plan')
+    assert.ok(!byId[operator.id], 'operator decision listed as stuck')
+    const waits = (await get('/api/board?project=Proj')).body.cardWaits
+    assert.equal(waits[finder.id].stuck, true)
+    assert.equal(waits[board.id].stuck, true)
+    assert.equal(waits[operator.id].stuck, false)
+  } finally {
+    for (const c of [finder, board, operator]) moveCard(tasks, c.id, 'archive', { operatorArchive: true })
+  }
+})
+
 // Injectbuddy I341/I344 read "stuck" the moment their blocker landed (2026-09-27).
 test('a card whose blocker landed a minute ago is not stuck, however long it waited', async () => {
   const blocker = createCard(tasks, { title: 'Blocker', brief: 'x', prefix: 'P' })

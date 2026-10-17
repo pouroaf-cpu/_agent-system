@@ -612,16 +612,19 @@ function cardWaits(project, now = Date.now(), snapshot) {
     // The scheduler's own Needs you note (an integration hold) is the reason an owner card sits there; it stays stuck.
     const asked = card.column === 'owner' && !held ? ownerReason(readFileSync(card.path, 'utf8')) : ''
     const decisionWait = !!wait?.decision || held
-    const on = quota[card.id] ? `${[SIGN_IN, MODEL_REJECTED].find(why => quota[card.id].includes(why)) ?? 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
+    // A Finder hold or a board hold is a board or card-brief problem, not an operator question: it is
+    // stuck after the threshold so the Kanban Manager is woken (I1434, I1438 sat silent for 40 h, 2026-10-15).
+    const boardHold = card.column === 'planning' && !!wait?.decision && !!(wait.finder || wait.board)
+    const on =quota[card.id] ? `${[SIGN_IN, MODEL_REJECTED].find(why => quota[card.id].includes(why)) ?? 'usage limit'} until ${formatNZClock(quota[card.id].split('retrying at ')[1])}`
       : fileWait ? `files held by ${holder}` : decisionWait ? (held ? 'operator hold' : 'waiting on decision')
       : waitingOn.length ? [waitingCards.length ? `cards ${waitingCards.join(', ')}` : '', wait?.files?.length ? `files ${wait.files.join(', ')}` : ''].filter(Boolean).join('; ')
       : slotWait ? `free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null
     // A usage-limit hold resumes by itself at the reset time: waiting, not stuck (I521, 2026-10-01).
     // The integration hold is why a Completed card is not integrated yet (the poll's own reason).
     const integrationHold = integrationHolds.get(project)?.[card.id] || null
-    return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), ...(integrationHold && { integrationHold }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
+    return { ...(on && { on }), ...(decisionWait && { decisionWait }), ...(boardHold && { boardHold }), ...(slotWait && { slotWait }), ...(fileWait && { fileWait }), ...(quota[card.id] && { quotaWait: true }), ...(integrationHold && { integrationHold }), project, id: card.id, title: card.title, lane: card.column, minutes: Math.floor((now - since) / 60000),
       agent: times[card.id]?.agentActive ? times[card.id].agentName : null, waitingOn,
-      reason: holds[card.id] ?? integrationHold ?? (wait?.decision ? 'waiting on decision' : needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? idleDispatchReason({ column: card.column, paused: controlState(project, CONFIG_PATH).paused, slotsOff: !(config.maxConcurrentAgents > 0), breakerTripped: breakerState(project).breakerTripped, autoQueue: config.mode === 'manager' || config.autoQueuePlanned === true }) ?? null }
+      reason: holds[card.id] ?? integrationHold ?? (boardHold ? String(wait.why ?? 'board hold').replace(/\s+/g, ' ').trim().slice(0, 200) : wait?.decision ? 'waiting on decision' :needs.length ? `waiting for ${needs.join(', ')}` : waitingOn.length ? `waiting on ${waitingOn.join(', ')}` : slotWait ? `waiting for a free ${card.column === 'queue' ? 'Builder' : 'Planner'} slot` : null) ?? (asked || null) ?? indicators[card.id]?.reason ?? idleDispatchReason({ column: card.column, paused: controlState(project, CONFIG_PATH).paused, slotsOff: !(config.maxConcurrentAgents > 0), breakerTripped: breakerState(project).breakerTripped, autoQueue: config.mode === 'manager' || config.autoQueuePlanned === true }) ?? null }
   })
   return { board, cards }
 }
@@ -652,7 +655,8 @@ function logDispatchHolds(project, now = Date.now()) {
 const INTEGRATION_STUCK_MINUTES = 5
 const isStuck = (c, minutes) => {
   const threshold = c.integrationHold && !/is running in the background$/.test(c.integrationHold) ? Math.min(minutes, INTEGRATION_STUCK_MINUTES) : minutes
-  return c.minutes >= threshold && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait && !c.decisionWait
+  // An operator decision wait is silent by design (the operator answers it); a board hold is not.
+  return c.minutes >= threshold && !c.agent && !c.waitingOn.length && !c.slotWait && !c.fileWait && !c.quotaWait && (c.boardHold || !c.decisionWait)
 }
 
 // Commits on the integration checkout not yet in origin/master (no fetch); null without Git.
