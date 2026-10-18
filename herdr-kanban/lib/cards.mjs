@@ -68,7 +68,9 @@ const planPointers = (text) => [...text.matchAll(/\blines?\s+(\d+)\s*[-–]\s*(\
 //    evidence (a failing test or spec reference, an error, or a measured value).
 // A brief that only asks for a fix still needs the marker.
 const INVESTIGATION_DIRECTIVE = /\b(?:find|locate|identify|investigate|diagnose|measure|capture)\b/i
-const INVESTIGATION_METHOD = /PerformanceObserver|layout[- ]shift|Lighthouse|DevTools|profil(?:er|ing)|cold loads?|\btrace\b/i
+// I1502 (2026-10-19): a DOM query or computed-style read is a measurement method too; its brief
+// ("Identify the 8.5px elements with a DOM query") went to Owner for the marker before this.
+const INVESTIGATION_METHOD = /PerformanceObserver|layout[- ]shift|Lighthouse|DevTools|profil(?:er|ing)|cold loads?|\btrace\b|DOM quer(?:y|ies)|querySelectorAll?|getComputedStyle|computed (?:font|style|size)/i
 const CAUSE_ORDER = /\b(?:cause|source)\b/i
 const FAILING_EVIDENCE = [
   /\b(?:fails|failing|failed)\b/i,                              // a failing test

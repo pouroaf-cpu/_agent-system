@@ -412,3 +412,29 @@ Stop rules: stop if the cause is outside the named files
   // The evidence must be in the Approved brief, not only in the plan.
   assert.throws(() => validatePlan(plan(noEvidence).replace('## Files', '## Files\nSee e2e/avatar-sync.spec.ts:128 which fails.')), error => error.operatorApproval === true)
 })
+
+// I1502 (2026-10-19): the Approved brief orders identifying elements with a DOM query and cites the
+// failing measure (8.5px against an 11px floor). The DOM query is a measurement method, so no marker is needed.
+test('I1502: an Approved brief that orders a DOM query investigation needs no marker', () => {
+  const plan = (change) => `**Plan readiness:** investigation
+## Approved brief
+Expected: functional text at least 11px on desktop. Actual: smallest measured text 8.5px on BPC-157.
+${change}
+## Files
+- \`public/ib-calc-rules.css\` the 10px label rules
+## Implementation plan
+Measurement command: node dom-query.mjs
+Expected result: a list of sub-11px nodes with selector and computed size
+Stop rules: stop if the local server cannot start
+## Acceptance criteria
+- AC1: no functional label below 11px at 1440
+`
+  const ordered = 'Recommended change: Identify the 8.5px elements with a DOM query on the BPC-157 page; raise functional labels to at least 11px on desktop only.'
+  validatePlan(plan(ordered))
+  assert.equal(briefOrdersInvestigation(plan(ordered)), true)
+  assert.equal(briefOrdersInvestigation(plan('Recommended change: Identify the 8.5px elements with getComputedStyle on the BPC-157 page.')), true)
+  // A directive is still required: a DOM query named only as a check on a fix is not an order.
+  const fixOnly = 'Recommended change: raise functional labels to at least 11px on desktop only, checked with a DOM query.'
+  assert.equal(briefOrdersInvestigation(plan(fixOnly)), false)
+  assert.throws(() => validatePlan(plan(fixOnly)), error => error.operatorApproval === true)
+})
